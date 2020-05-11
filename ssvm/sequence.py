@@ -23,13 +23,19 @@
 # SOFTWARE.
 #
 ####
-from typing import List
+from typing import List, Tuple
 
 
 class Sequence(object):
     def __init__(self, spec_ids: List[str], cand_def="mass"):
         self.spec_ids = spec_ids
         self.cand_def = cand_def
+        assert self.cand_def in ["mass", "mf", "fixed"]
+
+        self.T = len(self.spec_ids)
+
+    def __len__(self):
+        return self.T
 
 
 class LabeledSequence(Sequence):
@@ -49,5 +55,14 @@ class LabeledSequence(Sequence):
 
         super(LabeledSequence, self).__init__(spec_ids=spec_ids, cand_def=cand_def)
 
+    def as_Xy_input(self) -> Tuple[List[Sequence], List[str]]:
+        """
+        Return the (MS, RT)-sequence and ground truth label separately as input for the sklearn interface.
+
+        Usage: sklearn.fit(*LabeledSequence(...).as_Xy_input)
+
+        :return:
+        """
+        return self.spec_ids, self.labels
 
 

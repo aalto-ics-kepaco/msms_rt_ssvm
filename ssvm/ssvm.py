@@ -23,6 +23,8 @@
 # SOFTWARE.
 #
 ####
+import numpy as np
+
 from typing import List
 from sklearn.base import BaseEstimator, ClassifierMixin
 
@@ -30,13 +32,14 @@ from ssvm.sequence import Sequence
 
 
 class StructuredSVM(BaseEstimator, ClassifierMixin):
-    def __init__(self, C=1.0):
+    def __init__(self, C=1.0, max_iter=1000):
         """
         Structured Support Vector Machine (SSVM) class.
 
         :param C: scalar, SVM regularization parameter. Must be > 0.
         """
         self.C = C
+        self.max_iter = max_iter
 
     def fit(self, X: List[Sequence], y: List[List[str]]):
         """
@@ -56,3 +59,40 @@ class StructuredSVM(BaseEstimator, ClassifierMixin):
         :param y: list of array-likes,
         :return:
         """
+        # Number of training sequences
+        N = len(X)
+
+        # Get the number of dual variables per sequence and in total
+        n_dual = np.array([len(seq) for seq in X])
+        n_dual_total = np.sum(n_dual)
+
+        # Set up the dual initial dual vector
+        alpha = np.zeros(n_dual_total)  # HINT: eventually use a sparse representation here
+        a_idxptr = [0] + [n_dual[i] for i in range(N)]  # alpha_i = alpha[a_idxptr[i]:a_idxptr[i + 1]]
+
+        for i in range(N):
+            sig = np.random.randint(n_dual[i])  # get random sequence index for example i
+            alpha[a_idxptr[i]:a_idxptr[i + 1]][sig] = self.C / N  # initialize the dual variables in the feasible set
+
+        assert self._is_feasible(alpha, a_idxptr), "Initial dual variables must be feasible."
+
+        k = 0
+        while k < self.max_iter:
+            for i in range(N):
+                # Find most violating candidate
+                y = self.solve_augmented_decoding_problem(alpha, a_idxptr, X)
+
+            pass
+
+        return self
+
+    @staticmethod
+    def _is_feasible(alpha: np.ndarray, a_idxptr: list) -> bool:
+        """
+        Check the feasibility of the dual variable.
+
+        :param alpha:
+        :param a_idxptr:
+        :return:
+        """
+        raise NotImplementedError()
