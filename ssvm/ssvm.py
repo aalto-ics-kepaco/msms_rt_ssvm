@@ -23,8 +23,10 @@
 # SOFTWARE.
 #
 ####
-
+from typing import List
 from sklearn.base import BaseEstimator, ClassifierMixin
+
+from ssvm.sequence import Sequence
 
 
 class StructuredSVM(BaseEstimator, ClassifierMixin):
@@ -36,7 +38,7 @@ class StructuredSVM(BaseEstimator, ClassifierMixin):
         """
         self.C = C
 
-    def fit(self, X, y):
+    def fit(self, X: List[Sequence], y: List[List[str]]):
         """
         Train the SSVM given a dataset.
 
@@ -51,6 +53,6 @@ class StructuredSVM(BaseEstimator, ClassifierMixin):
                 feature or kernel similarity vector of the molecular candidates of the sequence element s
                 TODO: Here we need to versions. (1) The embedding for the MS, and (2) for the Retention Order
 
-        :param y: list of array-likes, 
+        :param y: list of array-likes,
         :return:
         """
