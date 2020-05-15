@@ -32,10 +32,27 @@ class Sequence(object):
         self.cand_def = cand_def
         assert self.cand_def in ["mass", "mf", "fixed"]
 
-        self.T = len(self.spec_ids)
+        self.L = len(self.spec_ids)
 
-    def __len__(self):
-        return self.T
+        self.cand = None  # stores a reference to the candidates of each sequence element
+
+    def __len__(self) -> int:
+        """
+        Return the length of the sequence.
+
+        :return: scalar, length of the sequence
+        """
+        return self.L
+
+    def _get_n_cand_sig(self, sig) -> int:
+        """
+        :param sig: scalar, index of the sequence element to get the number of candidates.
+        :return: scalar, number of candidates
+        """
+        return len(self.cand[sig])
+
+    def get_n_cand(self) -> List[int]:
+        return [self._get_n_cand_sig(sig) for sig in range(len(self))]
 
 
 class LabeledSequence(Sequence):

@@ -27,19 +27,65 @@ import numpy as np
 
 from typing import List
 from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.utils.validation import check_random_state
 
 from ssvm.sequence import Sequence
 
 
+class DualVariables(object):
+    def __init__(self, N: int, X: List[Sequence], C: float):
+        """
+        :param N: scalar, Number of training examples
+        """
+        self.N = N
+        self.X = X
+        self.C = C
+
+        self._alphas = [{} for _ in range(N)]  # Store only active dual variables
+        self._k = 0  # Number of updates done
+        
+        super(DualVariables, self).__init__()
+
+    def initialize(self, random_state=None):
+        """
+
+        :param random_state:
+        :return:
+        """
+        random_state = check_random_state(random_state)
+        for i in range(self.N):
+            y_seq = (random_state.randint(n_cand) for n_cand in self.X[i].get_n_cand())  # draw a label sequence vector
+            self._alphas[i][y_seq] = self.C / self.N
+            # HINT: eventually we can draw multiple label sequence vectors trying to "as orthogonal as possible"
+
+    def __len__(self):
+        return len(self._alphas)
+
+    def __iter__(self) -> List[dict]:
+        """
+        :return: list of dicts
+        """
+        return self._alphas
+
+    def update(self, i: int, y_seq: tuple, gamma: float):
+        try:
+            self._alphas[i][y_seq] = (1 - gamma) * self._alphas[i][y_seq] + gamma * (self.N / self.C)
+        except KeyError:
+            self._alphas[i][y_seq] = gamma * (self.N / self.C)
+
+
 class StructuredSVM(BaseEstimator, ClassifierMixin):
-    def __init__(self, C=1.0, max_iter=1000):
+    def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming"):
         """
         Structured Support Vector Machine (SSVM) class.
 
         :param C: scalar, SVM regularization parameter. Must be > 0.
+        :param n_epochs: scalar, Number of epochs, i.e. maximum number of iterations.
+        :param label_loss: string, Which label loss should be used. Default is 'hamming' loss.
         """
         self.C = C
-        self.max_iter = max_iter
+        self.n_epochs = n_epochs
+        self.label_loss = label_loss
 
     def fit(self, X: List[Sequence], y: List[List[str]]):
         """
@@ -63,36 +109,71 @@ class StructuredSVM(BaseEstimator, ClassifierMixin):
         N = len(X)
 
         # Get the number of dual variables per sequence and in total
-        n_dual = np.array([len(seq) for seq in X])
-        n_dual_total = np.sum(n_dual)
+        n_dual = np.array([np.prod(seq.get_n_cand()) for seq in X])
 
         # Set up the dual initial dual vector
-        alpha = np.zeros(n_dual_total)  # HINT: eventually use a sparse representation here
-        a_idxptr = [0] + [n_dual[i] for i in range(N)]  # alpha_i = alpha[a_idxptr[i]:a_idxptr[i + 1]]
-
-        for i in range(N):
-            sig = np.random.randint(n_dual[i])  # get random sequence index for example i
-            alpha[a_idxptr[i]:a_idxptr[i + 1]][sig] = self.C / N  # initialize the dual variables in the feasible set
-
-        assert self._is_feasible(alpha, a_idxptr), "Initial dual variables must be feasible."
+        alphas = DualVariables(N=N, C=self.C, X=X)
+        assert self._is_feasible(alphas, self.C), "Initial dual variables must be feasible."
 
         k = 0
-        while k < self.max_iter:
-            for i in range(N):
-                # Find most violating candidate
-                y = self.solve_augmented_decoding_problem(alpha, a_idxptr, X)
+        while k < self.n_epochs:
+            # Pick a random coordinate to update
+            i = np.random.randint(N)
 
-            pass
+            # Find the most violating example
+            y = self._solve_sub_problem(alphas, X)
+
+            # Get step-width
+            gamma = self._get_diminishing_stepwidth(k, N)
+
+            # Update the dual variables
+            alphas.update(i, y, gamma)
+
+            assert self._is_feasible(alphas, self.C)
 
         return self
 
+    def _solve_sub_problem(self, alphas: DualVariables, data: List[Sequence]) -> tuple:
+        """
+        Find the most violating example.
+
+        :param alphas:
+        :param data:
+        :return:
+        """
+        pass
+
     @staticmethod
-    def _is_feasible(alpha: np.ndarray, a_idxptr: list) -> bool:
+    def _is_feasible(alphas: DualVariables, C: float) -> bool:
         """
         Check the feasibility of the dual variable.
 
-        :param alpha:
-        :param a_idxptr:
+        :param alphas:
+        :param C:
         :return:
         """
-        raise NotImplementedError()
+        val = C / len(alphas)  # C / N
+        for a_i in alphas:
+            sum_a_i = 0
+            for a_iy in a_i:
+                # Alphas need to be positive
+                if a_iy < 0:
+                    return False
+
+                sum_a_i += a_iy
+
+            if sum_a_i != val:  # TODO: Use "not np.isclose(sum_a_i, C / N)"
+                return False
+
+        raise True
+
+    @staticmethod
+    def _get_diminishing_stepwidth(k: int, N: int) -> float:
+        """
+        Step-width calculation by [1].
+
+        :param k:
+        :param N:
+        :return:
+        """
+        return (2 * N) / (k + 2 * N)
