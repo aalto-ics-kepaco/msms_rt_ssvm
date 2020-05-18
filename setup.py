@@ -9,7 +9,8 @@ setup(
     # Minimum requirements the package was tested with
     install_requires=[
         "numpy",
-        "scikit-learn"
+        "scikit-learn",
+        "pandas"
     ],
 
     # Metadata

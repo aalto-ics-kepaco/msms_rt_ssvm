@@ -25,11 +25,18 @@
 ####
 import numpy as np
 
+from collections import OrderedDict
 from typing import List
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.utils.validation import check_random_state
+from sklearn.metrics import hamming_loss
 
-from ssvm.sequence import Sequence
+from ssvm.sequence import Sequence, jointKernelMS
+
+
+class DualVariables_I(OrderedDict):
+    def __init__(self):
+        super(DualVariables_I, self).__init__()
 
 
 class DualVariables(object):
@@ -67,6 +74,9 @@ class DualVariables(object):
         """
         return self._alphas
 
+    def __getitem__(self, item):
+        return self._alphas[item]
+
     def update(self, i: int, y_seq: tuple, gamma: float):
         try:
             self._alphas[i][y_seq] = (1 - gamma) * self._alphas[i][y_seq] + gamma * (self.N / self.C)
@@ -87,7 +97,7 @@ class StructuredSVM(BaseEstimator, ClassifierMixin):
         self.n_epochs = n_epochs
         self.label_loss = label_loss
 
-    def fit(self, X: List[Sequence], y: List[List[str]]):
+    def fit(self, X: List[Sequence], y: List[tuple]):
         """
         Train the SSVM given a dataset.
 
@@ -108,6 +118,8 @@ class StructuredSVM(BaseEstimator, ClassifierMixin):
         # Number of training sequences
         N = len(X)
 
+        self._X_train = X
+
         # Get the number of dual variables per sequence and in total
         n_dual = np.array([np.prod(seq.get_n_cand()) for seq in X])
 
@@ -121,26 +133,57 @@ class StructuredSVM(BaseEstimator, ClassifierMixin):
             i = np.random.randint(N)
 
             # Find the most violating example
-            y = self._solve_sub_problem(alphas, X)
+            y_i_hat = self._solve_sub_problem(alphas, X, y, i)
 
             # Get step-width
             gamma = self._get_diminishing_stepwidth(k, N)
 
             # Update the dual variables
-            alphas.update(i, y, gamma)
+            alphas.update(i, y_i_hat, gamma)
 
             assert self._is_feasible(alphas, self.C)
 
         return self
 
-    def _solve_sub_problem(self, alphas: DualVariables, data: List[Sequence]) -> tuple:
+    def _solve_sub_problem(self, alpha: DualVariables, X: List[Sequence], y: List[tuple], i: int) -> tuple:
         """
-        Find the most violating example.
+        Find the most violating example by solving the MAP problem. Forward-pass using max marginals.
 
         :param alphas:
-        :param data:
+        :param X:
         :return:
         """
+        X_i = X[i]
+        y_i = y[i]
+
+        V = list(range(len(X_i)))  # Number of sequence elements defines the set of nodes
+        E = [(sigma, sigma + 1) for sigma in V[:-1]]  # Edge set of a linear graph (tree-like)
+
+        # Pre-calculate the Hamming-losses
+        lloss = {sigma: np.array([hamming_loss(y, cand) for cand in X_i[sigma].cand]) for sigma in V}
+        # TODO: The hamming loss can be globally pre-computed, as it does not depend on alpha.
+
+        # Pre-calculate the node-potentials: sv_i
+        sv_i = {}
+        for sigma in V:
+            sv_i[sigma] = np.zeros(shape=X_i.get_n_cand_sig(sigma))
+
+            for j, (X_j, y_j) in enumerate(zip(X, y)):
+                # If no active dual variables
+                if not len(alpha[j]):
+                    continue
+
+                # Get active dual variables for j: alpha(j, bar_y) > 0
+                yj_active, aj_active = zip(*alpha[j].items())
+                print(aj_active)
+
+                for bst_y in yj_active:
+                    sv_i[sigma] += jointKernelMS(X_j, y_j, X_i[sigma], None) - jointKernelMS(X_j, bst_y, X_i[sigma], None)
+
+
+        # Pre-calculate the edge-potentials: se_i
+
+
         pass
 
     @staticmethod
