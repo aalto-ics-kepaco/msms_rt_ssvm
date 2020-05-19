@@ -25,13 +25,11 @@
 ####
 import numpy as np
 import pandas as pd
-import itertools as it
-
-
 
 from typing import List, Tuple, Union
-from sklearn.model_selection import GroupKFold, GroupShuffleSplit
-from sklearn.utils.validation import check_random_state
+from sklearn.model_selection import GroupKFold
+from sklearn.utils.validation import check_random_state, check_is_fitted
+
 
 class Sequence(object):
     def __init__(self, spec_ids: List[str]):
@@ -86,7 +84,7 @@ class LabeledSequence(Sequence):
         return self.spec_ids, self.labels
 
 
-class SequenceSampler(object):
+class SequenceSample(object):
     """
     Class representing a sequence sample.
     """
@@ -108,6 +106,8 @@ class SequenceSampler(object):
             "fixed", loaded a pre-defined set
         """
         self.spec_ids = spec_ids
+        assert pd.Series(self.spec_ids).is_unique, "Spectra IDs must be unique."
+
         self.K_ms = K_ms
         self.cand_def = cand_def
         assert self.cand_def in ["mass", "mf", "fixed"]
@@ -115,35 +115,74 @@ class SequenceSampler(object):
         self.spec_db = spec_db
         self.cand_db = cand_db
 
-    def get_train_test_split(self, test_size=0.25, rs=None):
+    def get_train_test_split(self):
+        """
+        75% training and 25% test split.
+        """
+        return next(self.get_train_test_generator(n_splits=4))
+
+    def get_train_test_generator(self, n_splits=4):
+        """
+        Split the spectra ids into training and test sets. Thereby, all spectra belonging to the same molecular
+        structure (regardless of their Massbank sub-dataset membership) are either in the test or training.
+
+        Internally the scikit-learn function "GroupKFold" is used to split the data. As groups we use the molecular
+        identifiers.
+
+        :param n_splits: scalar, number of cross-validation splits.
+
+        :yields:
+            train : ndarray
+                The training set indices for that split.
+
+            test : ndarray
+                The testing set indices for that split.
         """
 
-        :return:
+        for train, test in GroupKFold(n_splits=n_splits).split(self.spec_ids, groups=self._load_mol_identifier()):
+            # Get training and test subsets of the spectra ids. Spectra belonging to the same molecular structure are
+            # either in the training or the test set.
+            spec_ids_train = [self.spec_ids[i] for i in train]
+            spec_ids_test = [self.spec_ids[i] for i in test]
+
+            yield (
+                SequenceSample(spec_ids_train, K_ms=self.K_ms[np.ix_(train, train)],
+                               spec_db=self.spec_db, cand_db=self.cand_db, cand_def=self.cand_def),
+                SequenceSample(spec_ids_test, K_ms=self.K_ms[np.ix_(test, train)],
+                               spec_db=self.spec_db, cand_db=self.cand_db, cand_def=self.cand_def)
+            )
+
+    def get_n_samples(self):
         """
-        # Split spec_ids considering that the same molecules are in the same fold
-        rs = check_random_state(rs)  # Type: np.random.RandomState
-        train_set, test_set = next(GroupShuffleSplit(n_splits=1, random_state=rs, test_size=test_size).split(
-            self.spec_ids, groups=self._load_mol_identifier()))
-        # HINT: Using GroupKFold here would allow better control over the test set size.
+        Return the number of (spectrum, rt) examples. This refers to the number of unique spectra in the sample.
 
-        spec_ids_train = [self.spec_ids[i] for i in train_set]
-        spec_ids_test = [self.spec_ids[i] for i in test_set]
-
-        return (
-            SequenceSampler(spec_ids_train, K_ms=self.K_ms[np.ix_(train_set, train_set)],
-                            spec_db=self.spec_db, cand_db=self.cand_db, cand_def=self.cand_def),
-            SequenceSampler(spec_ids_test, K_ms=self.K_ms[np.ix_(test_set, train_set)],
-                            spec_db=self.spec_db, cand_db=self.cand_db, cand_def=self.cand_def))
+        :return: scalar, Number of (spectrum, rt) examples.
+        """
+        return len(self.spec_ids)
 
     def generate_sequences(self, N, L, rs=None):
         """
-        Generate (spec, rt, label) sequences to train the StructuredSVM
+        Generate (spectra, rts, labels) sequences to train the StructuredSVM. In the main document we refer to this
+        samples as:
+
+            (x_i, t_i, y_i),
+
+        with:
+
+            x_i = (x_i1, ..., x_iL) ... being a list of spectra
+            t_i = (t_i1, ..., t_iL) ... being the list of corresponding retention times
+            y_i = (y_i1, ..., y_iL) ... being the list of corresponding ground-truth labels
 
         :param N: scalar, number of sequences
-        :param L: scalar, length of the sequences
+        :param L: scalar, length of the individual sequences
         :param rs:
         :return:
         """
+        if hasattr(self, "spl_seqs"):
+            # FIXME: Could we call the sample generation straight in the constructor?
+            raise AssertionError("Sample sequences have already been generated and should be generated again.")
+
+        # TODO: How to include the candidates here?
         data = pd.DataFrame({"spec_id": self.spec_ids,
                              "rt": self._load_retention_times(),
                              "mol_id": self._load_mol_identifiers(),
@@ -155,3 +194,31 @@ class SequenceSampler(object):
             seq = data[data["mb_ds"] == mb_ds].sample(L, random_state=rs)
             spl_seqs.append(zip(seq["spec_id"].to_list(), seq["rt"].to_list(), seq["mol_id"].to_list()))
             # FIXME: Here we can have multiple times the same molecule in the sample, e.g. due to different adducts.
+
+            assert seq["mol_id"].is_unique, "Each molecule should appear only ones in the set of molecules."
+
+        self.spl_seqs = spl_seqs
+
+    def __len__(self):
+        """
+        :return: scalar, number of sample sequences
+        """
+        check_is_fitted(self, "spl_seqs")
+        return len(self.spl_seqs)
+
+
+
+    # def __getitem__(self, item):
+    #     """
+    #
+    #     :param item:
+    #     :return:
+    #     """
+    #     check_is_fitted(self, "spl_seqs")
+    #     return self.spec_ids[item]
+
+
+if __name__ == "__main__":
+    ss = SequenceSample(["A", "B", "C"], np.random.rand(3, 3), "", "")
+    ss_train, ss_test = ss.get_train_test_split()
+    ss_train.generate_sequences(100, 20)
