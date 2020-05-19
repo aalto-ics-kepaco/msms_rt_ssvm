@@ -88,11 +88,11 @@ class SequenceSample(object):
     """
     Class representing a sequence sample.
     """
-    def __init__(self, spec_ids: List[str], K_ms: np.ndarray, spec_db: Union[str, pd.DataFrame],
+    def __init__(self, spec_ids: List[str], kappa_ms: np.ndarray, spec_db: Union[str, pd.DataFrame],
                  cand_db: Union[str, pd.DataFrame], cand_def="mass"):
         """
         :param data: list of strings, of length N, spectra ids that should be used for the sampling the sequences
-        :param K_ms: array-like, shape=(N, N), kernel matrix encoding the similarity of the spectra. The order of the
+        :param kappa_ms: array-like, shape=(N, N), kernel matrix encoding the similarity of the spectra. The order of the
             rows must correspond to the spectra ids, i.e. the i'th row K[i] corresponds to the spec_id[i].
         :param spec_db: string or pandas.DataFrame, Database storing information about the spectra (x_sigma), such as
             its retention time (t_sigma), its ground-truth label (y_sigma) and chromatographic configuration.
@@ -107,8 +107,11 @@ class SequenceSample(object):
         """
         self.spec_ids = spec_ids
         assert pd.Series(self.spec_ids).is_unique, "Spectra IDs must be unique."
+        self.specid_2_ind = {}
+        for s, id in enumerate(self.spec_ids):
+            self.specid_2_ind[s] = id
 
-        self.K_ms = K_ms
+        self.kappa_ms = kappa_ms
         self.cand_def = cand_def
         assert self.cand_def in ["mass", "mf", "fixed"]
 
@@ -146,9 +149,9 @@ class SequenceSample(object):
             spec_ids_test = [self.spec_ids[i] for i in test]
 
             yield (
-                SequenceSample(spec_ids_train, K_ms=self.K_ms[np.ix_(train, train)],
+                SequenceSample(spec_ids_train, kappa_ms=self.kappa_ms[np.ix_(train, train)],
                                spec_db=self.spec_db, cand_db=self.cand_db, cand_def=self.cand_def),
-                SequenceSample(spec_ids_test, K_ms=self.K_ms[np.ix_(test, train)],
+                SequenceSample(spec_ids_test, kappa_ms=self.kappa_ms[np.ix_(test, train)],
                                spec_db=self.spec_db, cand_db=self.cand_db, cand_def=self.cand_def)
             )
 
@@ -160,7 +163,7 @@ class SequenceSample(object):
         """
         return len(self.spec_ids)
 
-    def generate_sequences(self, N, L, rs=None):
+    def generate_sequences(self, N, L, rs=None, sort_sequence_by_rt=True):
         """
         Generate (spectra, rts, labels) sequences to train the StructuredSVM. In the main document we refer to this
         samples as:
@@ -176,6 +179,8 @@ class SequenceSample(object):
         :param N: scalar, number of sequences
         :param L: scalar, length of the individual sequences
         :param rs:
+        :param sort_sequence_by_rt: boolean, indicating, whether the sequence elements, i.e. x_i1, ..., should be
+            sorted by their retention time.
         :return:
         """
         if hasattr(self, "spl_seqs"):
@@ -192,11 +197,18 @@ class SequenceSample(object):
         rs = check_random_state(rs)  # Type: np.random.RandomState
         for mb_ds in rs.choice(data["mb_ds"], N):
             seq = data[data["mb_ds"] == mb_ds].sample(L, random_state=rs)
-            spl_seqs.append(zip(seq["spec_id"].to_list(), seq["rt"].to_list(), seq["mol_id"].to_list()))
+
+            # Sort the sequence elements by their retention time
+            if sort_sequence_by_rt:
+                seq.sort_values(by="rt", inplace=True, ascending=True)
+
+            spl_seqs.append([seq["spec_id"].to_list(), seq["rt"].to_list(), seq["mol_id"].to_list()])
             # FIXME: Here we can have multiple times the same molecule in the sample, e.g. due to different adducts.
 
             assert seq["mol_id"].is_unique, "Each molecule should appear only ones in the set of molecules."
 
+        self.N = N
+        self.L = L
         self.spl_seqs = spl_seqs
 
     def __len__(self):
@@ -206,6 +218,76 @@ class SequenceSample(object):
         check_is_fitted(self, "spl_seqs")
         return len(self.spl_seqs)
 
+    def as_Xy_input(self):
+        check_is_fitted(self, "spl_seqs")
+        x, rt, y = zip(*self.spl_seqs)
+        return x, y
+
+    def get_labelspace(self, i: int) -> List[List[str]]:
+        cand_ids = []
+
+        for sigma in range(self.L):
+            cand_ids.append(self._get_cand_ids(self.spl_seqs[i][0][sigma]))
+
+        return cand_ids
+
+    def get_gt_labels(self, i: int) -> tuple:
+        return tuple(self.spl_seqs[i][2][sigma] for sigma in range(self.L))
+
+    def jointKernelMS(self, j_tau, i_sigma, y_j, y_i):
+        """
+
+        :param j:
+        :param i:
+        :param y_j:
+        :param y_i:
+        :return:
+        """
+        j, tau = j_tau
+        assert tau is None  # HINT: We handle all tau at ones.
+        i, sigma = i_sigma
+
+        # TODO: Build fast index data-structure here.
+        spec_ids_j = self.spl_seqs[j][0]  # spectra ids belonging to sequence j
+        k_idx_j = [self.specid_2_ind[spec_id] for spec_id in spec_ids_j]  # spectra kernel columns belonging to seq. j
+
+        spec_id_i_sigma = self.spl_seqs[i][0][sigma]
+        k_idx_i_sigma = self.specid_2_ind[spec_id_i_sigma]
+
+        K_ms = self.kappa_ms[k_idx_i_sigma][k_idx_j]  # shape=(1, L)
+
+        self._get_mol_rep_MS(self.spl_seqs[i][2][sigma])  # y_sigma
+
+    def delta_jointKernelMS(self, j_tau, i_sigma, y__j_ybar):
+        """
+
+        :param j_tau:
+        :param i_sigma:
+        :param y__j_ybar:
+        :return:
+        """
+        j, tau = j_tau
+        i, sigma = i_sigma
+
+        # TODO: Build fast index data-structure here.
+        spec_ids_j = self.spl_seqs[j][0]  # spectra ids belonging to sequence j
+        k_idx_j = [self.specid_2_ind[spec_id] for spec_id in spec_ids_j]  # spectra kernel columns belonging to seq. j
+
+        spec_ids_i = self.spl_seqs[i][0][sigma]
+        k_ids_i = self.specid_2_ind[spec_ids_i]
+
+        K_ms = self.kappa_ms[k_ids_i][k_idx_j]  # shape=(1, L)
+
+        y__j_tau = self.get_gt_labels(j)[tau]
+        psi_y__j_tau = self._get_mol_rep_MS(y__j_tau)
+        psi_y__j_ybar = self._get_mol_rep_MS(y__j_ybar)
+
+        Psi_y__y = self._get_mol_rep_MS(self.get_labelspace(i)[sigma])
+
+        L_ms__j_tau = self.lambda_ms(Psi_y__y, psi_y__j_tau)  # shape=(L, 1)
+        L_ms__j_ybar = self.lambda_ms(Psi_y__y, psi_y__j_ybar)  # shape=(L, 1)
+
+        return K_ms @ (L_ms__j_tau - L_ms__j_ybar)
 
 
     # def __getitem__(self, item):
