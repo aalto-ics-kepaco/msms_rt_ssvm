@@ -25,254 +25,100 @@
 ####
 import numpy as np
 
-from collections import OrderedDict
-from typing import List
+from typing import List, ItemsView, Tuple
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.utils.validation import check_random_state
 from sklearn.metrics import hamming_loss
 
-from ssvm.sequence import Sequence, SequenceSample
-
-
-class SequenceDualVariables(object):
-    def __init__(self, C: float, N: int, cand_ids: List[List[str]]):
-        self.C = C  # SSVM regularization parameter
-        self.N = N  # Total number of sequences
-        self.l_cand_ids = cand_ids  # Candidate identifiers for each spectra in the sequence
-
-    def initialize(self, rs=None, num_active_vars=1):
-        """
-
-        :param rs:
-        :param num_active_vars: scalar, number of initially active dual variables.
-        :return:
-        """
-        if self._is_initialized():
-            raise AssertionError("Dual variable has been already initialized.")
-
-        # Set up the random generator
-        rs = check_random_state(rs)  # Type: np.random.RandomState
-
-        # Active dual variables are stored in a dictionary: key = label sequence, value = variable value
-        _alphas = OrderedDict()
-
-        init_var_val = self.C / (self.N * num_active_vars)  # (C / N) / num_act = C / (N * num_act)
-        for i in range(num_active_vars):
-            y_seq = (rs.choice(cand_ids) for cand_ids in self.l_cand_ids)
-            assert y_seq not in _alphas, "Oups, we sampled the same active dual variable again."
-            # TODO: Ensure that the same variable is not sampled repeatedly. Should be extremely rare in application.
-
-            _alphas[y_seq] = init_var_val
-
-        self._alphas = _alphas
-
-        return self
-
-    def __len__(self) -> int:
-        self._ensure_is_initialized()
-
-        return len(self._alphas)
-
-    def __iter__(self) -> OrderedDict:
-        self._ensure_is_initialized()
-
-        return self._alphas
-
-    def _is_initialized(self) -> bool:
-        return hasattr(self, "_alphas")
-
-    def _ensure_is_initialized(self):
-        if not self._is_initialized():
-            raise AssertionError("Dual variables have not been initialized yet.")
-
-    def items(self):
-        return self._alphas.items()
+from ssvm.sequence import SequenceSample
 
 
 class DualVariables(object):
-    def __init__(self, N: int, X: List[Sequence], C: float):
+    def __init__(self, C: float, N: int, cand_ids: List[List[str]], num_init_active_vars=1, rs=None):
         """
-        :param N: scalar, Number of training examples
+
+        :param C: scalar, regularization parameter of the Structured SVM
+
+        :param N: scalar, total number of sequences used for training
+
+        :param cand_ids: list of lists, of candidate identifiers. Each sequence element has an associated candidate set.
+            The candidates are identified by a string.
+
+            Example:
+
+                [
+                    [M1, M2, M3],
+                    [M6, M3, M5, M7],
+                    ...
+                ]
+
+        :param num_init_active_vars: scalar, number of initially active dual variables per
+
+        :param rs: None | int | instance of RandomState
+            If seed is None, return the RandomState singleton used by np.random.
+            If seed is an int, return a new RandomState instance seeded with seed.
+            If seed is already a RandomState instance, return it.
+            Otherwise raise ValueError.
         """
-        self.N = N
-        self.X = X
         self.C = C
+        assert self.C > 0, "The regularization parameter must be positive."
+        self.N = N
+        self.l_cand_ids = cand_ids
+        self.num_init_active_vars = num_init_active_vars
+        self.rs = check_random_state(rs)
 
-        self._alphas = [{} for _ in range(N)]  # Store only active dual variables
-        self._k = 0  # Number of updates done
-        
-        super(DualVariables, self).__init__()
+        # Initialize the dual variables
+        self._alphas = self._get_initial_alphas()
 
-    def initialize(self, random_state=None):
+    def _get_initial_alphas(self) -> dict:
         """
+        Return initialized dual variables.
 
-        :param random_state:
-        :return:
+        :return: dictionary: key = label sequence, value = dual variable value
         """
-        random_state = check_random_state(random_state)
-        for i in range(self.N):
-            y_seq = (random_state.randint(n_cand) for n_cand in self.X[i].get_n_cand())  # draw a label sequence vector
-            self._alphas[i][y_seq] = self.C / self.N
-            # HINT: eventually we can draw multiple label sequence vectors trying to "as orthogonal as possible"
+        # Active dual variables are stored in a dictionary: key = label sequence, value = variable value
+        _alphas = {}
 
-    def __len__(self):
+        # Initial dual variable value ensuring feasibility
+        init_var_val = self.C / (self.N * self.num_init_active_vars)  # (C / N) / num_act = C / (N * num_act)
+
+        for i in range(self.num_init_active_vars):
+            y_seq = tuple(self.rs.choice(cand_ids) for cand_ids in self.l_cand_ids)
+            assert y_seq not in _alphas, "Oups, we sampled the same active dual variable again."
+
+            _alphas[y_seq] = init_var_val
+
+        return _alphas
+
+    def __len__(self) -> int:
+        """
+        :return: scalar, number of active dual variables
+        """
         return len(self._alphas)
 
-    def __iter__(self) -> List[dict]:
-        """
-        :return: list of dicts
-        """
+    def __iter__(self) -> dict:
         return self._alphas
 
-    def __getitem__(self, item):
-        return self._alphas[item]
+    def items(self) -> ItemsView[Tuple, float]:
+        return self._alphas.items()
 
-    def update(self, i: int, y_seq: tuple, gamma: float):
+    def update(self, y_seq: tuple, gamma: float):
+        """
+        Update the value of a dual variable.
+
+        :param y_seq: tuple of strings, sequence of candidate indices identifying the dual variable
+        :param gamma: scalar, step-width used to update the dual variable value
+        """
         try:
-            self._alphas[i][y_seq] = (1 - gamma) * self._alphas[i][y_seq] + gamma * (self.N / self.C)
+            # Update an active dual variable
+            # self._alphas[y_seq] = (1 - gamma) * self._alphas[y_seq] + gamma * (self.N / self.C)
+            self._alphas[y_seq] -= gamma * (self._alphas[y_seq] + (self.N / self.C))
         except KeyError:
-            self._alphas[i][y_seq] = gamma * (self.N / self.C)
+            # Add a new dual active dual variable
+            self._alphas[y_seq] = gamma * (self.N / self.C)
 
 
 class StructuredSVM(BaseEstimator, ClassifierMixin):
-    def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming"):
-        """
-        Structured Support Vector Machine (SSVM) class.
-
-        :param C: scalar, SVM regularization parameter. Must be > 0.
-        :param n_epochs: scalar, Number of epochs, i.e. maximum number of iterations.
-        :param label_loss: string, Which label loss should be used. Default is 'hamming' loss.
-        """
-        self.C = C
-        self.n_epochs = n_epochs
-        self.label_loss = label_loss
-
-    def fit(self, X: List[Sequence], y: List[tuple]):
-        """
-        Train the SSVM given a dataset.
-
-        :param X: list of tuples, of length N. Each element X_i, i.e. X[i], is a tuple (x_i, t_i, C_i) and represents
-            a (MS, RT) training sequence:
-
-            x_i: list of array-likes, of length L. Each element x_{is}, i.e. X[i][0][s], corresponds the either to the
-                feature or kernel similarity vector of a sequence element s with the other training data
-            t_i: array-like, of length L. Each element t_{is}, i.e. X[i][1][s], is the retention time of sequence
-                element s. Therefore, it is a scalar value.
-            C_i: list of array-likes. of length L. Each element C_{is}, i.e. X[i][2][s], corresponds to either to the
-                feature or kernel similarity vector of the molecular candidates of the sequence element s
-                TODO: Here we need to versions. (1) The embedding for the MS, and (2) for the Retention Order
-
-        :param y: list of array-likes,
-        :return:
-        """
-        # Number of training sequences
-        N = len(X)
-
-        self._X_train = X
-
-        # Get the number of dual variables per sequence and in total
-        n_dual = np.array([np.prod(seq.get_n_cand()) for seq in X])
-
-        # Set up the dual initial dual vector
-        alphas = DualVariables(N=N, C=self.C, X=X)
-        assert self._is_feasible(alphas, self.C), "Initial dual variables must be feasible."
-
-        k = 0
-        while k < self.n_epochs:
-            # Pick a random coordinate to update
-            i = np.random.randint(N)
-
-            # Find the most violating example
-            y_i_hat = self._solve_sub_problem(alphas, X, y, i)
-
-            # Get step-width
-            gamma = self._get_diminishing_stepwidth(k, N)
-
-            # Update the dual variables
-            alphas.update(i, y_i_hat, gamma)
-
-            assert self._is_feasible(alphas, self.C)
-
-        return self
-
-    def _solve_sub_problem(self, alpha: DualVariables, X: List[Sequence], y: List[tuple], i: int) -> tuple:
-        """
-        Find the most violating example by solving the MAP problem. Forward-pass using max marginals.
-
-        :param alphas:
-        :param X:
-        :return:
-        """
-        # X_i = X[i]
-        # y_i = y[i]
-        #
-        # V = list(range(len(X_i)))  # Number of sequence elements defines the set of nodes
-        # E = [(sigma, sigma + 1) for sigma in V[:-1]]  # Edge set of a linear graph (tree-like)
-        #
-        # # Pre-calculate the Hamming-losses
-        # lloss = {sigma: np.array([hamming_loss(y_i, cand) for cand in X_i[sigma].cand]) for sigma in V}
-        # # TODO: The hamming loss can be globally pre-computed, as it does not depend on alpha.
-        #
-        # # Pre-calculate the node-potentials: sv_i
-        # sv_i = {}
-        # for sigma in V:
-        #     sv_i[sigma] = np.zeros(shape=X_i.get_n_cand_sig(sigma))
-        #
-        #     for j, (X_j, y_j) in enumerate(zip(X, y)):
-        #         # If no active dual variables
-        #         if not len(alpha[j]):
-        #             continue
-        #
-        #         # Get active dual variables for j: alpha(j, bar_y) > 0
-        #         yj_active, aj_active = zip(*alpha[j].items())
-        #         print(aj_active)
-        #
-        #         for bst_y in yj_active:
-        #             sv_i[sigma] += data.jointKernel(X_j, y_j, X_i[sigma], None) - jointKernelMS(X_j, bst_y, X_i[sigma], None)
-        #
-        #
-        # # Pre-calculate the edge-potentials: se_i
-
-
-        pass
-
-    @staticmethod
-    def _is_feasible(alphas: DualVariables, C: float) -> bool:
-        """
-        Check the feasibility of the dual variable.
-
-        :param alphas:
-        :param C:
-        :return:
-        """
-        val = C / len(alphas)  # C / N
-        for a_i in alphas:
-            sum_a_i = 0
-            for a_iy in a_i:
-                # Alphas need to be positive
-                if a_iy < 0:
-                    return False
-
-                sum_a_i += a_iy
-
-            if sum_a_i != val:  # TODO: Use "not np.isclose(sum_a_i, C / N)"
-                return False
-
-        raise True
-
-    @staticmethod
-    def _get_diminishing_stepwidth(k: int, N: int) -> float:
-        """
-        Step-width calculation by [1].
-
-        :param k:
-        :param N:
-        :return:
-        """
-        return (2 * N) / (k + 2 * N)
-
-
-class StructuredSVM2(BaseEstimator, ClassifierMixin):
     def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming", rs=None):
         """
         Structured Support Vector Machine (SSVM) class.
@@ -296,8 +142,8 @@ class StructuredSVM2(BaseEstimator, ClassifierMixin):
         N = len(data)
 
         # Set up the dual initial dual vector
-        alphas = [SequenceDualVariables(N=N, C=self.C, cand_ids=data.get_labelspace(i))
-                      .initialize(rs=self.rs, num_active_vars=num_init_active_vars_per_seq)
+        alphas = [DualVariables(N=N, C=self.C, cand_ids=data.get_labelspace(i),
+                                rs=self.rs, num_init_active_vars=num_init_active_vars_per_seq)
                   for i in range(N)]
         assert self._is_feasible(alphas, self.C), "Initial dual variables must be feasible."
 
@@ -313,13 +159,13 @@ class StructuredSVM2(BaseEstimator, ClassifierMixin):
             gamma = self._get_diminishing_stepwidth(k, N)
 
             # Update the dual variables
-            alphas.update(i, y_i_hat, gamma)
+            alphas[i].update(y_i_hat, gamma)
 
             assert self._is_feasible(alphas, self.C)
 
         return self
 
-    def _solve_sub_problem(self, alpha: List[SequenceDualVariables], data: SequenceSample, i: int) -> tuple:
+    def _solve_sub_problem(self, alpha: List[DualVariables], data: SequenceSample, i: int) -> tuple:
         """
         Find the most violating example by solving the MAP problem. Forward-pass using max marginals.
 
@@ -360,7 +206,7 @@ class StructuredSVM2(BaseEstimator, ClassifierMixin):
         pass
 
     @staticmethod
-    def _is_feasible(alphas: List[SequenceDualVariables], C: float) -> bool:
+    def _is_feasible(alphas: List[DualVariables], C: float) -> bool:
         """
         Check the feasibility of the dual variable.
 
