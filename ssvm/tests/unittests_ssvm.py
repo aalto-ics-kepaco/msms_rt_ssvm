@@ -26,7 +26,7 @@
 
 import unittest
 
-from ssvm.ssvm import DualVariables, StructuredSVM
+from ssvm.ssvm import DualVariables, _StructuredSVM
 
 
 class TestStructuredSVM(unittest.TestCase):
@@ -41,9 +41,9 @@ class TestStructuredSVM(unittest.TestCase):
                   {("M2", "M1", "M3"): C / (3 * N), ("M5", "M2", "M1"): C / (3 * N), ("M10", "M1", "M7"): C / (3 * N)}]
         assert len(alphas) == N
 
-        self.assertTrue(StructuredSVM._is_feasible(alphas, C))
-        self.assertFalse(StructuredSVM._is_feasible(alphas, 1.9))
-        self.assertFalse(StructuredSVM._is_feasible(alphas, 2.1))
+        self.assertTrue(_StructuredSVM._is_feasible(alphas, C))
+        self.assertFalse(_StructuredSVM._is_feasible(alphas, 1.9))
+        self.assertFalse(_StructuredSVM._is_feasible(alphas, 2.1))
 
         # ------------------------------------
         # Check a infeasible alpha
@@ -52,14 +52,14 @@ class TestStructuredSVM(unittest.TestCase):
                   {("M2", "M1", "M3"): C / (3 * N), ("M5", "M2", "M1"): C / (2 * N), ("M10", "M1", "M7"): C / (3 * N)}]
         assert len(alphas) == N
 
-        self.assertFalse(StructuredSVM._is_feasible(alphas, C))
+        self.assertFalse(_StructuredSVM._is_feasible(alphas, C))
 
         alphas = [{("M1", "M4", "M9"): - 1},
                   {("M5", "M1", "M10"): C / (2 * N), ("M6", "M2", "M1"): C / (3 * N)},
                   {("M2", "M1", "M3"): C / (3 * N), ("M5", "M2", "M1"): C / (2 * N), ("M10", "M1", "M7"): C / (3 * N)}]
         assert len(alphas) == N
 
-        self.assertFalse(StructuredSVM._is_feasible(alphas, C))
+        self.assertFalse(_StructuredSVM._is_feasible(alphas, C))
 
 
 class TestDualVariables(unittest.TestCase):
@@ -91,7 +91,7 @@ class TestDualVariables(unittest.TestCase):
         alphas = [DualVariables(C=1.5, N=3, cand_ids=cand_ids, rs=12, num_init_active_vars=2),
                   DualVariables(C=1.5, N=3, cand_ids=cand_ids, rs=12, num_init_active_vars=1),
                   DualVariables(C=1.5, N=3, cand_ids=cand_ids, rs=12, num_init_active_vars=3)]
-        self.assertTrue(StructuredSVM._is_feasible(alphas, 1.5))
+        self.assertTrue(_StructuredSVM._is_feasible(alphas, 1.5))
 
     def test_update(self):
         cand_ids_1 = [["M1"], ["M1", "M2", "M3", "M10", "M20"], ["M4", "M5"], ["M2", "M4"], ["M7", "M9", "M8"]]
@@ -131,7 +131,7 @@ class TestDualVariables(unittest.TestCase):
                   DualVariables(C=C, N=N, cand_ids=cand_ids_2, rs=121, num_init_active_vars=1),
                   DualVariables(C=C, N=N, cand_ids=cand_ids_3, rs=321, num_init_active_vars=4)]
 
-        self.assertTrue(StructuredSVM._is_feasible(alphas, C))
+        self.assertTrue(_StructuredSVM._is_feasible(alphas, C))
         print(alphas[0].items())
 
         # Dual variable set belonging to example 0
@@ -139,9 +139,9 @@ class TestDualVariables(unittest.TestCase):
         y_seq_inactive = ('M1', 'M20', 'M5', 'M2', 'M7')
         alphas[0].update(y_seq_active, gamma)
         print(alphas[0].items())
-        self.assertTrue(StructuredSVM._is_feasible(alphas, C))
+        self.assertTrue(_StructuredSVM._is_feasible(alphas, C))
         alphas[0].update(y_seq_inactive, gamma)
-        self.assertTrue(StructuredSVM._is_feasible(alphas, C))
+        self.assertTrue(_StructuredSVM._is_feasible(alphas, C))
 
 
 if __name__ == '__main__':
