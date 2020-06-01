@@ -25,7 +25,7 @@
 ####
 import numpy as np
 
-from typing import List, ItemsView, Tuple
+from typing import List, ItemsView, Tuple, ValuesView, KeysView
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.utils.validation import check_random_state
 from sklearn.metrics import hamming_loss
@@ -63,8 +63,10 @@ class DualVariables(object):
         self.C = C
         assert self.C > 0, "The regularization parameter must be positive."
         self.N = N
+        assert self.N > 0
         self.l_cand_ids = cand_ids
         self.num_init_active_vars = num_init_active_vars
+        assert self.num_init_active_vars > 0
         self.rs = check_random_state(rs)
 
         # Initialize the dual variables
@@ -99,8 +101,23 @@ class DualVariables(object):
     def __iter__(self) -> dict:
         return self._alphas
 
+    def __getitem__(self, y_seq: tuple) -> float:
+        try:
+            return self._alphas[y_seq]
+        except KeyError:
+            return 0.0
+
+    def is_active(self, y_seq: tuple) -> bool:
+        return y_seq in self._alphas
+
     def items(self) -> ItemsView[Tuple, float]:
         return self._alphas.items()
+
+    def values(self) -> ValuesView[float]:
+        return self._alphas.values()
+
+    def keys(self) -> KeysView[Tuple]:
+        return self._alphas.keys()
 
     def update(self, y_seq: tuple, gamma: float):
         """
@@ -109,13 +126,19 @@ class DualVariables(object):
         :param y_seq: tuple of strings, sequence of candidate indices identifying the dual variable
         :param gamma: scalar, step-width used to update the dual variable value
         """
+        for y_seq_active in self._alphas:
+            if y_seq == y_seq_active:
+                continue
+
+            self._alphas[y_seq_active] -= (gamma * self._alphas[y_seq_active])
+
         try:
             # Update an active dual variable
-            # self._alphas[y_seq] = (1 - gamma) * self._alphas[y_seq] + gamma * (self.N / self.C)
-            self._alphas[y_seq] -= gamma * (self._alphas[y_seq] + (self.N / self.C))
+            # self._alphas[y_seq] = (1 - gamma) * self._alphas[y_seq] + gamma * (self.C / self.N)
+            self._alphas[y_seq] += gamma * ((self.C / self.N) - self._alphas[y_seq])
         except KeyError:
             # Add a new dual active dual variable
-            self._alphas[y_seq] = gamma * (self.N / self.C)
+            self._alphas[y_seq] = gamma * (self.C / self.N)
 
 
 class StructuredSVM(BaseEstimator, ClassifierMixin):
@@ -217,17 +240,20 @@ class StructuredSVM(BaseEstimator, ClassifierMixin):
         val = C / len(alphas)  # C / N
         for a_i in alphas:
             sum_a_i = 0
-            for a_iy in a_i:
+            for a_iy in a_i.values():
                 # Alphas need to be positive
                 if a_iy < 0:
+                    print("Dual variable is smaller 0: %f" % a_iy)
                     return False
 
                 sum_a_i += a_iy
 
-            if sum_a_i != val:  # TODO: Use "not np.isclose(sum_a_i, C / N)"
+            if not np.isclose(sum_a_i, val):
+                print("Dual variable does not sum to C / N: (expected) %f - (actual) %f = %f" % (
+                    val, sum_a_i, sum_a_i - val))
                 return False
 
-        raise True
+        return True
 
     @staticmethod
     def _get_diminishing_stepwidth(k: int, N: int) -> float:
