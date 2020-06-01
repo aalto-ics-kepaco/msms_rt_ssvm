@@ -30,7 +30,7 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.utils.validation import check_random_state
 from sklearn.metrics import hamming_loss
 
-from ssvm.sequence import SequenceSample
+from ssvm.data_structures import SequenceSample, CandidateSetMetIdent
 
 
 class DualVariables(object):
@@ -141,7 +141,7 @@ class DualVariables(object):
             self._alphas[y_seq] = gamma * (self.C / self.N)
 
 
-class StructuredSVM(BaseEstimator, ClassifierMixin):
+class _StructuredSVM(BaseEstimator, ClassifierMixin):
     def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming", rs=None):
         """
         Structured Support Vector Machine (SSVM) class.
@@ -155,6 +155,124 @@ class StructuredSVM(BaseEstimator, ClassifierMixin):
         self.label_loss = label_loss
 
         self.rs = check_random_state(rs)  # Type: np.random.RandomState
+
+    @staticmethod
+    def _is_feasible(alphas: List[DualVariables], C: float) -> bool:
+        """
+        Check the feasibility of the dual variable.
+
+        :param alphas:
+        :param C:
+        :return:
+        """
+        val = C / len(alphas)  # C / N
+        for a_i in alphas:
+            sum_a_i = 0
+            for a_iy in a_i.values():
+                # Alphas need to be positive
+                if a_iy < 0:
+                    print("Dual variable is smaller 0: %f" % a_iy)
+                    return False
+
+                sum_a_i += a_iy
+
+            if not np.isclose(sum_a_i, val):
+                print("Dual variable does not sum to C / N: (expected) %f - (actual) %f = %f" % (
+                    val, sum_a_i, sum_a_i - val))
+                return False
+
+        return True
+
+    @staticmethod
+    def _get_diminishing_stepwidth(k: int, N: int) -> float:
+        """
+        Step-width calculation by [1].
+
+        :param k:
+        :param N:
+        :return:
+        """
+        return (2 * N) / (k + 2 * N)
+
+
+class StructuredSVMMetIdent(_StructuredSVM):
+    def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming", rs=None):
+        super(StructuredSVMMetIdent, self).__init__(C=C, n_epochs=n_epochs, label_loss=label_loss, rs=rs)
+
+    def fit(self, X: np.ndarray, y: np.ndarray, candidates: CandidateSetMetIdent, num_init_active_vars_per_seq=1):
+        """
+        Train the SSVM given a dataset.
+        :return:
+        """
+        # Number of training sequences
+        N = len(X)
+
+        # Set up the dual initial dual vector
+        alphas = []
+        for i in range(N):
+            lab_space_i = [candidates.get_labelspace(y[i])]
+            assert y[i] in lab_space_i, "Correct molecular structure must be in the candidate set."
+
+            alphas.append(DualVariables(N=N, C=self.C, cand_ids=lab_space_i, rs=self.rs,
+                                        num_init_active_vars=num_init_active_vars_per_seq))
+        assert self._is_feasible(alphas, self.C), "Initial dual variables must be feasible."
+
+        k = 0
+        while k < self.n_epochs:
+            # Pick a random coordinate to update
+            i = self.rs.choice(N)
+
+            # Find the most violating example
+            y_i_hat = self._solve_sub_problem(alphas, X, y, i, candidates)
+
+            # Get step-width
+            gamma = self._get_diminishing_stepwidth(k, N)
+
+            # Update the dual variables
+            alphas[i].update(y_i_hat, gamma)
+
+            assert self._is_feasible(alphas, self.C)
+
+        return self
+
+    def _solve_sub_problem(self, alphas, X, y, i, candidates: CandidateSetMetIdent) -> Tuple:
+        """
+
+        :param alphas:
+        :param X:
+        :param i:
+        :param candidates:
+        :return:
+        """
+        N = len(alphas)
+
+        # Calculate label loss
+        fp_i = candidates.get_gt_fp(i)
+        loss = np.array([hamming_loss(fp_i, fp) for fp in candidates.get_candidates_fp(i)])
+
+        # spectra kernel similarity between example i and all other examples
+        k_i = X[i, :]  # shape = (N, )
+
+        # molecule kernel between all candidates of example i and all other training examples
+        y_i = y[i]
+        l_y = candidates.getMolKernel_ExpVsCand(y, y_i)  # shape = (N, |Sigma_i|)
+
+        s_j_y = (self.C / N) * k_i @ l_y  # shape = (|Sigma_i|, )
+
+        s_ybar_y = np.zeros_like(l_y)
+        for j in range(N):
+            ybars = [alphas[j].keys()]
+            a_j_ybars = np.array([alphas[j].values()])
+            s_ybar_y[j, :] = candidates.getMolKernel_CandVsCand(y[j], ybars, y_i) @ a_j_ybars  # shape = (|Sigma_i|, )
+
+        s_ybar_y = k_i @ s_ybar_y  # shape = (|Sigma_i|, )
+
+        return tuple(np.argmax(loss + s_j_y - s_ybar_y))
+
+
+class StructuredSVMSequences(_StructuredSVM):
+    def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming", rs=None):
+        super(StructuredSVMSequences, self).__init__(C=C, n_epochs=n_epochs, label_loss=label_loss, rs=rs)
 
     def fit(self, data: SequenceSample, num_init_active_vars_per_seq=1):
         """
@@ -227,41 +345,3 @@ class StructuredSVM(BaseEstimator, ClassifierMixin):
 
         # Pre-calculate the edge-potentials: se_i
         pass
-
-    @staticmethod
-    def _is_feasible(alphas: List[DualVariables], C: float) -> bool:
-        """
-        Check the feasibility of the dual variable.
-
-        :param alphas:
-        :param C:
-        :return:
-        """
-        val = C / len(alphas)  # C / N
-        for a_i in alphas:
-            sum_a_i = 0
-            for a_iy in a_i.values():
-                # Alphas need to be positive
-                if a_iy < 0:
-                    print("Dual variable is smaller 0: %f" % a_iy)
-                    return False
-
-                sum_a_i += a_iy
-
-            if not np.isclose(sum_a_i, val):
-                print("Dual variable does not sum to C / N: (expected) %f - (actual) %f = %f" % (
-                    val, sum_a_i, sum_a_i - val))
-                return False
-
-        return True
-
-    @staticmethod
-    def _get_diminishing_stepwidth(k: int, N: int) -> float:
-        """
-        Step-width calculation by [1].
-
-        :param k:
-        :param N:
-        :return:
-        """
-        return (2 * N) / (k + 2 * N)
