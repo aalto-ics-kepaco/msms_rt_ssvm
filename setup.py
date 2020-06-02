@@ -10,7 +10,8 @@ setup(
     install_requires=[
         "numpy",
         "scikit-learn",
-        "pandas"
+        "pandas",
+        "scipy"
     ],
 
     # Metadata

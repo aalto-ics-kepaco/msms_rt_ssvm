@@ -24,16 +24,90 @@
 #
 ####
 import numpy as np
+import itertools as it
 
-from typing import List, ItemsView, Tuple, ValuesView, KeysView
+from typing import List, ItemsView, Tuple, ValuesView, KeysView, Iterator, Dict
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.utils.validation import check_random_state
 from sklearn.metrics import hamming_loss
+from scipy.sparse import csc_matrix, coo_matrix, lil_matrix, csr_matrix
 
 from ssvm.data_structures import SequenceSample, CandidateSetMetIdent
 
 
 class DualVariables(object):
+    def __init__(self, C: float, N: int, cand_ids: List[List[List[str]]], num_init_active_vars=1, rs=None):
+        self.C = C
+        assert self.C > 0, "The regularization parameter must be positive."
+        self.N = N
+        assert self.N > 0
+        assert len(cand_ids) == self.N
+        self.l_cand_ids = cand_ids
+        self.num_init_active_vars = num_init_active_vars
+        assert self.num_init_active_vars > 0
+        self.rs = check_random_state(rs)
+
+        # Initialize the dual variables
+        self._alphas, self._y2col, self._iy = self._get_initial_alphas()
+
+    def _get_initial_alphas(self) -> Tuple[lil_matrix, List[Dict], List[Tuple]]:
+        """
+        Return initialized dual variables.
+
+        :return: dictionary: key = label sequence, value = dual variable value
+        """
+        _alphas = lil_matrix((self.N, self.N * self.num_init_active_vars))
+        _y2col = [{} for _ in range(self.N)]
+        _iy = []
+
+        # Initial dual variable value ensuring feasibility
+        init_var_val = self.C / (self.N * self.num_init_active_vars)  # (C / N) / num_act = C / (N * num_act)
+
+        for col, (i, _) in enumerate(it.product(range(self.N), range(self.num_init_active_vars))):
+            y_seq = tuple(self.rs.choice(cand_ids) for cand_ids in self.l_cand_ids[i])
+            assert y_seq not in _y2col, "Oups, we sampled the same active dual variable again."
+            _alphas[i, col] = init_var_val
+            _y2col[i][y_seq] = col
+            _iy.append((i, y_seq))
+
+        return _alphas, _y2col, _iy
+
+    def update(self, i: int, y_seq: tuple, gamma: float) -> bool:
+        """
+        Update the value of a dual variable.
+
+        :param y_seq: tuple of strings, sequence of candidate indices identifying the dual variable
+        :param gamma: scalar, step-width used to update the dual variable value
+        """
+        try:
+            # Update an active dual variable
+            is_new = False
+            col = self._y2col[i][y_seq]
+            self._alphas[i, col] += gamma * ((self.C / self.N) - self._alphas[i, col])
+        except KeyError:
+            # Add a new active dual variable by adding a new column
+            is_new = True
+            self._alphas.resize(self._alphas.shape[0], self._alphas.shape[1] + 1)
+            col = self._alphas.shape[1] - 1
+            self._alphas[i, col] = gamma * (self.C / self.N)
+            self._y2col[i][y_seq] = col
+            self._iy.append((i, y_seq))
+
+        # Update all remaining dual variables for the current example
+        _r = gamma * self._alphas[i]
+        _r[0, col] = 0  # we already updated the selected candidate y_seq
+        self._alphas[i] -= _r
+
+        return is_new
+
+    def get_dual_variable_matrix(self):
+        return csr_matrix(self._alphas)
+
+    def n_active(self):
+        return self._alphas.shape[1]
+
+
+class DualVariablesForExample(object):
     def __init__(self, C: float, N: int, cand_ids: List[List[str]], num_init_active_vars=1, rs=None):
         """
 
@@ -98,8 +172,8 @@ class DualVariables(object):
         """
         return len(self._alphas)
 
-    def __iter__(self) -> dict:
-        return self._alphas
+    def __iter__(self) -> Iterator:
+        return self._alphas.__iter__()
 
     def __getitem__(self, y_seq: tuple) -> float:
         try:
@@ -154,10 +228,15 @@ class _StructuredSVM(BaseEstimator, ClassifierMixin):
         self.n_epochs = n_epochs
         self.label_loss = label_loss
 
+        if self.label_loss == "hamming":
+            self.label_loss_fun = hamming_loss
+        else:
+            raise ValueError("Invalid label loss '%s'. Choices are 'hamming'.")
+
         self.rs = check_random_state(rs)  # Type: np.random.RandomState
 
     @staticmethod
-    def _is_feasible(alphas: List[DualVariables], C: float) -> bool:
+    def _is_feasible(alphas: List[DualVariablesForExample], C: float) -> bool:
         """
         Check the feasibility of the dual variable.
 
@@ -196,7 +275,9 @@ class _StructuredSVM(BaseEstimator, ClassifierMixin):
 
 
 class StructuredSVMMetIdent(_StructuredSVM):
-    def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming", rs=None):
+    def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming", rs=None, sub_problem_solver="version_01"):
+        self.sub_problem_solver = sub_problem_solver
+
         super(StructuredSVMMetIdent, self).__init__(C=C, n_epochs=n_epochs, label_loss=label_loss, rs=rs)
 
     def fit(self, X: np.ndarray, y: np.ndarray, candidates: CandidateSetMetIdent, num_init_active_vars_per_seq=1):
@@ -207,35 +288,104 @@ class StructuredSVMMetIdent(_StructuredSVM):
         # Number of training sequences
         N = len(X)
 
-        # Set up the dual initial dual vector
-        alphas = []
-        for i in range(N):
-            lab_space_i = [candidates.get_labelspace(y[i])]
-            assert y[i] in lab_space_i, "Correct molecular structure must be in the candidate set."
+        i_k = self.rs.choice(N, self.n_epochs)
+        if self.sub_problem_solver == "version_03":
+            # Pre-calculate the loss
+            self._loss = {}
+            for i in i_k:
+                fp_i = candidates.get_gt_fp(y[i]).flatten()
+                self._loss[y[i]] = np.array([self.label_loss_fun(fp_i, fp.flatten())
+                                             for fp in candidates.get_candidates_fp(y[i])])
 
-            alphas.append(DualVariables(N=N, C=self.C, cand_ids=lab_space_i, rs=self.rs,
-                                        num_init_active_vars=num_init_active_vars_per_seq))
-        assert self._is_feasible(alphas, self.C), "Initial dual variables must be feasible."
+            # Pre-calculate the kernels between the training examples and candidates
+            self._l_y = {}
+            for i in i_k:
+                self._l_y[y[i]] = candidates.getMolKernel_ExpVsCand(y, y[i])  # shape = (N, |Sigma_i|)
+
+            # Build Dual Variable Matrix
+            alphas = DualVariables(C=self.C, N=N, cand_ids=[[candidates.get_labelspace(y[i])] for i in range(N)],
+                                   rs=self.rs, num_init_active_vars=num_init_active_vars_per_seq)
+
+            assert self._is_feasible_matrix(alphas, self.C), "Initial dual variables must be feasible."
+
+            # Collect active candidate fingerprints
+            fps_active = lil_matrix((alphas.n_active(), len(fp_i)))
+            for c in range(alphas.n_active()):
+                # Get the fingerprints of the active candidates for example j
+                j, ybar = alphas._iy[c]
+                fps_active[c] = candidates.get_candidates_fp(y[j], ybar, as_dense=False)
+
+        else:
+            # Set up the dual initial dual vector
+            alphas = []
+            print("Initialize dual variables ...")
+            for i in range(N):
+                if (i % 100) == 0 or (i + 1) == N:
+                    print("Example: %d / %d" % (i + 1, N))
+
+                lab_space_i = candidates.get_labelspace(y[i])
+                assert y[i] in lab_space_i, "Correct molecular structure must be in the candidate set."
+
+                alphas.append(DualVariablesForExample(N=N, C=self.C, cand_ids=[lab_space_i], rs=self.rs,
+                                                      num_init_active_vars=num_init_active_vars_per_seq))
+            assert self._is_feasible(alphas, self.C), "Initial dual variables must be feasible."
 
         k = 0
         while k < self.n_epochs:
+            if (k % 10) == 0:
+                print("Epoch: %d / %d" % (k + 1, self.n_epochs))
+
             # Pick a random coordinate to update
-            i = self.rs.choice(N)
+            i = i_k[k]
+            print("Selected example: %d" % i)
+            print("Number of candidates: %d" % len(candidates.get_labelspace(y[i])))
 
             # Find the most violating example
-            y_i_hat = self._solve_sub_problem(alphas, X, y, i, candidates)
+            if self.sub_problem_solver == "version_01":
+                y_i_hat = self._solve_sub_problem_v01(alphas, X, y, i, candidates)
+            elif self.sub_problem_solver == "version_02":
+                y_i_hat = self._solve_sub_problem_v02(alphas, X, y, i, candidates)
+            elif self.sub_problem_solver == "version_03":
+                y_i_hat = self._solve_sub_problem_v03(alphas, fps_active, X, y, i, candidates)
+            else:
+                raise ValueError("Invalid sub-problem-solver version '%s'. Choices are 'version_01', 'version_02' and"
+                                 "'version_03'.")
 
             # Get step-width
             gamma = self._get_diminishing_stepwidth(k, N)
 
             # Update the dual variables
-            alphas[i].update(y_i_hat, gamma)
+            if self.sub_problem_solver == "version_03":
+                is_new = alphas.update(i, y_i_hat, gamma)
 
-            assert self._is_feasible(alphas, self.C)
+                if is_new:
+                    fps_active.resize(fps_active.shape[0] + 1, fps_active.shape[1])
+                    fps_active[fps_active.shape[0] - 1, :] = candidates.get_candidates_fp(y[i], y_i_hat, as_dense=False)
+
+                assert self._is_feasible_matrix(alphas, self.C), "Initial dual variables must be feasible."
+            else:
+                alphas[i].update(y_i_hat, gamma)
+                assert self._is_feasible(alphas, self.C)
+
+
+            k += 1
 
         return self
 
-    def _solve_sub_problem(self, alphas, X, y, i, candidates: CandidateSetMetIdent) -> Tuple:
+    @staticmethod
+    def _is_feasible_matrix(alphas: DualVariables, C: float) -> bool:
+        A = alphas.get_dual_variable_matrix()
+        N = A.shape[0]
+
+        if (A < 0).getnnz():
+            return False
+
+        if not np.all(np.isclose(A.sum(axis=1), C / N)):
+            return False
+
+        return True
+
+    def _solve_sub_problem_v01(self, alphas, X, y, i, candidates: CandidateSetMetIdent) -> Tuple:
         """
 
         :param alphas:
@@ -247,27 +397,115 @@ class StructuredSVMMetIdent(_StructuredSVM):
         N = len(alphas)
 
         # Calculate label loss
-        fp_i = candidates.get_gt_fp(i)
-        loss = np.array([hamming_loss(fp_i, fp) for fp in candidates.get_candidates_fp(i)])
+        y_i = y[i]
+        fp_i = candidates.get_gt_fp(y_i).flatten()
+
+        if self.label_loss == "hamming":
+            loss = np.array([hamming_loss(fp_i, fp.flatten()) for fp in candidates.get_candidates_fp(y_i)])
+        else:
+            raise ValueError("Invalid label loss '%s'. Choices are 'hamming'.")
 
         # spectra kernel similarity between example i and all other examples
         k_i = X[i, :]  # shape = (N, )
 
         # molecule kernel between all candidates of example i and all other training examples
-        y_i = y[i]
         l_y = candidates.getMolKernel_ExpVsCand(y, y_i)  # shape = (N, |Sigma_i|)
 
         s_j_y = (self.C / N) * k_i @ l_y  # shape = (|Sigma_i|, )
 
+        # Version 1:
         s_ybar_y = np.zeros_like(l_y)
         for j in range(N):
-            ybars = [alphas[j].keys()]
-            a_j_ybars = np.array([alphas[j].values()])
-            s_ybar_y[j, :] = candidates.getMolKernel_CandVsCand(y[j], ybars, y_i) @ a_j_ybars  # shape = (|Sigma_i|, )
+            ybars = [k[0] for k in alphas[j]]
+            a_j_ybars = np.array(list(alphas[j].values()))
+            s_ybar_y[j, :] = a_j_ybars @ candidates.getMolKernel_CandVsCand(y[j], y_i, ybars)  # shape = (|Sigma_i|, )
 
         s_ybar_y = k_i @ s_ybar_y  # shape = (|Sigma_i|, )
 
-        return tuple(np.argmax(loss + s_j_y - s_ybar_y))
+        return (candidates.get_labelspace(y_i)[np.argmax(loss + s_j_y - s_ybar_y).item()], )
+
+    def _solve_sub_problem_v02(self, alphas, X, y, i, candidates: CandidateSetMetIdent) -> Tuple:
+        """
+
+        :param alphas:
+        :param X:
+        :param i:
+        :param candidates:
+        :return:
+        """
+        N = len(alphas)
+
+        # Calculate label loss
+        y_i = y[i]
+        fp_i = candidates.get_gt_fp(y_i).flatten()
+
+        if self.label_loss == "hamming":
+            loss = np.array([hamming_loss(fp_i, fp.flatten()) for fp in candidates.get_candidates_fp(y_i)])
+        else:
+            raise ValueError("Invalid label loss '%s'. Choices are 'hamming'.")
+
+        # spectra kernel similarity between example i and all other examples
+        k_i = X[i, :]  # shape = (N, )
+
+        # molecule kernel between all candidates of example i and all other training examples
+        l_y = candidates.getMolKernel_ExpVsCand(y, y_i)  # shape = (N, |Sigma_i|)
+
+        s_j_y = (self.C / N) * k_i @ l_y  # shape = (|Sigma_i|, )
+
+        # Version 2:
+        # Collect all "other" candidate fingerprints we need to calculate the similarity with. Those are basically the
+        # ones corresponding to the active dual variables.
+        n_active_vars = np.sum([len(alphas[j]) for j in range(N)]).item()
+        a_ybars = np.zeros((n_active_vars, N))
+        fps_ybars = np.full((n_active_vars, len(fp_i)), fill_value=np.nan)
+        last_idx = 0
+        for j in range(N):
+            # Active dual variable values of example j
+            a_ybars[last_idx:(last_idx + len(alphas[j])), j] = list(alphas[j].values())
+
+            # Get the fingerprints of the active candidates for example j
+            ybars = [k[0] for k in alphas[j]]
+            fps_ybars[last_idx:(last_idx + len(alphas[j])), :] = candidates.get_candidates_fp(y[j], ybars)
+
+            last_idx += len(alphas[j])
+
+        assert not np.any(np.isnan(fps_ybars))
+
+        s_ybar_y = candidates.get_kernel(candidates.get_candidates_fp(y_i), fps_ybars) @ csc_matrix(a_ybars)
+
+        s_ybar_y = s_ybar_y @ k_i  # shape = (|Sigma_i|, )
+
+        return (candidates.get_labelspace(y_i)[np.argmax(loss + s_j_y - s_ybar_y).item()], )
+
+    def _solve_sub_problem_v03(self, alphas, fps_active, X, y, i, candidates: CandidateSetMetIdent) -> Tuple:
+        """
+
+        :param alphas:
+        :param X:
+        :param i:
+        :param candidates:
+        :return:
+        """
+        A = alphas.get_dual_variable_matrix()
+        N = A.shape[0]
+
+        # Calculate label loss
+        y_i = y[i]
+        loss = self._loss[y_i]
+
+        # spectra kernel similarity between example i and all other examples
+        k_i = X[i, :]  # shape = (N, )
+
+        # molecule kernel between all candidates of example i and all other training examples
+        l_y = self._l_y[y_i]  # shape = (N, |Sigma_i|)
+
+        s_j_y = (self.C / N) * k_i @ l_y  # shape = (|Sigma_i|, )
+
+        s_ybar_y = A @ candidates.get_kernel(fps_active.toarray(), candidates.get_candidates_fp(y_i))
+
+        s_ybar_y = k_i @ s_ybar_y  # shape = (|Sigma_i|, )
+
+        return (candidates.get_labelspace(y_i)[np.argmax(loss + s_j_y - s_ybar_y).item()], )
 
 
 class StructuredSVMSequences(_StructuredSVM):
@@ -283,8 +521,8 @@ class StructuredSVMSequences(_StructuredSVM):
         N = len(data)
 
         # Set up the dual initial dual vector
-        alphas = [DualVariables(N=N, C=self.C, cand_ids=data.get_labelspace(i),
-                                rs=self.rs, num_init_active_vars=num_init_active_vars_per_seq)
+        alphas = [DualVariablesForExample(N=N, C=self.C, cand_ids=data.get_labelspace(i),
+                                          rs=self.rs, num_init_active_vars=num_init_active_vars_per_seq)
                   for i in range(N)]
         assert self._is_feasible(alphas, self.C), "Initial dual variables must be feasible."
 
@@ -306,7 +544,7 @@ class StructuredSVMSequences(_StructuredSVM):
 
         return self
 
-    def _solve_sub_problem(self, alpha: List[DualVariables], data: SequenceSample, i: int) -> tuple:
+    def _solve_sub_problem(self, alpha: List[DualVariablesForExample], data: SequenceSample, i: int) -> tuple:
         """
         Find the most violating example by solving the MAP problem. Forward-pass using max marginals.
 

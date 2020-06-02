@@ -26,7 +26,7 @@
 
 import unittest
 
-from ssvm.ssvm import DualVariables, _StructuredSVM
+from ssvm.ssvm import DualVariablesForExample, _StructuredSVM
 
 
 class TestStructuredSVM(unittest.TestCase):
@@ -69,7 +69,7 @@ class TestDualVariables(unittest.TestCase):
 
         for C, N in [(1, 10), (0.5, 2), (2, 1)]:
             for n in range(1, 11):
-                alphas = DualVariables(C=C, N=N, cand_ids=cand_ids, rs=11, num_init_active_vars=n)
+                alphas = DualVariablesForExample(C=C, N=N, cand_ids=cand_ids, rs=11, num_init_active_vars=n)
                 self.assertEqual(n, len(alphas))
                 for key, a in alphas.items():
                     self.assertIsInstance(key, tuple)
@@ -80,7 +80,7 @@ class TestDualVariables(unittest.TestCase):
 
         for C, N in [(1, 10), (0.5, 2), (2, 1)]:
             for n in range(1, 3):
-                alphas = DualVariables(C=C, N=N, cand_ids=cand_ids, rs=11, num_init_active_vars=n)
+                alphas = DualVariablesForExample(C=C, N=N, cand_ids=cand_ids, rs=11, num_init_active_vars=n)
                 self.assertEqual(n, len(alphas))
                 for key, a in alphas.items():
                     self.assertIsInstance(key, tuple)
@@ -88,9 +88,9 @@ class TestDualVariables(unittest.TestCase):
 
         # ------------------------------------
         cand_ids = [["M1"], ["M1", "M2", "M3", "M10", "M20"], ["M4", "M5"], ["M2", "M4"], ["M7", "M9", "M8"]]
-        alphas = [DualVariables(C=1.5, N=3, cand_ids=cand_ids, rs=12, num_init_active_vars=2),
-                  DualVariables(C=1.5, N=3, cand_ids=cand_ids, rs=12, num_init_active_vars=1),
-                  DualVariables(C=1.5, N=3, cand_ids=cand_ids, rs=12, num_init_active_vars=3)]
+        alphas = [DualVariablesForExample(C=1.5, N=3, cand_ids=cand_ids, rs=12, num_init_active_vars=2),
+                  DualVariablesForExample(C=1.5, N=3, cand_ids=cand_ids, rs=12, num_init_active_vars=1),
+                  DualVariablesForExample(C=1.5, N=3, cand_ids=cand_ids, rs=12, num_init_active_vars=3)]
         self.assertTrue(_StructuredSVM._is_feasible(alphas, 1.5))
 
     def test_update(self):
@@ -100,7 +100,7 @@ class TestDualVariables(unittest.TestCase):
         gamma = 0.75
         C = 2
         N = 1
-        alphas = DualVariables(C=C, N=N, cand_ids=cand_ids_1, rs=123, num_init_active_vars=2)
+        alphas = DualVariablesForExample(C=C, N=N, cand_ids=cand_ids_1, rs=123, num_init_active_vars=2)
 
         # ('M1', 'M3', 'M4', 'M2', 'M8') and ('M1', 'M2', 'M5', 'M2', 'M9') are active.
 
@@ -127,9 +127,9 @@ class TestDualVariables(unittest.TestCase):
 
         C = 2
         N = 3
-        alphas = [DualVariables(C=C, N=N, cand_ids=cand_ids_1, rs=123, num_init_active_vars=2),
-                  DualVariables(C=C, N=N, cand_ids=cand_ids_2, rs=121, num_init_active_vars=1),
-                  DualVariables(C=C, N=N, cand_ids=cand_ids_3, rs=321, num_init_active_vars=4)]
+        alphas = [DualVariablesForExample(C=C, N=N, cand_ids=cand_ids_1, rs=123, num_init_active_vars=2),
+                  DualVariablesForExample(C=C, N=N, cand_ids=cand_ids_2, rs=121, num_init_active_vars=1),
+                  DualVariablesForExample(C=C, N=N, cand_ids=cand_ids_3, rs=321, num_init_active_vars=4)]
 
         self.assertTrue(_StructuredSVM._is_feasible(alphas, C))
         print(alphas[0].items())

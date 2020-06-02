@@ -36,7 +36,7 @@ from ssvm.kernel_utils import tanimoto_kernel
 
 
 class CandidateSetMetIdent(object):
-    def __init__(self, mols: List[str], fps: np.ndarray, mols2cand: Dict, idir: str, preload_data=False):
+    def __init__(self, mols: np.ndarray, fps: np.ndarray, mols2cand: Dict, idir: str, preload_data=False):
         self.mols = mols
         self.fps = fps
         self.mols2cand = mols2cand
@@ -64,9 +64,10 @@ class CandidateSetMetIdent(object):
         del cand["__version__"]
         del cand["__globals__"]
 
-        cand["fp"] = cand["fp"].T  # shape = (n_samples, n_fps)
-        cand["inchi"] = [inchi[0][0] for inchi in cand["inchi"]]
-        cand["n_cand"] = len(cand["inchi"])
+        cand["fp"] = cand["fp"].T  # shape = (n_samples, n_fps), sparse
+        cand["inchi"] = [inchi[0][0] for inchi in cand["inchi"]]  # molecule identifier
+        cand["n_cand"] = len(cand["inchi"])  # number of candidates
+        # dict: mol identifier -> index (row) in fingerprint matrix for example
         cand["mol2idx"] = {_cand_mol: i for i, _cand_mol in enumerate(cand["inchi"])}
 
         try:
@@ -77,15 +78,15 @@ class CandidateSetMetIdent(object):
 
         return cand
 
-    @staticmethod
-    def _ensure_str(mol: np.ndarray) -> str:
-        if isinstance(mol, str):
-            return mol
-
-        assert len(mol) == 1
-        out = mol[0].item()
-        assert isinstance(out, str)
-        return out
+    # @staticmethod
+    # def _ensure_str(mol: np.ndarray) -> str:
+    #     if isinstance(mol, str):
+    #         return mol
+    #
+    #     assert len(mol) == 1
+    #     out = mol[0].item()
+    #     assert isinstance(out, str)
+    #     return out
 
     def get_labelspace(self, mol: str) -> List[str]:
         if self.preload_data:
@@ -103,26 +104,33 @@ class CandidateSetMetIdent(object):
 
         return cand["fp"][cand["index_of_correct_structure"]].toarray()
 
-    def get_candidates_fp(self, mol: str) -> np.ndarray:
+    def get_candidates_fp(self, mol: str, mol_sel=None, as_dense=True) -> np.ndarray:
         if self.preload_data:
             cand = self._cand_sets[mol]
         else:
             cand = self._load_candidate_set(mol)
 
-        return cand["fp"].toarray()
+        if mol_sel is None:
+            fps = cand["fp"]
+        else:
+            np.atleast_1d(mol_sel)
+            idc = [cand["mol2idx"][mol] for mol in mol_sel]
+            fps = cand["fp"][idc, :]
 
-    def getMolKernel_ExpVsCand(self, exp_mols: List[str], mol: str, kernel="tanimoto") -> np.ndarray:
+        if as_dense:
+            fps = fps.toarray()
+
+        return fps
+
+    def getMolKernel_ExpVsCand(self, exp_mols: np.ndarray, mol: str, kernel="tanimoto") -> np.ndarray:
         if self.preload_data:
             cand = self._cand_sets[mol]
         else:
             cand = self._load_candidate_set(mol)
 
-        if kernel == "tanimoto":
-            idc = [self.mol2idx[mol] for mol in exp_mols]
-            K = tanimoto_kernel(self.fps[idc], cand["fp"].toarray())
-            assert K.shape == (len(exp_mols), cand["n_cand"])
-        else:
-            raise ValueError("Invalid kernel '%s'. Choices are 'tanimoto'." % kernel)
+        idc = [self.mol2idx[mol] for mol in exp_mols]
+        K = self.get_kernel(self.fps[idc], cand["fp"].toarray(), kernel)
+        assert K.shape == (len(exp_mols), cand["n_cand"])
 
         return K
 
@@ -134,16 +142,20 @@ class CandidateSetMetIdent(object):
             cand_A = self._load_candidate_set(mol_A)
             cand_B = self._load_candidate_set(mol_B)
 
+        if mol_sel_A is None:
+            K = self.get_kernel(cand_A["fp"].toarray(), cand_B["fp"].toarray(), kernel)
+        else:
+            idc = [cand_A["mol2idx"][mol] for mol in mol_sel_A]
+            K = self.get_kernel(cand_A["fp"][idc, :].toarray(), cand_B["fp"].toarray(), kernel)
+            assert K.shape == (len(mol_sel_A), cand_B["n_cand"])
+
+        return K
+
+    def get_kernel(self, fps_A, fps_B, kernel="tanimoto"):
         if kernel == "tanimoto":
-            if mol_sel_A is None:
-                K = tanimoto_kernel(cand_A["fp"].toarray(), cand_B["fp"].toarray())
-            else:
-                idc = [cand_A["mol2idx"][mol] for mol in mol_sel_A]
-                K = tanimoto_kernel(cand_A["fp"][idc, :].toarray(), cand_B["fp"].toarray())
-                assert K.shape == (len(mol_sel_A), cand_B["n_cand"])
+            K = tanimoto_kernel(fps_A, fps_B)
         else:
             raise ValueError("Invalid kernel '%s'. Choices are 'tanimoto'." % kernel)
-
         return K
 
 

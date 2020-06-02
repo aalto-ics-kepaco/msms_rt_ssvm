@@ -28,8 +28,10 @@ import numpy as np
 import pandas as pd
 
 from scipy.io import loadmat
+from sklearn.model_selection import ShuffleSplit
 
 from ssvm.data_structures import CandidateSetMetIdent
+from ssvm.ssvm import StructuredSVMMetIdent
 
 
 def read_data(idir):
@@ -63,14 +65,48 @@ def read_data(idir):
     # Map of the candidate inchis to the candidate set
     inchi2mf = {inchi: mf for inchi, mf in zip(inchis, mfs)}
 
-    return K, fps, inchis, inchi2mf
+    return K, fps, np.array(inchis), inchi2mf
 
 
 if __name__ == "__main__":
+    from timeit import default_timer as timer
+
     idir = "/run/media/bach/EVO500GB/data/metident_ismb2016"
 
-    X, y, mols, mols2cand = read_data(idir)
+    # Read in training spectra, fingerprints and candidate set information
+    X, fps, mols, mols2cand = read_data(idir)
 
-    cand = CandidateSetMetIdent(mols, y, mols2cand, os.path.join(idir, "candidates"))
+    # Get small subset
+    X = X[:300, :300]
+    fps = fps[:300]
+    mols = mols[:300]
 
-    print(cand.getMolKernel_CandVsCand(mols[2], mols[2]))
+    # Wrap the candidate sets for easier access
+    cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(idir, "candidates"), preload_data=False)
+
+    # Get train test split
+    train, test = next(ShuffleSplit(n_splits=1, test_size=0.25, random_state=320).split(X, mols))
+    X_train = X[np.ix_(train, train)]
+    X_test = X[np.ix_(test, train)]
+    mols_train = mols[train]
+    mols_test = mols[test]
+
+    # start = timer()
+    # _ = StructuredSVMMetIdent(C=1, rs=707, n_epochs=5, sub_problem_solver="version_01") \
+    #     .fit(X_train, mols_train, candidates=cand)
+    # end = timer()
+    # print("version 01: %fs" % (end - start))
+    #
+    start = timer()
+    _ = StructuredSVMMetIdent(C=1, rs=707, n_epochs=5, sub_problem_solver="version_02") \
+        .fit(X_train, mols_train, candidates=cand)
+    end = timer()
+    print("version 02: %fs" % (end - start))
+
+    start = timer()
+    _ = StructuredSVMMetIdent(C=1, rs=707, n_epochs=5, sub_problem_solver="version_03") \
+        .fit(X_train, mols_train, candidates=cand)
+    end = timer()
+    print("version 03: %fs" % (end - start))
+
+    # print(cand.getMolKernel_CandVsCand(mols[2], mols[2]))
