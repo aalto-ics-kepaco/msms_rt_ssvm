@@ -287,8 +287,6 @@ class TestTanimotoKernel(unittest.TestCase):
         np.testing.assert_equal(K[1, 1], jacscr(X_A[1], X_B[1]))
 
     def test_compatibility_with_sparse_matrix(self):
-        self.skipTest("Not implemented")
-
         X_A = csr_matrix(np.array([[1, 1, 0], [0, 1, 1], [1, 0, 0]]))
         X_B = csr_matrix(np.array([[1, 0, 1], [1, 1, 1], [0, 0, 0], [1, 1, 0]]))
 

@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 from scipy.io import loadmat
+from scipy.sparse import csr_matrix
 from typing import List, Tuple, Union, Dict
 from sklearn.model_selection import GroupKFold
 from sklearn.utils.validation import check_random_state, check_is_fitted
@@ -78,15 +79,8 @@ class CandidateSetMetIdent(object):
 
         return cand
 
-    # @staticmethod
-    # def _ensure_str(mol: np.ndarray) -> str:
-    #     if isinstance(mol, str):
-    #         return mol
-    #
-    #     assert len(mol) == 1
-    #     out = mol[0].item()
-    #     assert isinstance(out, str)
-    #     return out
+    def n_fps(self) -> int:
+        return self.fps.shape[1]
 
     def get_labelspace(self, mol: str) -> List[str]:
         if self.preload_data:
@@ -96,15 +90,20 @@ class CandidateSetMetIdent(object):
 
         return cand["inchi"]
 
-    def get_gt_fp(self, mol: str) -> np.ndarray:
+    def get_gt_fp(self, mol: str, as_dense=True) -> Union[np.ndarray, csr_matrix]:
         if self.preload_data:
             cand = self._cand_sets[mol]
         else:
             cand = self._load_candidate_set(mol)
 
-        return cand["fp"][cand["index_of_correct_structure"]].toarray()
+        fps = cand["fp"][cand["index_of_correct_structure"]]
 
-    def get_candidates_fp(self, mol: str, mol_sel=None, as_dense=True) -> np.ndarray:
+        if as_dense:
+            fps = fps.toarray()
+
+        return fps
+
+    def get_candidates_fp(self, mol: str, mol_sel=None, as_dense=True) -> Union[np.ndarray, csr_matrix]:
         if self.preload_data:
             cand = self._cand_sets[mol]
         else:
@@ -129,7 +128,7 @@ class CandidateSetMetIdent(object):
             cand = self._load_candidate_set(mol)
 
         idc = [self.mol2idx[mol] for mol in exp_mols]
-        K = self.get_kernel(self.fps[idc], cand["fp"].toarray(), kernel)
+        K = self.get_kernel(self.fps[idc], cand["fp"], kernel)
         assert K.shape == (len(exp_mols), cand["n_cand"])
 
         return K
@@ -151,7 +150,8 @@ class CandidateSetMetIdent(object):
 
         return K
 
-    def get_kernel(self, fps_A, fps_B, kernel="tanimoto"):
+    def get_kernel(self, fps_A: Union[np.ndarray, csr_matrix], fps_B: Union[np.ndarray, csr_matrix],
+                   kernel="tanimoto") -> np.ndarray:
         if kernel == "tanimoto":
             K = tanimoto_kernel(fps_A, fps_B)
         else:

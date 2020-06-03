@@ -206,9 +206,6 @@ def tanimoto_kernel(X, Y=None, shallow_input_check=False):
     """
     X, Y, is_sparse = check_input(X, Y, datatype="binary", shallow=shallow_input_check)
 
-    if is_sparse:
-        raise NotImplementedError("Tanimoto: Sparse matrices not supported.")
-
     XY = X @ Y.T
     XX = X.sum(axis=1).reshape(-1, 1)
     YY = Y.sum(axis=1).reshape(-1, 1)

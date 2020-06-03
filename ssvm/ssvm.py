@@ -37,6 +37,34 @@ from ssvm.data_structures import SequenceSample, CandidateSetMetIdent
 
 class DualVariables(object):
     def __init__(self, C: float, N: int, cand_ids: List[List[List[str]]], num_init_active_vars=1, rs=None):
+        """
+
+        :param C: scalar, regularization parameter of the Structured SVM
+
+        :param N: scalar, total number of sequences used for training
+
+        :param cand_ids: list of list of lists, of candidate identifiers. Each sequence element has an associated
+            candidate set. The candidates are identified by a string.
+
+            Example:
+
+            [                               # Training sequence i
+                [                           # Sequence element
+                    [M1, M2, M3],           # Candidate set for sigma = 1
+                    [M6, M3, M5, M7],       # Candidate set for sigma = 2
+                    ...
+                ]
+                ...
+            ]
+
+        :param num_init_active_vars: scalar, number of initially active dual variables per
+
+        :param rs: None | int | instance of RandomState
+            If seed is None, return the RandomState singleton used by np.random.
+            If seed is an int, return a new RandomState instance seeded with seed.
+            If seed is already a RandomState instance, return it.
+            Otherwise raise ValueError.
+        """
         self.C = C
         assert self.C > 0, "The regularization parameter must be positive."
         self.N = N
@@ -76,6 +104,7 @@ class DualVariables(object):
         """
         Update the value of a dual variable.
 
+        :param i, scalar, sequence example index
         :param y_seq: tuple of strings, sequence of candidate indices identifying the dual variable
         :param gamma: scalar, step-width used to update the dual variable value
         """
@@ -100,11 +129,36 @@ class DualVariables(object):
 
         return is_new
 
-    def get_dual_variable_matrix(self):
+    def get_dual_variable_matrix(self) -> csr_matrix:
+        """
+        Returns the dual variable matrix as a csr-sparse matrix.
+
+        :return: csr_matrix, shape = (N, n_active_dual)
+        """
         return csr_matrix(self._alphas)
 
-    def n_active(self):
+    def n_active(self) -> int:
+        """
+        Numer of active dual variables.
+
+        :return: scalar, number of active dual variables (columns in the dual variable matrix)
+        """
         return self._alphas.shape[1]
+
+    def get_iy_for_col(self, c: int) -> Tuple[int, Tuple]:
+        """
+        Return the example index and candidate sequence corresponding to the specified column in the dual variable
+        matrix.
+
+        :param c: scalar, column in the dual variable matrix, i.e. the index of the active dual variable for which the
+            corresponding example index and candidate sequence should be returned.
+
+        :return: tuple (
+            scalar, example index in {1, ..., N}
+            tuple, candidate sequence associated with the active dual variable
+        )
+        """
+        return self._iy[c]
 
 
 class DualVariablesForExample(object):
@@ -215,7 +269,8 @@ class DualVariablesForExample(object):
             self._alphas[y_seq] = gamma * (self.C / self.N)
 
 
-class _StructuredSVM(BaseEstimator, ClassifierMixin):
+# class _StructuredSVM(BaseEstimator, ClassifierMixin)
+class _StructuredSVM(object):
     def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming", rs=None):
         """
         Structured Support Vector Machine (SSVM) class.
@@ -288,47 +343,43 @@ class StructuredSVMMetIdent(_StructuredSVM):
         # Number of training sequences
         N = len(X)
 
+        # To allow pre-calculation of some relevant data, we already draw the random sequence of examples we use for the
+        # optimization.
         i_k = self.rs.choice(N, self.n_epochs)
-        if self.sub_problem_solver == "version_03":
-            # Pre-calculate the loss
-            self._loss = {}
-            for i in i_k:
-                fp_i = candidates.get_gt_fp(y[i]).flatten()
-                self._loss[y[i]] = np.array([self.label_loss_fun(fp_i, fp.flatten())
-                                             for fp in candidates.get_candidates_fp(y[i])])
+
+        # Pre-calculate some data needed for the sub-problem solving
+        print("Pre-calculate data: ", end="")
+        lab_losses = {}
+        mol_kernel_l_y = {}
+        for idx, i in enumerate(i_k):
+            if ((idx + 1) % int(np.floor(self.n_epochs / 10))) == 0:
+                print("...%.0f" % ((idx + 1) / self.n_epochs * 100), end="")
+
+            y_i = y[i]
+
+            # Check whether the relevant stuff was already pre-computed
+            if y_i in lab_losses:
+                continue
+
+            # Pre-calculate the label loss: Loss of the gt fingerprint to all corresponding candidate fingerprints of i
+            lab_losses[y_i] = np.array([self.label_loss_fun(candidates.get_gt_fp(y[i]).flatten(), fp.flatten())
+                                        for fp in candidates.get_candidates_fp(y_i)])
 
             # Pre-calculate the kernels between the training examples and candidates
-            self._l_y = {}
-            for i in i_k:
-                self._l_y[y[i]] = candidates.getMolKernel_ExpVsCand(y, y[i])  # shape = (N, |Sigma_i|)
+            mol_kernel_l_y[y_i] = candidates.getMolKernel_ExpVsCand(y, y_i)  # shape = (N, |Sigma_i|)
+        print("")
 
-            # Build Dual Variable Matrix
-            alphas = DualVariables(C=self.C, N=N, cand_ids=[[candidates.get_labelspace(y[i])] for i in range(N)],
-                                   rs=self.rs, num_init_active_vars=num_init_active_vars_per_seq)
+        # Initialize dual variables
+        alphas = DualVariables(C=self.C, N=N, cand_ids=[[candidates.get_labelspace(y[i])] for i in range(N)],
+                               rs=self.rs, num_init_active_vars=num_init_active_vars_per_seq)
+        assert self._is_feasible_matrix(alphas, self.C), "Initial dual variables must be feasible."
 
-            assert self._is_feasible_matrix(alphas, self.C), "Initial dual variables must be feasible."
-
-            # Collect active candidate fingerprints
-            fps_active = lil_matrix((alphas.n_active(), len(fp_i)))
-            for c in range(alphas.n_active()):
-                # Get the fingerprints of the active candidates for example j
-                j, ybar = alphas._iy[c]
-                fps_active[c] = candidates.get_candidates_fp(y[j], ybar, as_dense=False)
-
-        else:
-            # Set up the dual initial dual vector
-            alphas = []
-            print("Initialize dual variables ...")
-            for i in range(N):
-                if (i % 100) == 0 or (i + 1) == N:
-                    print("Example: %d / %d" % (i + 1, N))
-
-                lab_space_i = candidates.get_labelspace(y[i])
-                assert y[i] in lab_space_i, "Correct molecular structure must be in the candidate set."
-
-                alphas.append(DualVariablesForExample(N=N, C=self.C, cand_ids=[lab_space_i], rs=self.rs,
-                                                      num_init_active_vars=num_init_active_vars_per_seq))
-            assert self._is_feasible(alphas, self.C), "Initial dual variables must be feasible."
+        # Collect active candidate fingerprints
+        fps_active = lil_matrix((alphas.n_active(), candidates.n_fps()))
+        for c in range(alphas.n_active()):
+            # Get the fingerprints of the active candidates for example j
+            j, ybar = alphas.get_iy_for_col(c)
+            fps_active[c] = candidates.get_candidates_fp(y[j], ybar, as_dense=False)
 
         k = 0
         while k < self.n_epochs:
@@ -341,36 +392,34 @@ class StructuredSVMMetIdent(_StructuredSVM):
             print("Number of candidates: %d" % len(candidates.get_labelspace(y[i])))
 
             # Find the most violating example
-            if self.sub_problem_solver == "version_01":
-                y_i_hat = self._solve_sub_problem_v01(alphas, X, y, i, candidates)
-            elif self.sub_problem_solver == "version_02":
-                y_i_hat = self._solve_sub_problem_v02(alphas, X, y, i, candidates)
-            elif self.sub_problem_solver == "version_03":
-                y_i_hat = self._solve_sub_problem_v03(alphas, fps_active, X, y, i, candidates)
-            else:
-                raise ValueError("Invalid sub-problem-solver version '%s'. Choices are 'version_01', 'version_02' and"
-                                 "'version_03'.")
+            y_i_hat = self._solve_sub_problem_v03(alphas, X, y, i, candidates,
+                                                  pre_calc_data={"lab_losses": lab_losses,
+                                                                 "mol_kernel_l_y": mol_kernel_l_y,
+                                                                 "fps_active": fps_active})
 
             # Get step-width
             gamma = self._get_diminishing_stepwidth(k, N)
 
             # Update the dual variables
-            if self.sub_problem_solver == "version_03":
-                is_new = alphas.update(i, y_i_hat, gamma)
+            if alphas.update(i, y_i_hat, gamma):
+                fps_active.resize(fps_active.shape[0] + 1, fps_active.shape[1])
+                fps_active[fps_active.shape[0] - 1, :] = candidates.get_candidates_fp(y[i], y_i_hat, as_dense=False)
 
-                if is_new:
-                    fps_active.resize(fps_active.shape[0] + 1, fps_active.shape[1])
-                    fps_active[fps_active.shape[0] - 1, :] = candidates.get_candidates_fp(y[i], y_i_hat, as_dense=False)
-
-                assert self._is_feasible_matrix(alphas, self.C), "Initial dual variables must be feasible."
-            else:
-                alphas[i].update(y_i_hat, gamma)
-                assert self._is_feasible(alphas, self.C)
-
+            assert self._is_feasible_matrix(alphas, self.C), "Initial dual variables must be feasible."
 
             k += 1
 
+        # Store relevant data for the prediction
+        self.X_train = X
+        self.alphas = alphas
+        self.fps_active = fps_active
+
         return self
+
+    def score(self, X: np.ndarray, y: np.ndarray, candidates: CandidateSetMetIdent):
+        assert X.shape[1] == self.X_train.shape[0]
+
+
 
     @staticmethod
     def _is_feasible_matrix(alphas: DualVariables, C: float) -> bool:
@@ -477,7 +526,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
         return (candidates.get_labelspace(y_i)[np.argmax(loss + s_j_y - s_ybar_y).item()], )
 
-    def _solve_sub_problem_v03(self, alphas, fps_active, X, y, i, candidates: CandidateSetMetIdent) -> Tuple:
+    def _solve_sub_problem_v03(self, alphas, X, y, i, candidates: CandidateSetMetIdent, pre_calc_data) -> Tuple:
         """
 
         :param alphas:
@@ -491,17 +540,18 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
         # Calculate label loss
         y_i = y[i]
-        loss = self._loss[y_i]
+        loss = pre_calc_data["lab_losses"][y_i]
 
         # spectra kernel similarity between example i and all other examples
         k_i = X[i, :]  # shape = (N, )
 
         # molecule kernel between all candidates of example i and all other training examples
-        l_y = self._l_y[y_i]  # shape = (N, |Sigma_i|)
+        l_y = pre_calc_data["mol_kernel_l_y"][y_i]  # shape = (N, |Sigma_i|)
 
         s_j_y = (self.C / N) * k_i @ l_y  # shape = (|Sigma_i|, )
 
-        s_ybar_y = A @ candidates.get_kernel(fps_active.toarray(), candidates.get_candidates_fp(y_i))
+        s_ybar_y = A @ candidates.get_kernel(csr_matrix(pre_calc_data["fps_active"]),
+                                             candidates.get_candidates_fp(y_i, as_dense=False))
 
         s_ybar_y = k_i @ s_ybar_y  # shape = (|Sigma_i|, )
 

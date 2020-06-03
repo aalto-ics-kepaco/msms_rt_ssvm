@@ -37,7 +37,7 @@ from ssvm.ssvm import StructuredSVMMetIdent
 def read_data(idir):
     # Read fingerprints
     data = loadmat(os.path.join(idir, "data_GNPS.mat"))
-    fps = data["fp"].toarray().T
+    fps = data["fp"].T
 
     # Get inchis as molecule identifiers
     inchis = data["inchi"].flatten()
@@ -71,7 +71,8 @@ def read_data(idir):
 if __name__ == "__main__":
     from timeit import default_timer as timer
 
-    idir = "/run/media/bach/EVO500GB/data/metident_ismb2016"
+    # idir = "/run/media/bach/EVO500GB/data/metident_ismb2016"
+    idir = "/home/bach/Documents/doctoral/data/metindent_ismb2016"
 
     # Read in training spectra, fingerprints and candidate set information
     X, fps, mols, mols2cand = read_data(idir)
@@ -97,14 +98,14 @@ if __name__ == "__main__":
     # end = timer()
     # print("version 01: %fs" % (end - start))
     #
-    start = timer()
-    _ = StructuredSVMMetIdent(C=1, rs=707, n_epochs=5, sub_problem_solver="version_02") \
-        .fit(X_train, mols_train, candidates=cand)
-    end = timer()
-    print("version 02: %fs" % (end - start))
+    # start = timer()
+    # _ = StructuredSVMMetIdent(C=1, rs=707, n_epochs=5, sub_problem_solver="version_02") \
+    #     .fit(X_train, mols_train, candidates=cand)
+    # end = timer()
+    # print("version 02: %fs" % (end - start))
 
     start = timer()
-    _ = StructuredSVMMetIdent(C=1, rs=707, n_epochs=5, sub_problem_solver="version_03") \
+    _ = StructuredSVMMetIdent(C=1, rs=707, n_epochs=10, sub_problem_solver="version_03") \
         .fit(X_train, mols_train, candidates=cand)
     end = timer()
     print("version 03: %fs" % (end - start))
