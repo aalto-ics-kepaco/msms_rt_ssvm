@@ -28,8 +28,7 @@ import numpy as np
 import pandas as pd
 
 from scipy.io import loadmat
-from sklearn.model_selection import ShuffleSplit
-
+from sklearn.model_selection import GroupKFold
 from ssvm.data_structures import CandidateSetMetIdent
 from ssvm.ssvm import StructuredSVMMetIdent
 
@@ -78,36 +77,25 @@ if __name__ == "__main__":
     X, fps, mols, mols2cand = read_data(idir)
 
     # Get small subset
-    X = X[:300, :300]
-    fps = fps[:300]
-    mols = mols[:300]
+    X = X[:400, :400]
+    fps = fps[:400]
+    mols = mols[:400]
 
     # Wrap the candidate sets for easier access
-    cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(idir, "candidates"), preload_data=False)
+    cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(idir, "candidates"), preload_data=True)
 
     # Get train test split
-    train, test = next(ShuffleSplit(n_splits=1, test_size=0.25, random_state=320).split(X, mols))
+    train, test = next(GroupKFold(n_splits=4).split(X, groups=mols))
     X_train = X[np.ix_(train, train)]
     X_test = X[np.ix_(test, train)]
     mols_train = mols[train]
     mols_test = mols[test]
-
-    # start = timer()
-    # _ = StructuredSVMMetIdent(C=1, rs=707, n_epochs=5, sub_problem_solver="version_01") \
-    #     .fit(X_train, mols_train, candidates=cand)
-    # end = timer()
-    # print("version 01: %fs" % (end - start))
-    #
-    # start = timer()
-    # _ = StructuredSVMMetIdent(C=1, rs=707, n_epochs=5, sub_problem_solver="version_02") \
-    #     .fit(X_train, mols_train, candidates=cand)
-    # end = timer()
-    # print("version 02: %fs" % (end - start))
+    assert not np.any(np.isin(mols_test, mols_train))
 
     start = timer()
-    _ = StructuredSVMMetIdent(C=1, rs=707, n_epochs=10, sub_problem_solver="version_03") \
-        .fit(X_train, mols_train, candidates=cand)
+    svm = StructuredSVMMetIdent(C=4, rs=707, n_epochs=250) \
+        .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=3)
+
+    print(svm.score(X_test, mols_test, candidates=cand))
     end = timer()
     print("version 03: %fs" % (end - start))
-
-    # print(cand.getMolKernel_CandVsCand(mols[2], mols[2]))

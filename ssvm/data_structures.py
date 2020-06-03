@@ -79,10 +79,14 @@ class CandidateSetMetIdent(object):
 
         return cand
 
+    def get_index_of_correct_structure(self, mol: str) -> int:
+        return self.get_labelspace(mol).index(mol)
+
     def n_fps(self) -> int:
         return self.fps.shape[1]
 
     def get_labelspace(self, mol: str) -> List[str]:
+        # TODO: We do not really need to load all candidates just to get the label space.
         if self.preload_data:
             cand = self._cand_sets[mol]
         else:
@@ -91,12 +95,7 @@ class CandidateSetMetIdent(object):
         return cand["inchi"]
 
     def get_gt_fp(self, mol: str, as_dense=True) -> Union[np.ndarray, csr_matrix]:
-        if self.preload_data:
-            cand = self._cand_sets[mol]
-        else:
-            cand = self._load_candidate_set(mol)
-
-        fps = cand["fp"][cand["index_of_correct_structure"]]
+        fps = self.fps[self.mol2idx[mol]]
 
         if as_dense:
             fps = fps.toarray()
