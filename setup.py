@@ -11,7 +11,8 @@ setup(
         "numpy",
         "scikit-learn",
         "pandas",
-        "scipy"
+        "scipy",
+        "joblib"
     ],
 
     # Metadata

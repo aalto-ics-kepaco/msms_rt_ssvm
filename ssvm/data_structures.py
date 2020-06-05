@@ -29,7 +29,7 @@ import pandas as pd
 
 from scipy.io import loadmat
 from scipy.sparse import csr_matrix
-from typing import List, Tuple, Union, Dict
+from typing import List, Tuple, Union, Dict, Optional
 from sklearn.model_selection import GroupKFold
 from sklearn.utils.validation import check_random_state, check_is_fitted
 
@@ -94,8 +94,14 @@ class CandidateSetMetIdent(object):
 
         return cand["inchi"]
 
-    def get_gt_fp(self, mol: str, as_dense=True) -> Union[np.ndarray, csr_matrix]:
-        fps = self.fps[self.mol2idx[mol]]
+    def get_gt_fp(self, exp_mols: Optional[Union[str, np.ndarray]] = None,
+                  as_dense=True) -> Union[np.ndarray, csr_matrix]:
+        if exp_mols is not None:
+            exp_mols = np.atleast_1d(exp_mols)
+            idc = [self.mol2idx[mol] for mol in exp_mols]
+            fps = self.fps[idc]
+        else:
+            fps = self.fps
 
         if as_dense:
             fps = fps.toarray()
@@ -113,7 +119,7 @@ class CandidateSetMetIdent(object):
         else:
             np.atleast_1d(mol_sel)
             idc = [cand["mol2idx"][mol] for mol in mol_sel]
-            fps = cand["fp"][idc, :]
+            fps = cand["fp"][idc]
 
         if as_dense:
             fps = fps.toarray()
@@ -129,6 +135,13 @@ class CandidateSetMetIdent(object):
         idc = [self.mol2idx[mol] for mol in exp_mols]
         K = self.get_kernel(self.fps[idc], cand["fp"], kernel)
         assert K.shape == (len(exp_mols), cand["n_cand"])
+
+        return K
+
+    def getMolKernel_ExpVsExp(self, exp_mols: np.ndarray, kernel="tanimoto"):
+        idc = [self.mol2idx[mol] for mol in exp_mols]
+        K = self.get_kernel(self.fps[idc], self.fps[idc], kernel)
+        assert K.shape == (len(exp_mols), len(exp_mols))
 
         return K
 

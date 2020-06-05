@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 
 from scipy.io import loadmat
-from sklearn.model_selection import GroupKFold
+from sklearn.model_selection import GroupKFold, ShuffleSplit
 from ssvm.data_structures import CandidateSetMetIdent
 from ssvm.ssvm import StructuredSVMMetIdent
 
@@ -55,8 +55,9 @@ def read_data(idir):
     assert np.all(np.equal(spec_df.INCHI.values, inchis))
 
     # Read indices of the examples that where used for the evaluation (only those have a candidate set)
-    ind_eval = np.genfromtxt(os.path.join(idir, "ind_eval.txt")).astype("int") - 1
+    ind_eval = sorted(np.genfromtxt(os.path.join(idir, "ind_eval.txt")).astype("int") - 1)
     fps = fps[ind_eval, :]
+    # TODO: Check, is correct order selected?
     inchis = [inchi for i, inchi in enumerate(inchis) if i in ind_eval]
     mfs = [mf for i, mf in enumerate(mfs) if i in ind_eval]
     K = K[np.ix_(ind_eval, ind_eval)]
@@ -86,6 +87,10 @@ if __name__ == "__main__":
 
     # Get train test split
     train, test = next(GroupKFold(n_splits=4).split(X, groups=mols))
+    # train, test = next(ShuffleSplit(n_splits=1, test_size=0.25, random_state=20201).split(X))
+    # np.savetxt(os.path.join(idir, "train_set.txt"), train)
+    # np.savetxt(os.path.join(idir, "test_set.txt"), test)
+
     X_train = X[np.ix_(train, train)]
     X_test = X[np.ix_(test, train)]
     mols_train = mols[train]
@@ -93,7 +98,7 @@ if __name__ == "__main__":
     assert not np.any(np.isin(mols_test, mols_train))
 
     start = timer()
-    svm = StructuredSVMMetIdent(C=4, rs=707, n_epochs=250) \
+    svm = StructuredSVMMetIdent(C=300, rs=3233113, n_epochs=1000, n_samples_per_epoch=4) \
         .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=3)
 
     print(svm.score(X_test, mols_test, candidates=cand))
