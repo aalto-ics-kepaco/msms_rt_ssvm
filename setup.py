@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="ssvm",
+    name="ssvm",  # TODO: This name is already in PyPi. We need to choose something different.
     version="0.1.0",
     license="MIT",
     packages=find_packages(exclude=["results*", "tests", "examples", "*.ipynb"]),
@@ -12,7 +12,9 @@ setup(
         "scikit-learn",
         "pandas",
         "scipy",
-        "joblib"
+        "joblib",
+        "tensorflow-cpu",
+        "tensorflow-tensorboard"
     ],
 
     # Metadata

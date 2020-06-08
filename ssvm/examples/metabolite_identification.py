@@ -26,6 +26,8 @@
 import os
 import numpy as np
 import pandas as pd
+import datetime
+import tensorflow.summary as tf_summary
 
 from scipy.io import loadmat
 from sklearn.model_selection import GroupKFold, ShuffleSplit
@@ -71,19 +73,19 @@ def read_data(idir):
 if __name__ == "__main__":
     from timeit import default_timer as timer
 
-    # idir = "/run/media/bach/EVO500GB/data/metident_ismb2016"
-    idir = "/home/bach/Documents/doctoral/data/metindent_ismb2016"
-
     # Read in training spectra, fingerprints and candidate set information
+    idir = "/home/bach/Documents/doctoral/data/metindent_ismb2016"  # "/run/media/bach/EVO500GB/data/metident_ismb2016"
     X, fps, mols, mols2cand = read_data(idir)
 
-    # Get small subset
-    X = X[:400, :400]
-    fps = fps[:400]
-    mols = mols[:400]
+    # Get a smaller subset
+    _, subset = next(ShuffleSplit(n_splits=1, test_size=0.075, random_state=1989).split(X))
+    X = X[np.ix_(subset, subset)]
+    fps = fps[subset]
+    mols = mols[subset]
+    print("Total number of examples:", len(mols))
 
     # Wrap the candidate sets for easier access
-    cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(idir, "candidates"), preload_data=True)
+    cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(idir, "candidates"), preload_data=False)
 
     # Get train test split
     train, test = next(GroupKFold(n_splits=4).split(X, groups=mols))
@@ -98,8 +100,15 @@ if __name__ == "__main__":
     assert not np.any(np.isin(mols_test, mols_train))
 
     start = timer()
-    svm = StructuredSVMMetIdent(C=300, rs=3233113, n_epochs=1000, n_samples_per_epoch=4) \
-        .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=3)
+
+    # Tensorflow training summary log-file
+    current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    train_log_dir = 'logs/' + current_time + '/train'
+    train_summary_writer = tf_summary.create_file_writer(train_log_dir)
+
+    svm = StructuredSVMMetIdent(C=300, rs=102, n_epochs=100, n_samples_per_epoch=4) \
+        .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=3,
+             train_summary_writer=train_summary_writer)
 
     print(svm.score(X_test, mols_test, candidates=cand))
     end = timer()
