@@ -23,10 +23,14 @@
 # SOFTWARE.
 #
 ####
-
+import numpy as np
 import unittest
+import pickle
+import gzip
+import os
 
-from ssvm.ssvm import DualVariablesForExample, _StructuredSVM
+from ssvm.ssvm import DualVariablesForExample, _StructuredSVM, StructuredSVMMetIdent, DualVariables
+from ssvm.data_structures import CandidateSetMetIdent
 
 
 class TestStructuredSVM(unittest.TestCase):
@@ -60,6 +64,83 @@ class TestStructuredSVM(unittest.TestCase):
         assert len(alphas) == N
 
         self.assertFalse(_StructuredSVM._is_feasible(alphas, C))
+
+
+class TestStructuredSVMMetIdent(unittest.TestCase):
+    def setUp(self) -> None:
+        """
+        Set up a small example data for the metabolite identification tests.
+        """
+        if not os.path.exists("small_metabolite_data.pkl.gz"):
+            # Create a small example containing metabolite identification data from the ISMB 2016 paper
+            from sklearn.model_selection import ShuffleSplit
+            from ssvm.examples.metabolite_identification import read_data
+            from ssvm.data_structures import CandidateSetMetIdent
+
+            idir = "/home/bach/Documents/doctoral/data/metindent_ismb2016"
+            X, fps, mols, mols2cand = read_data(idir)
+
+            # Get a smaller subset
+            _, subset = next(ShuffleSplit(n_splits=1, test_size=0.025, random_state=1989).split(X))
+            X = X[np.ix_(subset, subset)]
+            fps = fps[subset]
+            mols = mols[subset]
+            print("N samples:", len(mols))
+
+            # Wrap the candidate sets for easier access
+            cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(idir, "candidates"), preload_data=False)
+
+            with gzip.open(os.path.join("small_metabolite_data.pkl.gz"), "wb") as gz_file:
+                pickle.dump({"X": X, "mols": mols, "cand": cand}, gz_file)
+
+        with gzip.open("small_metabolite_data.pkl.gz", "rb") as gz_file:
+            data = pickle.load(gz_file)
+
+        self.K = data["X"]
+        self.y = data["mols"]
+        self.cand = data["cand"]  # type: CandidateSetMetIdent
+
+        self.ssvm = StructuredSVMMetIdent(C=2)
+        self.C = self.ssvm.C
+        self.N = self.K.shape[0]
+        self.rs = np.random.RandomState(18221)
+        self.alphas = DualVariables(C=self.C, N=self.N, rs=self.rs, num_init_active_vars=2,
+                                    cand_ids=[[self.cand.get_labelspace(self.y[i])] for i in range(self.N)])
+
+    def test_get_candidate_scores(self):
+        """
+        Test that the scores for the candidates corresponding to a particular spectrum x_i are correctly calculated
+        given an SSVM model (w or alphas). The score is calculated like:
+
+            s(x_i, y) = < w , Psi(x_i, y) >     for all y in Sigma_i
+        """
+        i = 10
+
+        fps_active, lab_losses_active = self.ssvm._initialize_active_fingerprints_and_losses(self.alphas, self.y,
+                                                                                             self.cand, verbose=True)
+        scores = StructuredSVMMetIdent._get_candidate_scores(self.C, self.alphas, self.K, self.y, i, self.cand,
+                                                             {"fps_active": fps_active,
+                                                              "lab_losses_active": lab_losses_active})
+
+        fps_gt_i = self.cand.get_gt_fp(self.y[i])[np.newaxis, :]
+        fps_gt = self.cand.get_gt_fp(self.y)
+        B = self.alphas.get_dual_variable_matrix(type="csr")
+
+        # Part which is constant for all y in Sigma_i
+        s1 = self.C / self.N * self.K[i] @ self.cand.get_kernel(fps_gt_i, fps_gt).flatten()
+        self.assertTrue(np.isscalar(s1))
+
+        s2 = (self.cand.get_kernel(fps_gt_i, fps_active) @ B.T @ self.K[i]).item()
+        self.assertTrue(np.isscalar(s2))
+
+        # Part that is specific to each candidate y in Sigma_i
+        s3 = self.C / self.N * self.cand.get_kernel(self.cand.get_candidates_fp(self.y[i]), fps_gt) @ self.K[i]
+        self.assertEqual((len(self.cand.get_labelspace(self.y[i])),), s3.shape)
+
+        s4 = self.cand.get_kernel(self.cand.get_candidates_fp(self.y[i]), fps_active) @ B.T @ self.K[i]
+        self.assertEqual((len(self.cand.get_labelspace(self.y[i])),), s4.shape)
+
+        np.testing.assert_allclose(scores, (s3 - s4))
 
 
 class TestDualVariables(unittest.TestCase):

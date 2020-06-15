@@ -14,7 +14,8 @@ setup(
         "scipy",
         "joblib",
         "tensorflow-cpu",
-        "tensorflow-tensorboard"
+        "tensorflow-tensorboard",
+        "tqdm"
     ],
 
     # Metadata

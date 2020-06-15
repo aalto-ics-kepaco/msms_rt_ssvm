@@ -65,7 +65,7 @@ class CandidateSetMetIdent(object):
         del cand["__version__"]
         del cand["__globals__"]
 
-        cand["fp"] = cand["fp"].T  # shape = (n_samples, n_fps), sparse
+        cand["fp"] = cand["fp"].toarray().T  # shape = (n_samples, n_fps)
         cand["inchi"] = [inchi[0][0] for inchi in cand["inchi"]]  # molecule identifier
         cand["n_cand"] = len(cand["inchi"])  # number of candidates
         # dict: mol identifier -> index (row) in fingerprint matrix for example
@@ -94,21 +94,21 @@ class CandidateSetMetIdent(object):
 
         return cand["inchi"]
 
-    def get_gt_fp(self, exp_mols: Optional[Union[str, np.ndarray]] = None,
-                  as_dense=True) -> Union[np.ndarray, csr_matrix]:
+    def get_gt_fp(self, exp_mols: Optional[Union[str, np.ndarray]] = None) -> np.ndarray:
         if exp_mols is not None:
             exp_mols = np.atleast_1d(exp_mols)
             idc = [self.mol2idx[mol] for mol in exp_mols]
+
+            if len(idc) == 1:
+                idc = idc[0]
+
             fps = self.fps[idc]
         else:
             fps = self.fps
 
-        if as_dense:
-            fps = fps.toarray()
-
         return fps
 
-    def get_candidates_fp(self, mol: str, mol_sel=None, as_dense=True) -> Union[np.ndarray, csr_matrix]:
+    def get_candidates_fp(self, mol: str, mol_sel=None) -> np.ndarray:
         if self.preload_data:
             cand = self._cand_sets[mol]
         else:
@@ -120,9 +120,6 @@ class CandidateSetMetIdent(object):
             np.atleast_1d(mol_sel)
             idc = [cand["mol2idx"][mol] for mol in mol_sel]
             fps = cand["fp"][idc]
-
-        if as_dense:
-            fps = fps.toarray()
 
         return fps
 
@@ -154,18 +151,17 @@ class CandidateSetMetIdent(object):
             cand_B = self._load_candidate_set(mol_B)
 
         if mol_sel_A is None:
-            K = self.get_kernel(cand_A["fp"].toarray(), cand_B["fp"].toarray(), kernel)
+            K = self.get_kernel(cand_A["fp"], cand_B["fp"], kernel)
         else:
             idc = [cand_A["mol2idx"][mol] for mol in mol_sel_A]
-            K = self.get_kernel(cand_A["fp"][idc, :].toarray(), cand_B["fp"].toarray(), kernel)
+            K = self.get_kernel(cand_A["fp"][idc, :], cand_B["fp"], kernel)
             assert K.shape == (len(mol_sel_A), cand_B["n_cand"])
 
         return K
 
-    def get_kernel(self, fps_A: Union[np.ndarray, csr_matrix], fps_B: Union[np.ndarray, csr_matrix],
-                   kernel="tanimoto") -> np.ndarray:
+    def get_kernel(self, fps_A: np.ndarray, fps_B: np.ndarray, kernel="tanimoto") -> np.ndarray:
         if kernel == "tanimoto":
-            K = tanimoto_kernel(fps_A, fps_B)
+            K = tanimoto_kernel(fps_A, fps_B, shallow_input_check=True)
         else:
             raise ValueError("Invalid kernel '%s'. Choices are 'tanimoto'." % kernel)
         return K

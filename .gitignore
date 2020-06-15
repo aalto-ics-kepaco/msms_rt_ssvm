@@ -4,3 +4,4 @@ venv
 **/__pycache__
 .ipynb_checkpoints
 **/logs
+ssvm/tests/small_metabolite_data.pkl.gz

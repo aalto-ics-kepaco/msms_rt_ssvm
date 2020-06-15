@@ -38,7 +38,7 @@ from ssvm.ssvm import StructuredSVMMetIdent
 def read_data(idir):
     # Read fingerprints
     data = loadmat(os.path.join(idir, "data_GNPS.mat"))
-    fps = data["fp"].T
+    fps = data["fp"].toarray().T
 
     # Get inchis as molecule identifiers
     inchis = data["inchi"].flatten()
@@ -85,7 +85,7 @@ if __name__ == "__main__":
     print("Total number of examples:", len(mols))
 
     # Wrap the candidate sets for easier access
-    cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(idir, "candidates"), preload_data=False)
+    cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(idir, "candidates"), preload_data=True)
 
     # Get train test split
     train, test = next(GroupKFold(n_splits=4).split(X, groups=mols))
@@ -106,7 +106,7 @@ if __name__ == "__main__":
     train_log_dir = 'logs/' + current_time + '/train'
     train_summary_writer = tf_summary.create_file_writer(train_log_dir)
 
-    svm = StructuredSVMMetIdent(C=300, rs=102, n_epochs=100, batch_size=4) \
+    svm = StructuredSVMMetIdent(C=300, rs=102, n_epochs=200, batch_size=4) \
         .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=3,
              train_summary_writer=train_summary_writer)
 
