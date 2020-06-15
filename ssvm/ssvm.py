@@ -29,8 +29,8 @@ import tensorflow as tf
 
 from typing import List, ItemsView, Tuple, ValuesView, KeysView, Iterator, Dict, Union, Optional
 from sklearn.utils.validation import check_random_state
+from sklearn.model_selection import GroupKFold
 from scipy.sparse import csc_matrix, lil_matrix, csr_matrix
-from scipy.stats import rankdata
 from tensorflow.python.ops.summary_ops_v2 import ResourceSummaryWriter
 from tqdm import tqdm
 
@@ -352,8 +352,15 @@ class StructuredSVMMetIdent(_StructuredSVM):
             train_summary_writer: Optional[ResourceSummaryWriter] = None):
         """
         Train the SSVM given a dataset.
-        :return:
         """
+        # Split of some training data as a validation set, if Tensorboard debug information are written out.
+        if train_summary_writer is not None:
+            train_set, val_set = next(GroupKFold(n_splits=10).split(X, groups=y))
+            X_val = X[np.ix_(val_set, train_set)]
+            X = X[np.ix_(train_set, train_set)]
+            y_val = y[val_set]
+            y = y[train_set]
+
         # Number of training sequences
         N = len(X)
 
@@ -426,6 +433,10 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
             assert self._is_feasible_matrix(alphas, self.C), "Dual variables not feasible anymore after update."
 
+            # Store relevant data for the prediction
+            self.alphas = alphas
+            self.fps_active = fps_active
+
             if (((k + 1) % 10) == 0) or ((k + 1) == self.n_epochs):
                 print("Epoch: %d / %d" % (k + 1, self.n_epochs))
 
@@ -441,13 +452,13 @@ class StructuredSVMMetIdent(_StructuredSVM):
                         tf.summary.scalar("Primal Objective", prim_obj, k + 1)
                         tf.summary.scalar("Duality gap", duality_gap, k + 1)
 
+                        acc_k = self.score(X_val, y_val, candidates)
+                        for tpk in [0, 4, 9]:
+                            tf.summary.scalar("Top-%d" % (tpk + 1), acc_k[tpk], k + 1)
+
                 print("g(a) = %.5f; f(w) = %.5f; gamma = %.5f" % (dual_obj, prim_obj, gamma))
 
             k += 1
-
-        # Store relevant data for the prediction
-        self.alphas = alphas
-        self.fps_active = fps_active
 
         return self
 
@@ -590,6 +601,22 @@ class StructuredSVMMetIdent(_StructuredSVM):
         return prim_obj, dual_obj, (prim_obj - dual_obj) / (np.abs(prim_obj) + 1)
 
     def predict(self, X: np.ndarray, y: np.ndarray, candidates: CandidateSetMetIdent) -> Dict[int, np.ndarray]:
+        """
+        Predict the scores for each candidate corresponding to the individual spectra.
+
+        FIXME: Currently, we pass the molecule identifier as candidate set identifier for each spectrum.
+
+        :param X: array-like, shape = (n_test, n_train), test-train spectra kernel
+
+        :param y: array-like, shape = (n_test, ), candidate set identifier for each spectrum
+
+        :param candidates: CandidateSetMetIdent, all needed information about the candidate sets
+
+        :return: dict:
+            keys are integer indices of each spectrum;
+            values are array-like with shape = (|Sigma_i|,) containing predicted candidate scores
+        """
+        assert X.shape[1] == self.K_train.shape[0]
 
         B_S = self.alphas.get_dual_variable_matrix(type="csc")
         N = self.K_train.shape[0]
@@ -612,15 +639,21 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
     def score(self, X: np.ndarray, y: np.ndarray, candidates: CandidateSetMetIdent, score_type="predicted"):
         """
+        Calculate the top-k accuracy scores for a given test spectrum set.
 
-        :param X:
-        :param y:
-        :param candidates:
-        :param score_type:
-        :return:
+        :param X: array-like, shape = (n_test, n_train), test-train spectra kernel
+
+        :param y: array-like, shape = (n_test, ), candidate set identifier for each spectrum
+
+        :param candidates: CandidateSetMetIdent, all needed information about the candidate sets
+
+        :param score_type: string, indicating which method should be used to get the scores for the candidates
+            "predicted" used the predict candidate scores using the learning model
+            "random" repeatedly assigns random candidate scores and averages the performance (10 repetitions)
+            "first_candidate" always chooses the first candidate in die candidate list
+
+        :return: array-like, with top-k accuracy at index (k - 1)
         """
-        assert score_type in ["predicted", "random", "first_candidate"]
-
         d_cand = {}
         for i in range(X.shape[0]):
             sigma_i = candidates.get_labelspace(y[i])
