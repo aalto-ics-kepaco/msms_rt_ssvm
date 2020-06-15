@@ -28,16 +28,15 @@ import itertools as it
 import tensorflow as tf
 
 from typing import List, ItemsView, Tuple, ValuesView, KeysView, Iterator, Dict, Union, Optional
-from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.utils.validation import check_random_state
 from scipy.sparse import csc_matrix, lil_matrix, csr_matrix
 from scipy.stats import rankdata
-from joblib import Parallel, delayed, parallel_backend
 from tensorflow.python.ops.summary_ops_v2 import ResourceSummaryWriter
 from tqdm import tqdm
 
 from ssvm.data_structures import SequenceSample, CandidateSetMetIdent
 from ssvm.loss_functions import hamming_loss
+from ssvm.evaluation_tools import get_topk_performance_csifingerid
 
 
 class DualVariables(object):
@@ -302,7 +301,7 @@ class _StructuredSVM(object):
         else:
             raise ValueError("Invalid label loss '%s'. Choices are 'hamming'.")
 
-        self.rs = check_random_state(rs)  # Type: np.random.RandomState
+        self.rs = check_random_state(rs)  # type: np.random.RandomState
 
     @staticmethod
     def _is_feasible(alphas: List[DualVariablesForExample], C: float) -> bool:
@@ -403,13 +402,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
         k = 0
         while k < self.n_epochs:
             # Find the most violating example
-            # with parallel_backend("loky", inner_max_num_threads=1):
-            #     res_k = Parallel(n_jobs=4)(delayed(self._solve_sub_problem)(
-            #         alphas, i, candidates, pre_calc_data={"lab_losses": lab_losses,
-            #                                               "mol_kernel_l_y": mol_kernel_l_y,
-            #                                               "fps_active": fps_active})
-            #                                for i in i_k[k])
-
+            # TODO: Can we solve the sub-problem for multiple
             res_k = [self._solve_sub_problem(alphas, i, candidates,
                                              pre_calc_data={"lab_losses": lab_losses,
                                                             "mol_kernel_l_y": mol_kernel_l_y,
@@ -598,7 +591,8 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
     def predict(self, X: np.ndarray, y: np.ndarray, candidates: CandidateSetMetIdent) -> Dict[int, np.ndarray]:
 
-        A = self.alphas.get_dual_variable_matrix(type="csc")
+        B_S = self.alphas.get_dual_variable_matrix(type="csc")
+        N = self.K_train.shape[0]
         fps_active = self.fps_active
         score = {}
 
@@ -607,45 +601,57 @@ class StructuredSVMMetIdent(_StructuredSVM):
             mol_kernel_l_y_i = candidates.getMolKernel_ExpVsCand(self.y_train, y[i])
 
             # ...
-            s_ybar_y = X[i] @ A @ candidates.get_kernel(fps_active, candidates.get_candidates_fp(y[i]))
+            s_ybar_y = X[i] @ B_S @ candidates.get_kernel(fps_active, candidates.get_candidates_fp(y[i]))
 
             # molecule kernel between all candidates of example i and all other training examples
-            s_j_y = (self.C / A.shape[0]) * X[i] @ mol_kernel_l_y_i  # shape = (|Sigma_i|, )
+            s_j_y = (self.C / N) * X[i] @ mol_kernel_l_y_i  # shape = (|Sigma_i|, )
 
             score[i] = np.array(s_j_y - s_ybar_y).flatten()
 
         return score
 
-    def score(self, X: np.ndarray, y: np.ndarray, candidates: CandidateSetMetIdent):
-        scores = self.predict(X, y, candidates)
-        tp_1 = 0
-        tp_5 = 0
-        tp_10 = 0
-        tp_1_ran = 0
-        tp_5_ran = 0
-        tp_10_ran = 0
-        tp_1_awf = 0
-        tp_5_awf = 0
-        tp_10_awf = 0
-        for i in scores:
-            idx_cor = candidates.get_index_of_correct_structure(y[i])
+    def score(self, X: np.ndarray, y: np.ndarray, candidates: CandidateSetMetIdent, score_type="predicted"):
+        """
 
-            r = rankdata(- scores[i], method="ordinal")
-            tp_1 += (r[idx_cor] == 1)
-            tp_5 += (r[idx_cor] <= 5)
-            tp_10 += (r[idx_cor] <= 10)
+        :param X:
+        :param y:
+        :param candidates:
+        :param score_type:
+        :return:
+        """
+        assert score_type in ["predicted", "random", "first_candidate"]
 
-            r = rankdata(self.rs.rand(len(scores[i])), method="ordinal")
-            tp_1_ran += (r[idx_cor] == 1)
-            tp_5_ran += (r[idx_cor] <= 5)
-            tp_10_ran += (r[idx_cor] <= 10)
+        d_cand = {}
+        for i in range(X.shape[0]):
+            sigma_i = candidates.get_labelspace(y[i])
+            d_cand[i] = {"n_cand": len(sigma_i), "index_of_correct_structure": sigma_i.index(y[i])}
 
-            tp_1_awf += (idx_cor == 0)
-            tp_5_awf += (idx_cor <= 4)
-            tp_10_awf += (idx_cor <= 9)
-        return (tp_1 / len(scores) * 100, tp_5 / len(scores) * 100, tp_10 / len(scores) * 100), \
-               (tp_1_ran / len(scores) * 100, tp_5_ran / len(scores) * 100, tp_10_ran / len(scores) * 100), \
-               (tp_1_awf / len(scores) * 100, tp_5_awf / len(scores) * 100, tp_10_awf / len(scores) * 100),
+        if score_type == "predicted":
+            scores = self.predict(X, y, candidates)
+            tp_k, acc_k = get_topk_performance_csifingerid(d_cand, scores)
+
+        elif score_type == "random":
+            n_rep = 10
+            for rep in range(n_rep):
+                scores = {i: np.random.RandomState((rep + 1) * i).rand(d_cand[i]["n_cand"]) for i in d_cand}
+                if rep == 0:
+                    tp_k, acc_k = get_topk_performance_csifingerid(d_cand, scores)
+                else:
+                    _tp_k, _acc_k = get_topk_performance_csifingerid(d_cand, scores)
+                    tp_k += _tp_k
+                    acc_k += _acc_k
+                tp_k /= n_rep
+                acc_k /= n_rep
+
+        elif score_type == "first_candidate":
+            scores = {i: np.arange(d_cand[i]["n_cand"], 0, -1) for i in d_cand}
+            tp_k, acc_k = get_topk_performance_csifingerid(d_cand, scores)
+
+        else:
+            raise ValueError("Invalid score type: '%s'. Choices are 'predicted', 'random' and 'first_candidate'"
+                             % score_type)
+
+        return acc_k
 
 
 class StructuredSVMSequences(_StructuredSVM):

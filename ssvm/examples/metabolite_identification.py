@@ -106,10 +106,14 @@ if __name__ == "__main__":
     train_log_dir = 'logs/' + current_time + '/train'
     train_summary_writer = tf_summary.create_file_writer(train_log_dir)
 
-    svm = StructuredSVMMetIdent(C=300, rs=102, n_epochs=200, batch_size=4) \
+    svm = StructuredSVMMetIdent(C=300, rs=102, n_epochs=100, batch_size=1) \
         .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=3,
              train_summary_writer=train_summary_writer)
 
-    print(svm.score(X_test, mols_test, candidates=cand))
+    for score_type in ["predicted", "random", "first_candidate"]:
+        print(score_type)
+        print("Top-1=%.2f, Top-5=%.2f, Top-10=%.2f, Top-20=%.2f" %
+              tuple(svm.score(X_test, mols_test, candidates=cand, score_type=score_type)[[0, 4, 9, 19]]))
+
     end = timer()
     print("version 03: %fs" % (end - start))
