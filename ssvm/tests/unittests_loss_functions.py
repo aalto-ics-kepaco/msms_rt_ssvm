@@ -46,6 +46,9 @@ class TestHammingLoss(unittest.TestCase):
 
             np.testing.assert_equal(loss, loss_sk)
 
+            for y_i in Y:
+                np.testing.assert_equal(hamming_loss(y, y_i), hamming_loss_sk(y, y_i))
+
 
 if __name__ == '__main__':
     unittest.main()

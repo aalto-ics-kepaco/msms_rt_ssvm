@@ -34,17 +34,21 @@ def hamming_loss(y: np.ndarray, Y: np.ndarray) -> np.ndarray:
 
     :param y: array-like, shape = (d,), binary vector (e.g. ground truth fingerprint)
 
-    :param Y: array-like, shape = (n, d), matrix of binary vectors stored row-wise (e.g. candidate fingerprints)
+    :param Y: array-like, shape = (n, d) or (d, ), matrix of binary vectors stored row-wise (e.g. candidate
+        fingerprints) or just a single binary vector
 
     :return: array-like, shape = (n,), hamming loss values between the y and all vectors in Y
     """
     assert len(y.shape) == 1
     d = y.shape[0]
-    assert len(Y.shape) == 2
-    assert Y.shape[1] == d
     assert not issparse(y)
     assert not issparse(Y)
 
-    loss = np.sum(y != Y, axis=1) / d
+    if len(Y.shape) == 1:
+        assert len(Y) == d
+        loss = np.sum(y != Y) / d
+    else:
+        assert Y.shape[1] == d
+        loss = np.sum(y != Y, axis=1) / d
 
     return loss
