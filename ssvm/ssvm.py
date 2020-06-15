@@ -30,13 +30,13 @@ import tensorflow as tf
 from typing import List, ItemsView, Tuple, ValuesView, KeysView, Iterator, Dict, Union, Optional
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.utils.validation import check_random_state
-from sklearn.metrics import hamming_loss
 from scipy.sparse import csc_matrix, lil_matrix, csr_matrix
 from scipy.stats import rankdata
 from joblib import Parallel, delayed, parallel_backend
 from tensorflow.python.ops.summary_ops_v2 import ResourceSummaryWriter
 
 from ssvm.data_structures import SequenceSample, CandidateSetMetIdent
+from ssvm.loss_functions import hamming_loss
 
 
 class DualVariables(object):
@@ -283,7 +283,6 @@ class DualVariablesForExample(object):
             self._alphas[y_seq] = gamma * (self.C / self.N)
 
 
-# class _StructuredSVM(BaseEstimator, ClassifierMixin)
 class _StructuredSVM(object):
     def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming", rs=None):
         """
@@ -344,8 +343,8 @@ class _StructuredSVM(object):
 
 
 class StructuredSVMMetIdent(_StructuredSVM):
-    def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming", rs=None, n_samples_per_epoch=1):
-        self.n_samples_per_epoch = n_samples_per_epoch
+    def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming", rs=None, batch_size=1):
+        self.batch_size = batch_size
 
         super(StructuredSVMMetIdent, self).__init__(C=C, n_epochs=n_epochs, label_loss=label_loss, rs=rs)
 
@@ -362,22 +361,22 @@ class StructuredSVMMetIdent(_StructuredSVM):
         # optimization.
         i_k = []
         for _ in range(self.n_epochs):
-            i_k.append(self.rs.choice(N, size=self.n_samples_per_epoch, replace=False))
+            i_k.append(self.rs.choice(N, size=self.batch_size, replace=False))
 
         # Pre-calculate some data needed for the sub-problem solving
         print("Pre-calculate data: ", end="")
         lab_losses = {}
         mol_kernel_l_y = {}
-        for idx, (k, s) in enumerate(it.product(range(self.n_epochs), range(self.n_samples_per_epoch))):
+        for idx, (k, s) in enumerate(it.product(range(self.n_epochs), range(self.batch_size))):
             i = i_k[k][s]
+
             # Check whether the relevant stuff was already pre-computed
             if y[i] in lab_losses:
                 continue
 
             # Pre-calculate the label loss: Loss of the gt fingerprint to all corresponding candidate fingerprints of i
             fp_i = candidates.get_gt_fp(y[i]).flatten()
-            lab_losses[y[i]] = np.array([self.label_loss_fun(fp_i, fp.flatten())
-                                         for fp in candidates.get_candidates_fp(y[i])])
+            lab_losses[y[i]] = self.label_loss_fun(fp_i, candidates.get_candidates_fp(y[i]))
 
             # Pre-calculate the kernels between the training examples and candidates
             mol_kernel_l_y[y[i]] = candidates.getMolKernel_ExpVsCand(y, y[i]).T  # shape = (|Sigma_i|, N)
@@ -402,7 +401,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
             fps_active[c] = candidates.get_candidates_fp(y[j], ybar, as_dense=False)
             # Get label loss between the active fingerprint candidate and its corresponding gt fingerprint
             lab_losses_active[c] = self.label_loss_fun(candidates.get_gt_fp(y[j]).flatten(),
-                                                       fps_active[c].toarray().flatten())
+                                                       fps_active[c].toarray())
 
         self.fps_active = fps_active
         self.mol_kernel_l_y = mol_kernel_l_y
@@ -442,7 +441,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
                     # Add the label loss belonging to the newly added active dual variable
                     lab_losses_active.resize(lab_losses_active.shape[0] + 1)
                     lab_losses_active[lab_losses_active.shape[0] - 1] = self.label_loss_fun(
-                        fps_active[fps_active.shape[0] - 1].toarray().flatten(), candidates.get_gt_fp(y[i]).flatten())
+                        fps_active[fps_active.shape[0] - 1].toarray().flatten(), candidates.get_gt_fp(y[i]))
 
             assert self._is_feasible_matrix(alphas, self.C), "Dual variables not feasible anymore after update."
 
@@ -543,8 +542,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
             loss = pre_calc_data["lab_losses"][self.y_train[i]]
         else:
             fp_i = candidates.get_gt_fp(self.y_train[i]).flatten()
-            loss = np.array([self.label_loss_fun(fp_i, fp.flatten())
-                             for fp in candidates.get_candidates_fp(self.y_train[i])])
+            loss = self.label_loss_fun(fp_i, candidates.get_candidates_fp(self.y_train[i]))
 
         score = np.array(loss + cand_scores).flatten()
 
