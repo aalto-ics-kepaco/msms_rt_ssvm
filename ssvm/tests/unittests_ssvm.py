@@ -31,6 +31,7 @@ import os
 import itertools as it
 
 from typing import Tuple
+from scipy.sparse import csr_matrix
 
 from ssvm.ssvm import DualVariablesForExample, _StructuredSVM, StructuredSVMMetIdent, DualVariables
 
@@ -143,6 +144,41 @@ class TestStructuredSVMMetIdent(unittest.TestCase):
 
         np.testing.assert_allclose(scores, (s3 - s4))
 
+    def test_is_feasible_matrix(self):
+        class DummyDualVariables(object):
+            def __init__(self, B):
+                self.B = B
+
+            def get_dual_variable_matrix(self):
+                return self.B
+
+        C = 2.2
+        N = 4
+
+        # ---- Feasible dual variables ----
+        alphas = DummyDualVariables(
+            csr_matrix([
+                [C / (N * 2), C / (N * 2), 0, 0, 0, 0, 0, 0],
+                [0, 0, C / (N * 2), C / (N * 2), 0, 0, 0, 0],
+                [0, 0, 0, 0, C / (N * 3), C / (N * 3), C / (N * 3), 0],
+                [0, 0, 0, 0, 0, 0, 0, C / N]
+            ])
+        )
+        self.assertTrue(StructuredSVMMetIdent._is_feasible_matrix(alphas, C))
+        self.assertFalse(StructuredSVMMetIdent._is_feasible_matrix(alphas, C + 1))
+
+        # ---- Infeasible dual variables ----
+        alphas = DummyDualVariables(
+            csr_matrix([
+                [C / (N * 3), C / (N * 2), 0, 0, 0, 0, 0, 0],
+                [0, 0, C / (N * 2), C / (N * 2), 0, 0, 0, 0],
+                [0, 0, 0, 0, C / (N * 2), C / (N * 2), C / (N * 3), 0],
+                [0, 0, 0, 0, 0, 0, 0, C / N]
+            ])
+        )
+        self.assertFalse(StructuredSVMMetIdent._is_feasible_matrix(alphas, C))
+        self.assertFalse(StructuredSVMMetIdent._is_feasible_matrix(alphas, C + 1))
+
 
 class TestDualVariables(unittest.TestCase):
     def test_initialization(self):
@@ -173,26 +209,32 @@ class TestDualVariables(unittest.TestCase):
         N = len(cand_ids)
 
         for C in [0.5, 1.0, 2.0]:
-            for num_init_active_vars in range(1, 3):
-                n_active = N * num_init_active_vars
-                alphas = DualVariables(C=C, cand_ids=cand_ids, num_init_active_vars=num_init_active_vars, rs=10910)
+            for num_init_active_vars in range(1, 202, 20):
+                alphas = DualVariables(C=C, cand_ids=cand_ids, num_init_active_vars=num_init_active_vars,
+                                       rs=num_init_active_vars)
 
+                _n_max_possible_vars = [np.minimum(num_init_active_vars, len(list(it.product(*cand_ids[i]))))
+                                        for i in range(N)]
+                n_active = np.sum(_n_max_possible_vars)
                 self.assertEqual(n_active, alphas.n_active())
 
                 B = alphas.get_dual_variable_matrix()
                 self.assertEqual((N, n_active), B.shape)
-                np.testing.assert_equal(np.full(N, fill_value=num_init_active_vars),
+                np.testing.assert_equal(np.array(_n_max_possible_vars),
                                         np.array(np.sum(B > 0, axis=1)).flatten())
 
-                # FIXME: We rely for the test on a not tested function
                 self.assertTrue(StructuredSVMMetIdent._is_feasible_matrix(alphas, C))
 
+                col = 0
                 for i in range(N):
-                    for k in range(num_init_active_vars):
-                        col = i * num_init_active_vars + k
-                        idx, y = alphas.get_iy_for_col(col)  # type: Tuple[int, Tuple]
+                    sampled_y_seqs = set()
+                    for k in range(_n_max_possible_vars[i]):
+                        idx, y_seq = alphas.get_iy_for_col(col)  # type: Tuple[int, Tuple]
+                        self.assertNotIn(y_seq, sampled_y_seqs)
+                        sampled_y_seqs.add(y_seq)
                         self.assertEqual(i, idx)
-                        self.assertIn(y, list(it.product(*cand_ids[i])))
+                        self.assertIn(y_seq, list(it.product(*cand_ids[i])))
+                        col += 1
 
     def test_initialization_singleton_sequences(self):
         # ----------------------------------------------------
@@ -213,27 +255,31 @@ class TestDualVariables(unittest.TestCase):
         N = len(cand_ids)
 
         for C in [0.5, 1.0, 2.0]:
-            for num_init_active_vars in range(1, 3):
-                n_active = N * num_init_active_vars
+            for num_init_active_vars in range(1, 5):  # 1, 2, 3, 4
                 alphas = DualVariables(C=C, cand_ids=cand_ids, num_init_active_vars=num_init_active_vars, rs=10910)
 
+                _n_max_possible_vars = [np.minimum(num_init_active_vars, len(cand_ids[i][0])) for i in range(N)]
+                n_active = np.sum(_n_max_possible_vars)
                 self.assertEqual(n_active, alphas.n_active())
 
                 B = alphas.get_dual_variable_matrix()
                 self.assertEqual((N, n_active), B.shape)
 
-                np.testing.assert_equal(np.full(N, fill_value=num_init_active_vars),
+                np.testing.assert_equal(np.array(_n_max_possible_vars),
                                         np.array(np.sum(B > 0, axis=1)).flatten())
 
-                # FIXME: We rely for the test on a not tested function
                 self.assertTrue(StructuredSVMMetIdent._is_feasible_matrix(alphas, C))
 
+                col = 0
                 for i in range(N):
-                    for k in range(num_init_active_vars):
-                        col = i * num_init_active_vars + k
-                        idx, y = alphas.get_iy_for_col(col)  # type: Tuple[int, Tuple]
+                    sampled_y_seqs = set()
+                    for k in range(_n_max_possible_vars[i]):
+                        idx, y_seq = alphas.get_iy_for_col(col)  # type: Tuple[int, Tuple]
+                        self.assertNotIn(y_seq, sampled_y_seqs)
+                        sampled_y_seqs.add(y_seq)
                         self.assertEqual(i, idx)
-                        self.assertIn(y, list(it.product(*cand_ids[i])))
+                        self.assertIn(y_seq, list(it.product(*cand_ids[i])))
+                        col += 1
 
     def test_update(self):
         # ----------------------------------------------------
@@ -256,11 +302,12 @@ class TestDualVariables(unittest.TestCase):
         gamma = 0.46
 
         alphas = DualVariables(C=C, cand_ids=cand_ids, num_init_active_vars=2, rs=10910)
+        # print(alphas._iy)
         # Active variables
-        # [(0, ('M19',)), (0, ('M10',)),
-        #  (1, ('M8',)),  (1, ('M7',)),
+        # [(0, ('M2',)),  (0, ('M1',)),
+        #  (1, ('M8',)),  (1, ('M9',)),
         #  (2, ('M72',)), (2, ('M11',)),
-        #  (3, ('M22',)), (3, ('M12',))]
+        #  (3, ('M13',)), (3, ('M4',))]
 
         # ---- Update an active dual variable ----
         B_old = alphas.get_dual_variable_matrix().todense()
@@ -269,8 +316,8 @@ class TestDualVariables(unittest.TestCase):
         val_old_M9 = alphas.get_dual_variable(1, ("M9",))
 
         self.assertEqual(C / (N * 2), val_old_M8)
-        self.assertEqual(C / (N * 2), val_old_M7)
-        self.assertEqual(0, val_old_M9)
+        self.assertEqual(0,           val_old_M7)
+        self.assertEqual(C / (N * 2), val_old_M9)
 
         self.assertFalse(alphas.update(1, ("M8",), gamma))
         self.assertEqual(8, alphas.n_active())  # Number of active variables must not change
@@ -288,11 +335,11 @@ class TestDualVariables(unittest.TestCase):
         val_old_M4 = alphas.get_dual_variable(3, ("M4",))
         val_old_M22 = alphas.get_dual_variable(3, ("M22",))
 
-        self.assertEqual(C / (N * 2), val_old_M12)
-        self.assertEqual(0, val_old_M13)
-        self.assertEqual(0, val_old_M3)
-        self.assertEqual(0, val_old_M4)
-        self.assertEqual(C / (N * 2), val_old_M22)
+        self.assertEqual(0,           val_old_M12)
+        self.assertEqual(C / (N * 2), val_old_M13)
+        self.assertEqual(0,           val_old_M3)
+        self.assertEqual(C / (N * 2), val_old_M4)
+        self.assertEqual(0,           val_old_M22)
 
         self.assertTrue(alphas.update(3, ("M3",), gamma))
         self.assertEqual(9, alphas.n_active())

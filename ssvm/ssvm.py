@@ -40,8 +40,7 @@ from ssvm.evaluation_tools import get_topk_performance_csifingerid
 
 
 class DualVariables(object):
-    def __init__(self, C: float, cand_ids: List[List[List[str]]], num_init_active_vars=1, rs=None,
-                 index_of_correct_candidate_seq=None):
+    def __init__(self, C: float, cand_ids: List[List[List[str]]], num_init_active_vars=1, rs=None):
         """
 
         :param C: scalar, regularization parameter of the Structured SVM
@@ -70,16 +69,20 @@ class DualVariables(object):
         """
         self.C = C
         assert self.C > 0, "The regularization parameter must be positive."
-        self.l_cand_ids = cand_ids
-        self.N = len(self.l_cand_ids)
+        self.N = len(cand_ids)
+        # Store a shuffled version of the candidate sets for each example and sequence element
+        self.rs = check_random_state(rs)
+        self.l_cand_ids = []
+        for i in range(self.N):
+            self.l_cand_ids.append([self.rs.permutation(_cand_ids).tolist() for _cand_ids in cand_ids[i]])
+
         self.num_init_active_vars = num_init_active_vars
         assert self.num_init_active_vars > 0
-        self.rs = check_random_state(rs)
 
         # Initialize the dual variables
-        self._alphas, self._y2col, self._iy = self._get_initial_alphas(index_of_correct_candidate_seq)
+        self._alphas, self._y2col, self._iy = self._get_initial_alphas()
 
-    def _get_initial_alphas(self, index_of_correct_candidate_seq=None) -> Tuple[lil_matrix, List[Dict], List[Tuple]]:
+    def _get_initial_alphas(self) -> Tuple[lil_matrix, List[Dict], List[Tuple]]:
         """
         Return initialized dual variables.
 
@@ -89,19 +92,33 @@ class DualVariables(object):
         _y2col = [{} for _ in range(self.N)]
         _iy = []
 
-        # Initial dual variable value ensuring feasibility
-        init_var_val = self.C / (self.N * self.num_init_active_vars)  # (C / N) / num_act = C / (N * num_act)
+        col = 0
+        for i in range(self.N):
+            n_added = 0
+            # Lazy generation of sample sequences, no problem with exponential space here
+            for y_seq in it.product(*self.l_cand_ids[i]):
+                assert y_seq not in _y2col[i], "What, that should not happen."
 
-        for col, (i, _) in enumerate(it.product(range(self.N), range(self.num_init_active_vars))):
-            if index_of_correct_candidate_seq is not None:
-                y_seq = tuple(cand_ids[idx] for cand_ids, idx in zip(self.l_cand_ids[i],
-                                                                     index_of_correct_candidate_seq[i]))
-            else:
-                y_seq = tuple(self.rs.choice(cand_ids) for cand_ids in self.l_cand_ids[i])
-            assert y_seq not in _y2col, "Oups, we sampled the same active dual variable again."
-            _alphas[i, col] = init_var_val
-            _y2col[i][y_seq] = col
-            _iy.append((i, y_seq))
+                _alphas[i, col + n_added] = self.C / self.N
+                _y2col[i][y_seq] = col + n_added
+                _iy.append((i, y_seq))
+                n_added += 1
+
+                # Stop after we have added the desired amount of active variables. This probably happens before we run
+                # out of new label sequences.
+                if n_added == self.num_init_active_vars:
+                    break
+
+            # Make initial values feasible and sum up to C / N
+            _alphas[i, col:(col + n_added)] /= n_added
+
+            col += n_added
+
+        # We might have added less active variables than the maximum, because there where not enough distinct label
+        # sequences. We can shrink the alpha-matrix.
+        assert col <= _alphas.shape[1]
+        _alphas.resize(self.N, col)
+        assert not np.any(_alphas.tocsc().sum(axis=0) == 0)
 
         # TODO For faster verification of the label sequence correctness, we transform all candidate set lists in to sets
         # self.l_cand_ids = [for cand_ids_seq in (for cand_ids_exp in self.l_cand_ids)]
