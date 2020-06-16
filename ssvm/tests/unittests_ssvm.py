@@ -96,16 +96,15 @@ class TestStructuredSVMMetIdent(unittest.TestCase):
         with gzip.open("small_metabolite_data.pkl.gz", "rb") as gz_file:
             data = pickle.load(gz_file)
 
-        self.K = data["X"]
-        self.y = data["mols"]
-        self.cand = data["cand"]  # type: CandidateSetMetIdent
-
         self.ssvm = StructuredSVMMetIdent(C=2)
-        self.C = self.ssvm.C
-        self.N = self.K.shape[0]
+        self.ssvm.K_train = data["X"]
+        self.ssvm.y_train = data["mols"]
+        self.cand = data["cand"]  # type: CandidateSetMetIdent
+        self.N = self.ssvm.K_train.shape[0]
         self.rs = np.random.RandomState(18221)
-        self.alphas = DualVariables(C=self.C, N=self.N, rs=self.rs, num_init_active_vars=2,
-                                    cand_ids=[[self.cand.get_labelspace(self.y[i])] for i in range(self.N)])
+        self.ssvm.alphas = DualVariables(C=self.ssvm.C, N=self.N, rs=self.rs, num_init_active_vars=2,
+                                         cand_ids=[[self.cand.get_labelspace(self.ssvm.y_train[i])]
+                                                   for i in range(self.N)])
 
     def test_get_candidate_scores(self):
         """
@@ -116,29 +115,29 @@ class TestStructuredSVMMetIdent(unittest.TestCase):
         """
         i = 10
 
-        fps_active, lab_losses_active = self.ssvm._initialize_active_fingerprints_and_losses(self.alphas, self.y,
-                                                                                             self.cand, verbose=True)
-        scores = StructuredSVMMetIdent._get_candidate_scores(self.C, self.alphas, self.K, self.y, i, self.cand,
-                                                             {"fps_active": fps_active,
-                                                              "lab_losses_active": lab_losses_active})
+        self.ssvm.fps_active, lab_losses_active = self.ssvm._initialize_active_fingerprints_and_losses(
+            self.cand, verbose=True)
+        scores = self.ssvm._get_candidate_scores(i, self.cand, {"lab_losses_active": lab_losses_active})
 
-        fps_gt_i = self.cand.get_gt_fp(self.y[i])[np.newaxis, :]
-        fps_gt = self.cand.get_gt_fp(self.y)
-        B = self.alphas.get_dual_variable_matrix(type="csr")
+        fps_gt_i = self.cand.get_gt_fp(self.ssvm.y_train[i])[np.newaxis, :]
+        fps_gt = self.cand.get_gt_fp(self.ssvm.y_train)
+        B = self.ssvm.alphas.get_dual_variable_matrix(type="csr")
 
         # Part which is constant for all y in Sigma_i
-        s1 = self.C / self.N * self.K[i] @ self.cand.get_kernel(fps_gt_i, fps_gt).flatten()
+        s1 = self.ssvm.C / self.N * self.ssvm.K_train[i] @ self.cand.get_kernel(fps_gt_i, fps_gt).flatten()
         self.assertTrue(np.isscalar(s1))
 
-        s2 = (self.cand.get_kernel(fps_gt_i, fps_active) @ B.T @ self.K[i]).item()
+        s2 = (self.cand.get_kernel(fps_gt_i, self.ssvm.fps_active) @ B.T @ self.ssvm.K_train[i]).item()
         self.assertTrue(np.isscalar(s2))
 
         # Part that is specific to each candidate y in Sigma_i
-        s3 = self.C / self.N * self.cand.get_kernel(self.cand.get_candidates_fp(self.y[i]), fps_gt) @ self.K[i]
-        self.assertEqual((len(self.cand.get_labelspace(self.y[i])),), s3.shape)
+        s3 = self.ssvm.C / self.N * self.cand.get_kernel(
+            self.cand.get_candidates_fp(self.ssvm.y_train[i]), fps_gt) @ self.ssvm.K_train[i]
+        self.assertEqual((len(self.cand.get_labelspace(self.ssvm.y_train[i])),), s3.shape)
 
-        s4 = self.cand.get_kernel(self.cand.get_candidates_fp(self.y[i]), fps_active) @ B.T @ self.K[i]
-        self.assertEqual((len(self.cand.get_labelspace(self.y[i])),), s4.shape)
+        s4 = self.cand.get_kernel(self.cand.get_candidates_fp(self.ssvm.y_train[i]),
+                                  self.ssvm.fps_active) @ B.T @ self.ssvm.K_train[i]
+        self.assertEqual((len(self.cand.get_labelspace(self.ssvm.y_train[i])),), s4.shape)
 
         np.testing.assert_allclose(scores, (s3 - s4))
 

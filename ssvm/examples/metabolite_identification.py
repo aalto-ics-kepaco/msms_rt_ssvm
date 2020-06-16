@@ -106,7 +106,7 @@ if __name__ == "__main__":
     train_log_dir = 'logs/' + current_time + '/train'
     train_summary_writer = tf_summary.create_file_writer(train_log_dir)
 
-    svm = StructuredSVMMetIdent(C=300, rs=102, n_epochs=100, batch_size=1) \
+    svm = StructuredSVMMetIdent(C=300, rs=102, n_epochs=20, batch_size=1) \
         .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=3,
              train_summary_writer=train_summary_writer)
 

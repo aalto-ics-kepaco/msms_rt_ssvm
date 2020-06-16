@@ -159,7 +159,7 @@ class CandidateSetMetIdent(object):
 
         return K
 
-    def get_kernel(self, fps_A: np.ndarray, fps_B: np.ndarray, kernel="tanimoto") -> np.ndarray:
+    def get_kernel(self, fps_A: np.ndarray, fps_B: Optional[np.ndarray] = None, kernel="tanimoto") -> np.ndarray:
         if kernel == "tanimoto":
             K = tanimoto_kernel(fps_A, fps_B, shallow_input_check=True)
         else:
