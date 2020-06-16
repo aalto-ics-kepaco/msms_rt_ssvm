@@ -25,49 +25,14 @@
 ####
 import os
 import numpy as np
-import pandas as pd
 import datetime
 import tensorflow.summary as tf_summary
 
-from scipy.io import loadmat
 from sklearn.model_selection import GroupKFold, ShuffleSplit
+
 from ssvm.data_structures import CandidateSetMetIdent
 from ssvm.ssvm import StructuredSVMMetIdent
-
-
-def read_data(idir):
-    # Read fingerprints
-    data = loadmat(os.path.join(idir, "data_GNPS.mat"))
-    fps = data["fp"].toarray().T
-
-    # Get inchis as molecule identifiers
-    inchis = data["inchi"].flatten()
-    n_samples = len(inchis)
-    assert (n_samples == fps.shape[0])
-    inchis = [inchis[i][0] for i in range(n_samples)]
-
-    # Get molecular formulas to identify the candidate sets
-    mfs = data["mf"].flatten()
-    mfs = [mfs[i][0] for i in range(n_samples)]
-    assert len(mfs) == len(inchis)
-
-    # Read PPKr kernel
-    K = np.load(os.path.join(idir, "input_kernels", "PPKr.npy"))
-    spec_df = pd.read_csv(os.path.join(idir, "spectra.txt"), sep="\t")
-    assert np.all(np.equal(spec_df.INCHI.values, inchis))
-
-    # Read indices of the examples that where used for the evaluation (only those have a candidate set)
-    ind_eval = sorted(np.genfromtxt(os.path.join(idir, "ind_eval.txt")).astype("int") - 1)
-    fps = fps[ind_eval, :]
-    # TODO: Check, is correct order selected?
-    inchis = [inchi for i, inchi in enumerate(inchis) if i in ind_eval]
-    mfs = [mf for i, mf in enumerate(mfs) if i in ind_eval]
-    K = K[np.ix_(ind_eval, ind_eval)]
-
-    # Map of the candidate inchis to the candidate set
-    inchi2mf = {inchi: mf for inchi, mf in zip(inchis, mfs)}
-
-    return K, fps, np.array(inchis), inchi2mf
+from ssvm.examples.utils import read_data
 
 
 if __name__ == "__main__":
@@ -106,7 +71,7 @@ if __name__ == "__main__":
     train_log_dir = 'logs/' + current_time + '/train'
     train_summary_writer = tf_summary.create_file_writer(train_log_dir)
 
-    svm = StructuredSVMMetIdent(C=300, rs=102, n_epochs=20, batch_size=1) \
+    svm = StructuredSVMMetIdent(C=300, rs=928, n_epochs=100, batch_size=1) \
         .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=3,
              train_summary_writer=train_summary_writer)
 
