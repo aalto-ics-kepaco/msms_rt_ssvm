@@ -40,13 +40,11 @@ from ssvm.evaluation_tools import get_topk_performance_csifingerid
 
 
 class DualVariables(object):
-    def __init__(self, C: float, N: int, cand_ids: List[List[List[str]]], num_init_active_vars=1, rs=None,
+    def __init__(self, C: float, cand_ids: List[List[List[str]]], num_init_active_vars=1, rs=None,
                  index_of_correct_candidate_seq=None):
         """
 
         :param C: scalar, regularization parameter of the Structured SVM
-
-        :param N: scalar, total number of sequences used for training
 
         :param cand_ids: list of list of lists, of candidate identifiers. Each sequence element has an associated
             candidate set. The candidates are identified by a string.
@@ -72,10 +70,8 @@ class DualVariables(object):
         """
         self.C = C
         assert self.C > 0, "The regularization parameter must be positive."
-        self.N = N
-        assert self.N > 0
-        assert len(cand_ids) == self.N
         self.l_cand_ids = cand_ids
+        self.N = len(self.l_cand_ids)
         self.num_init_active_vars = num_init_active_vars
         assert self.num_init_active_vars > 0
         self.rs = check_random_state(rs)
@@ -107,9 +103,25 @@ class DualVariables(object):
             _y2col[i][y_seq] = col
             _iy.append((i, y_seq))
 
+        # TODO For faster verification of the label sequence correctness, we transform all candidate set lists in to sets
+        # self.l_cand_ids = [for cand_ids_seq in (for cand_ids_exp in self.l_cand_ids)]
+
         return _alphas, _y2col, _iy
 
-    def update(self, i: int, y_seq: tuple, gamma: float) -> bool:
+    def _assert_input_iy(self, i: int, y_seq: Tuple):
+        """
+        :raises: ValueError, if the label sequence 'y_seq' is not valid for example 'i'.
+
+        :param i, scalar, sequence example index
+        :param y_seq: tuple of strings, sequence of candidate indices identifying the dual variable
+        """
+        # Test: Are we trying to update a valid label sequence for the current example
+        for sigma, y_sigma in enumerate(y_seq):
+            if y_sigma not in self.l_cand_ids[i][sigma]:
+                raise ValueError("For example %d at sequence element %d the label %s does not exist." %
+                                 (i, sigma, y_sigma))
+
+    def update(self, i: int, y_seq: Tuple, gamma: float) -> bool:
         """
         Update the value of a dual variable.
 
@@ -117,10 +129,12 @@ class DualVariables(object):
         :param y_seq: tuple of strings, sequence of candidate indices identifying the dual variable
         :param gamma: scalar, step-width used to update the dual variable value
         """
+        self._assert_input_iy(i, y_seq)
+
         try:
             # Update an active dual variable
             is_new = False
-            col = self._y2col[i][y_seq]
+            col = self._y2col[i][y_seq]  # This might throw a KeyError, if the dual variable is not active right now.
             self._alphas[i, col] += gamma * ((self.C / self.N) - self._alphas[i, col])
         except KeyError:
             # Add a new active dual variable by adding a new column
@@ -137,6 +151,23 @@ class DualVariables(object):
         self._alphas[i] -= _r
 
         return is_new
+
+    def get_dual_variable(self, i: int, y_seq: tuple) -> float:
+        """
+        :param i, scalar, sequence example index
+        :param y_seq: tuple of strings, sequence of candidate indices identifying the dual variable
+
+        :return: scalar, dual variable value
+        """
+        self._assert_input_iy(i, y_seq)
+
+        try:
+            col = self._y2col[i][y_seq]  # This might throw a KeyError, if the dual variable is not active right now.
+            val = self._alphas[i, col]
+        except KeyError:
+            val = 0.0
+
+        return val
 
     def get_dual_variable_matrix(self, type="csr") -> Union[csr_matrix, csc_matrix]:
         """
@@ -401,7 +432,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
         # Initialize dual variables
         print("Initialize dual variables: ...", end="")
-        self.alphas = DualVariables(C=self.C, N=N, cand_ids=[[candidates.get_labelspace(y[i])] for i in range(N)],
+        self.alphas = DualVariables(C=self.C, cand_ids=[[candidates.get_labelspace(y[i])] for i in range(N)],
                                     rs=self.rs, num_init_active_vars=num_init_active_vars_per_seq)
         assert self._is_feasible_matrix(self.alphas, self.C), "Initial dual variables must be feasible."
         print("100")
@@ -459,6 +490,13 @@ class StructuredSVMMetIdent(_StructuredSVM):
                             tf.summary.scalar("Top-%d" % (tpk + 1), acc_k[tpk], k + 1)
                         print("\tTop-1=%.2f; Top-5=%.2f; Top-10=%.2f" % (acc_k[0], acc_k[4], acc_k[9]))
 
+                        tf.summary.histogram(
+                            "Dual variable distribution",
+                            data=np.array(np.sum(self.alphas.get_dual_variable_matrix(), axis=0)).flatten(),
+                            buckets=100, step=k + 1)
+
+
+
             k += 1
 
         return self
@@ -488,13 +526,13 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
     @staticmethod
     def _is_feasible_matrix(alphas: DualVariables, C: float) -> bool:
-        A = alphas.get_dual_variable_matrix()
-        N = A.shape[0]
+        B = alphas.get_dual_variable_matrix()
+        N = B.shape[0]
 
-        if (A < 0).getnnz():
+        if (B < 0).getnnz():
             return False
 
-        if not np.all(np.isclose(A.sum(axis=1), C / N)):
+        if not np.all(np.isclose(B.sum(axis=1), C / N)):
             return False
 
         return True
