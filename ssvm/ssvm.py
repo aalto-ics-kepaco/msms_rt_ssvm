@@ -96,6 +96,7 @@ class DualVariables(object):
         for i in range(self.N):
             n_added = 0
             # Lazy generation of sample sequences, no problem with exponential space here
+            # FIXME: Produces heavily biased sequences, as last indices is increased first, then the second last ...
             for y_seq in it.product(*self.l_cand_ids[i]):
                 assert y_seq not in _y2col[i], "What, that should not happen."
 
@@ -412,6 +413,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
         if train_summary_writer is not None:
             # take 10% of the data for validation
             self.train_set, val_set = next(GroupKFold(n_splits=10).split(X, groups=y))
+            X_orig_train = np.array(X[self.train_set])
             X_val = X[val_set]  # shape = (n_val, n_original_train)
             X = X[np.ix_(self.train_set, self.train_set)]
             y_val = y[val_set]
@@ -457,11 +459,13 @@ class StructuredSVMMetIdent(_StructuredSVM):
         # Collect active candidate fingerprints and losses
         self.fps_active, lab_losses_active = self._initialize_active_fingerprints_and_losses(candidates, verbose=True)
 
-        print("Objective values:",
-              self._evaluate_primal_and_dual_objective(candidates,
-                                                       pre_calc_data={"lab_losses_active": lab_losses_active}))
-
         k = 0
+        if train_summary_writer is None:
+            self._write_debug_output(0, lab_losses_active, candidates, np.nan)
+        else:
+            self._write_debug_output(0, lab_losses_active, candidates, np.nan, train_summary_writer, X_val,
+                                     y_val, X_orig_train, self.y_train)
+
         while k < self.n_epochs:
             # Find the most violating example
             # TODO: Can we solve the sub-problem for a full batch at the same time?
@@ -488,35 +492,53 @@ class StructuredSVMMetIdent(_StructuredSVM):
             assert self._is_feasible_matrix(self.alphas, self.C), "Dual variables not feasible anymore after update."
 
             if (((k + 1) % 10) == 0) or ((k + 1) == self.n_epochs):
-                print("Epoch: %d / %d" % (k + 1, self.n_epochs))
-
-                prim_obj, dual_obj, duality_gap = self._evaluate_primal_and_dual_objective(
-                    candidates, pre_calc_data={"lab_losses_active": lab_losses_active})
-                print("\tf(w) = %.5f; g(a) = %.5f; step-size = %.5f" % (prim_obj, dual_obj, gamma))
-
-                if train_summary_writer is not None:
-                    with train_summary_writer.as_default():
-                        tf.summary.scalar("Dual Objective", dual_obj, k + 1)
-                        tf.summary.scalar("Step-size", gamma, k + 1)
-                        tf.summary.scalar("Number of active dual variables", self.alphas.n_active(), k + 1)
-                        tf.summary.scalar("Primal Objective", prim_obj, k + 1)
-                        tf.summary.scalar("Duality gap", duality_gap, k + 1)
-
-                        acc_k = self.score(X_val, y_val, candidates)
-                        for tpk in [0, 4, 9, 19]:
-                            tf.summary.scalar("Top-%d" % (tpk + 1), acc_k[tpk], k + 1)
-                        print("\tTop-1=%.2f; Top-5=%.2f; Top-10=%.2f" % (acc_k[0], acc_k[4], acc_k[9]))
-
-                        tf.summary.histogram(
-                            "Dual variable distribution",
-                            data=np.array(np.sum(self.alphas.get_dual_variable_matrix(), axis=0)).flatten(),
-                            buckets=100, step=k + 1)
-
-
+                if train_summary_writer is None:
+                    self._write_debug_output(k + 1, lab_losses_active, candidates, gamma)
+                else:
+                    self._write_debug_output(k + 1, lab_losses_active, candidates, gamma, train_summary_writer, X_val,
+                                             y_val, X_orig_train, self.y_train)
 
             k += 1
 
         return self
+
+    def _write_debug_output(self, epoch, lab_losses_active, candidates, stepsize, train_summary_writer=None, X_val=None,
+                            y_val=None, X_orig_train=None, y_orig_train=None):
+        print("Epoch: %d / %d" % (epoch, self.n_epochs))
+
+        prim_obj, dual_obj, duality_gap = self._evaluate_primal_and_dual_objective(
+            candidates, pre_calc_data={"lab_losses_active": lab_losses_active})
+        print("\tf(w) = %.5f; g(a) = %.5f; step-size = %.5f" % (prim_obj, dual_obj, stepsize))
+
+        if train_summary_writer is not None:
+            with train_summary_writer.as_default():
+                with tf.name_scope("Objective Functions"):
+                    tf.summary.scalar("Primal", prim_obj, epoch)
+                    tf.summary.scalar("Dual", dual_obj, epoch)
+                    tf.summary.scalar("Duality gap", duality_gap, epoch)
+
+                with tf.name_scope("Optimizer"):
+                    tf.summary.scalar("Number of active dual variables", self.alphas.n_active(), epoch)
+                    tf.summary.scalar("Step-size", stepsize, epoch)
+
+                tf.summary.histogram(
+                    "Dual variable distribution",
+                    data=np.array(np.sum(self.alphas.get_dual_variable_matrix(), axis=0)).flatten(),
+                    buckets=100, step=epoch)
+
+                with tf.name_scope("Metric (Validation)"):
+                    acc_k_val = self.score(X_val, y_val, candidates)
+                    print("\tTop-1=%2.2f; Top-5=%2.2f; Top-10=%2.2f\tValidation" %
+                          (acc_k_val[0], acc_k_val[4], acc_k_val[9]))
+                    for tpk in [1, 5, 10, 20]:
+                        tf.summary.scalar("Top-%d (validation)" % tpk, acc_k_val[tpk - 1], epoch)
+
+                with tf.name_scope("Metric (Training)"):
+                    acc_k_train = self.score(X_orig_train, y_orig_train, candidates)
+                    print("\tTop-1=%2.2f; Top-5=%2.2f; Top-10=%2.2f\tTraining" %
+                              (acc_k_train[0], acc_k_train[4], acc_k_train[9]))
+                    for tpk in [1, 5, 10, 20]:
+                        tf.summary.scalar("Top-%d (training)" % tpk, acc_k_train[tpk - 1], epoch)
 
     def _initialize_active_fingerprints_and_losses(self, candidates: CandidateSetMetIdent, verbose=False):
         """
