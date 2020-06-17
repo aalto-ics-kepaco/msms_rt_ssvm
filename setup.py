@@ -13,8 +13,7 @@ setup(
         "pandas",
         "scipy",
         "joblib",
-        "tensorflow-cpu",
-        "tensorflow-tensorboard",
+        "tensorflow",
         "tqdm"
     ],
 
