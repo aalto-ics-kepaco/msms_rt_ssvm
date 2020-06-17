@@ -64,7 +64,8 @@ def get_argument_parser() -> argparse.ArgumentParser:
                             help="Directory containing the ISBM2016 metabolite identification reference data.",
                             default="/home/bach/Documents/doctoral/data/metindent_ismb2016")
     arg_parser.add_argument("--output_dir", type=str,
-                            help="Base directory to store the Tensorboard logging files, train and test splits, ...")
+                            help="Base directory to store the Tensorboard logging files, train and test splits, ...",
+                            default="./logs")
     arg_parser.add_argument("--n_samples", type=float, default=np.inf,
                             help="Number of training examples to use for the evaluation")
     arg_parser.add_argument("--n_epochs", type=int, default=1500)
@@ -119,7 +120,7 @@ if __name__ == "__main__":
 
     # Tensorflow training summary log-file
     git_hash = get_git_revision_short_hash()
-    tb_log_dir_base = os.path.join(args.output_dir, "logs", git_hash)
+    tb_log_dir_base = os.path.join(args.output_dir, git_hash)
 
     # Configure parameter grid
     with tf.summary.create_file_writer(tb_log_dir_base).as_default():
