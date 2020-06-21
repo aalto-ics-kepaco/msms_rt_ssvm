@@ -5,3 +5,4 @@ venv
 .ipynb_checkpoints
 **/logs
 ssvm/tests/small_metabolite_data.pkl.gz
+slurm-*.out
