@@ -66,6 +66,10 @@ def get_argument_parser() -> argparse.ArgumentParser:
     arg_parser.add_argument("--output_dir", type=str,
                             help="Base directory to store the Tensorboard logging files, train and test splits, ...",
                             default="./logs")
+    arg_parser.add_argument("--output_dir_reproducible", type=str,
+                            help="Directory to store the random-subset and training and test set indices used for the"
+                                 "hyper parameter evaluation.",
+                            default="./reproducible")
     arg_parser.add_argument("--n_samples", type=float, default=np.inf,
                             help="Number of training examples to use for the evaluation")
     arg_parser.add_argument("--n_epochs", type=int, default=1500)
@@ -113,6 +117,11 @@ if __name__ == "__main__":
     mols_train = mols[train]
     mols_test = mols[test]
     assert not np.any(np.isin(mols_test, mols_train))
+
+    # Write out indices to reproduce results on the same data subset using IOKR
+    np.savetxt(os.path.join(args.output_dir_reproducible, "n_samples=%d" % args.n_samples, "subset.txt"), subset)
+    np.savetxt(os.path.join(args.output_dir_reproducible, "n_samples=%d" % args.n_samples, "train.txt"), train)
+    np.savetxt(os.path.join(args.output_dir_reproducible, "n_samples=%d" % args.n_samples, "test.txt"), test)
 
     # Wrap the candidate sets for easier access
     cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(args.input_data_dir, "candidates"),
