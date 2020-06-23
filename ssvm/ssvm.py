@@ -40,7 +40,7 @@ from ssvm.evaluation_tools import get_topk_performance_csifingerid
 
 
 class DualVariables(object):
-    def __init__(self, C: float, cand_ids: List[List[List[str]]], num_init_active_vars=1, rs=None):
+    def __init__(self, C: float, cand_ids: List[List[List[str]]], num_init_active_vars=1, rs=None, initialize=True):
         """
 
         :param C: scalar, regularization parameter of the Structured SVM
@@ -66,6 +66,9 @@ class DualVariables(object):
             If seed is an int, return a new RandomState instance seeded with seed.
             If seed is already a RandomState instance, return it.
             Otherwise raise ValueError.
+
+        :param initialize: boolean, indicating whether the dual variables should be initialized upon object
+            construction.
         """
         self.C = C
         assert self.C > 0, "The regularization parameter must be positive."
@@ -79,10 +82,15 @@ class DualVariables(object):
         self.num_init_active_vars = num_init_active_vars
         assert self.num_init_active_vars > 0
 
-        # Initialize the dual variables
-        self._alphas, self._y2col, self._iy = self._get_initial_alphas()
+        if initialize:
+            # Initialize the dual variables
+            self.initialize_alphas()
+        else:
+            self._alphas = None
+            self._y2col = None
+            self._iy = None
 
-    def _get_initial_alphas(self) -> Tuple[lil_matrix, List[Dict], List[Tuple]]:
+    def initialize_alphas(self):
         """
         Return initialized dual variables.
 
@@ -124,7 +132,9 @@ class DualVariables(object):
         # TODO For faster verification of the label sequence correctness, we transform all candidate set lists in to sets
         # self.l_cand_ids = [for cand_ids_seq in (for cand_ids_exp in self.l_cand_ids)]
 
-        return _alphas, _y2col, _iy
+        self._alphas = _alphas
+        self._y2col = _y2col
+        self._iy = _iy
 
     def _assert_input_iy(self, i: int, y_seq: Tuple):
         """
@@ -139,6 +149,16 @@ class DualVariables(object):
                 raise ValueError("For example %d at sequence element %d the label %s does not exist." %
                                  (i, sigma, y_sigma))
 
+    def _is_initialized(self):
+        if (self._alphas is None) or (self._y2col is None) or (self._iy is None):
+            return False
+
+        return True
+
+    def _assert_is_initialized(self):
+        if not self._is_initialized():
+            raise RuntimeError("Dual variables are not initialized. Call 'initialize_alphas' first.")
+
     def update(self, i: int, y_seq: Tuple, gamma: float) -> bool:
         """
         Update the value of a dual variable.
@@ -147,6 +167,7 @@ class DualVariables(object):
         :param y_seq: tuple of strings, sequence of candidate indices identifying the dual variable
         :param gamma: scalar, step-width used to update the dual variable value
         """
+        self._assert_is_initialized()
         self._assert_input_iy(i, y_seq)
 
         try:
@@ -177,6 +198,7 @@ class DualVariables(object):
 
         :return: scalar, dual variable value
         """
+        self._assert_is_initialized()
         self._assert_input_iy(i, y_seq)
 
         try:
@@ -193,6 +215,8 @@ class DualVariables(object):
 
         :return: csr_matrix, shape = (N, n_active_dual)
         """
+        self._assert_is_initialized()
+
         if type == "csr":
             return csr_matrix(self._alphas)
         elif type == "csc":
@@ -206,6 +230,8 @@ class DualVariables(object):
 
         :return: scalar, number of active dual variables (columns in the dual variable matrix)
         """
+        self._assert_is_initialized()
+
         return self._alphas.shape[1]
 
     def get_iy_for_col(self, c: int) -> Tuple[int, Tuple]:
@@ -221,6 +247,8 @@ class DualVariables(object):
             tuple, candidate sequence associated with the active dual variable
         )
         """
+        self._assert_is_initialized()
+
         return self._iy[c]
 
 
