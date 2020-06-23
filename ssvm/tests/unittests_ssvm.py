@@ -351,6 +351,154 @@ class TestDualVariables(unittest.TestCase):
 
         self.assertEqual((3, ("M3",)), alphas.get_iy_for_col(8))
 
+    def test_eq_dual_domain(self):
+        cand_ids_1a = [
+            [
+                ["M1", "M2"],
+                ["M1", "M2", "M19", "M10"],
+                ["M20", "M4", "M5"],
+                ["M2"],
+                ["M3", "M56", "M8"]
+            ],
+            [
+                ["M1"],
+                ["M1", "M2", "M3", "M10", "M20"],
+                ["M4", "M5"],
+                ["M2", "M4"],
+                ["M7", "M9", "M8"]
+            ],
+            [
+                ["M1", "M2", "M3"],
+                ["M1", "M2", "M9", "M10", "M22"],
+                ["M20", "M7"],
+                ["M2", "M99"],
+                ["M72", "M8"]
+            ]
+        ]
+        cand_ids_1b = [
+            [
+                ["M1", "M2"],
+                ["M1", "M2", "M19", "M10"],
+                ["M20", "M4", "M5"],
+                ["M2"],
+                ["M3", "M56", "M8"]
+            ],
+            [
+                ["M1"],
+                ["M1", "M3", "M2", "M10", "M20"],
+                ["M4", "M5"],
+                ["M2", "M4"],
+                ["M7", "M9", "M8"]
+            ],
+            [
+                ["M1", "M2", "M3"],
+                ["M1", "M2", "M9", "M10", "M22"],
+                ["M20", "M7"],
+                ["M2", "M99"],
+                ["M8", "M72"]
+            ]
+        ]
+        cand_ids_2a = [
+            [
+                ["M1", "M2"],
+                ["M1", "M2", "M20", "M10"],
+                ["M20", "M4", "M5"],
+                ["M2"],
+                ["M3", "M56", "M8"]
+            ],
+            [
+                ["M1"],
+                ["M1", "M3", "M2", "M10", "M20"],
+                ["M4", "M5"],
+                ["M2", "M3"],
+                ["M7", "M9", "M8"]
+            ],
+            [
+                ["M1", "M2", "M3"],
+                ["M1", "M2", "M9", "M10", "M22"],
+                ["M20", "M7"],
+                ["M2", "M99"],
+                ["M8", "M72"]
+            ]
+        ]
+        cand_ids_2b = [
+            [
+                ["M1", "M2"],
+                ["M1", "M2", "M19", "M10"],
+                ["M2"],
+                ["M3", "M56", "M8"]
+            ],
+            [
+                ["M1"],
+                ["M1", "M3", "M2", "M10", "M20"],
+                ["M4", "M5"],
+                ["M2", "M4"],
+                ["M7", "M9", "M8"]
+            ],
+            [
+                ["M1", "M2", "M3"],
+                ["M1", "M2", "M9", "M10", "M22"],
+                ["M20", "M7"],
+                ["M2", "M99"],
+                ["M8", "M72"]
+            ]
+        ]
+
+        alpha_1a = DualVariables(C=2, cand_ids=cand_ids_1a, initialize=False, rs=120)
+        alpha_1b = DualVariables(C=2, cand_ids=cand_ids_1b, initialize=False, rs=120)
+        alpha_2a = DualVariables(C=2, cand_ids=cand_ids_2a, initialize=False, rs=120)
+        alpha_2b = DualVariables(C=2, cand_ids=cand_ids_2b, initialize=False, rs=120)
+        self.assertTrue(DualVariables._eq_dual_domain(alpha_1a, alpha_1a))
+        self.assertTrue(DualVariables._eq_dual_domain(alpha_1a, alpha_1b))
+        self.assertFalse(DualVariables._eq_dual_domain(alpha_1a, alpha_2a))
+        self.assertFalse(DualVariables._eq_dual_domain(alpha_1a, alpha_2b))
+        self.assertFalse(DualVariables._eq_dual_domain(alpha_2a, alpha_2b))
+
+    def test_subtraction(self):
+        cand_ids = [
+            [
+                ["M1", "M2", "M19", "M10"]
+            ],
+            [
+                ["M7", "M9", "M8"]
+            ],
+            [
+                ["M72", "M11"]
+            ],
+            [
+                ["M12", "M13", "M3", "M4", "M22"]
+            ]
+        ]
+
+        alphas = DualVariables(C=1.5, cand_ids=cand_ids, rs=1)
+
+        # Test subtracting a dual variable class from itself ==> empty dual variable set
+        sub_alphas = alphas - alphas
+        self.assertTrue(DualVariables._eq_dual_domain(alphas, sub_alphas))
+        self.assertEqual([], sub_alphas._iy)
+        self.assertEqual((alphas.N, 0), sub_alphas.get_dual_variable_matrix().shape)
+        self.assertEqual([{} for _ in range(alphas.N)], sub_alphas._y2col)
+
+        # Test subtracting an empty dual variable set ==> no changes
+        sub_alphas = alphas - (alphas - alphas)
+        self.assertTrue(DualVariables._eq_dual_domain(alphas, sub_alphas))
+
+        # Test subtracting two non-empty dual variable sets
+        alphas_2 = DualVariables(C=1.5, cand_ids=cand_ids, rs=2)
+        sub_alphas = alphas - alphas_2
+        # print(alphas._iy)
+        # [(0, ('M10',)), (1, ('M7',)), (2, ('M72',)), (3, ('M3',))]
+        # print(alphas_2._iy)
+        # [(0, ('M19',)), (1, ('M7',)), (2, ('M11',)), (3, ('M22',))]
+        self.assertTrue(DualVariables._eq_dual_domain(alphas, sub_alphas))
+        self.assertTrue(DualVariables._eq_dual_domain(alphas_2, sub_alphas))
+        self.assertEqual(6, sub_alphas.n_active())
+        for (i, y_seq), a in [((0, ("M10", )), alphas.C / alphas.N), ((0, ("M19", )), - alphas.C / alphas.N),
+                              ((2, ("M72", )), alphas.C / alphas.N), ((2, ("M11", )), - alphas.C / alphas.N),
+                              ((3, ("M3", )),  alphas.C / alphas.N), ((3, ("M22", )), - alphas.C / alphas.N)]:
+            self.assertIn((i, y_seq), sub_alphas._iy)
+            self.assertEqual(a, sub_alphas.get_dual_variable(i, y_seq))
+
 
 class TestDualVariablesForExamples(unittest.TestCase):
     def test_initialization(self):

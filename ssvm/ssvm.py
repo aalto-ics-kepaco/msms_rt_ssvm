@@ -27,7 +27,7 @@ import numpy as np
 import itertools as it
 import tensorflow as tf
 
-from typing import List, ItemsView, Tuple, ValuesView, KeysView, Iterator, Dict, Union, Optional
+from typing import List, ItemsView, Tuple, ValuesView, KeysView, Iterator, Dict, Union, Optional, TypeVar
 from sklearn.utils.validation import check_random_state
 from sklearn.model_selection import GroupKFold
 from scipy.sparse import csc_matrix, lil_matrix, csr_matrix
@@ -37,6 +37,8 @@ from tqdm import tqdm
 from ssvm.data_structures import SequenceSample, CandidateSetMetIdent
 from ssvm.loss_functions import hamming_loss
 from ssvm.evaluation_tools import get_topk_performance_csifingerid
+
+DUALVARIABLES_T = TypeVar('DUALVARIABLES_T', bound='DualVariables')
 
 
 class DualVariables(object):
@@ -90,6 +92,29 @@ class DualVariables(object):
             self._y2col = None
             self._iy = None
 
+    def _assert_input_iy(self, i: int, y_seq: Tuple):
+        """
+        :raises: ValueError, if the label sequence 'y_seq' is not valid for example 'i'.
+
+        :param i, scalar, sequence example index
+        :param y_seq: tuple of strings, sequence of candidate indices identifying the dual variable
+        """
+        # Test: Are we trying to update a valid label sequence for the current example
+        for sigma, y_sigma in enumerate(y_seq):
+            if y_sigma not in self.l_cand_ids[i][sigma]:
+                raise ValueError("For example %d at sequence element %d the label %s does not exist." %
+                                 (i, sigma, y_sigma))
+
+    def _is_initialized(self):
+        if (self._alphas is None) or (self._y2col is None) or (self._iy is None):
+            return False
+
+        return True
+
+    def assert_is_initialized(self):
+        if not self._is_initialized():
+            raise RuntimeError("Dual variables are not initialized. Call 'initialize_alphas' first.")
+
     def initialize_alphas(self):
         """
         Return initialized dual variables.
@@ -136,28 +161,50 @@ class DualVariables(object):
         self._y2col = _y2col
         self._iy = _iy
 
-    def _assert_input_iy(self, i: int, y_seq: Tuple):
+    def set_alphas(self, iy: List[Tuple[int, Tuple]], alphas: Union[float, List[float], np.ndarray]) -> DUALVARIABLES_T:
         """
-        :raises: ValueError, if the label sequence 'y_seq' is not valid for example 'i'.
+        Sets the values for the active dual variables. Class must not be initialized before. This function does not
+        do any checks on the feasibility of the resulting DualVariable object.
 
-        :param i, scalar, sequence example index
-        :param y_seq: tuple of strings, sequence of candidate indices identifying the dual variable
+        :param iy: List of tuples, collecting the active dual variables.
+
+        :param alphas: List or scalar, dual value(s) corresponding to the active variables. If a scalar is provided, its
+            repeated to the length of 'iy'.
+
+        :return: The DualVariable class itself.
         """
-        # Test: Are we trying to update a valid label sequence for the current example
-        for sigma, y_sigma in enumerate(y_seq):
-            if y_sigma not in self.l_cand_ids[i][sigma]:
-                raise ValueError("For example %d at sequence element %d the label %s does not exist." %
-                                 (i, sigma, y_sigma))
+        if isinstance(alphas, List) or isinstance(alphas, np.ndarray):
+            if len(iy) != len(alphas):
+                raise ValueError("Number of dual variables values must be equal the number of active dual variables.")
+        elif np.isscalar(alphas):
+            alphas = [alphas] * len(iy)
+        else:
+            raise ValueError("Dual variables must be passed as list or scalar.")
 
-    def _is_initialized(self):
-        if (self._alphas is None) or (self._y2col is None) or (self._iy is None):
-            return False
+        if self._is_initialized():
+            raise RuntimeError("Cannot set alphas of an already initialized dual variable. Use 'update' function "
+                               "instead.")
 
-        return True
+        _alphas = lil_matrix((self.N, len(iy)))
+        _y2col = [{} for _ in range(self.N)]
 
-    def _assert_is_initialized(self):
-        if not self._is_initialized():
-            raise RuntimeError("Dual variables are not initialized. Call 'initialize_alphas' first.")
+        for col, ((i, y_seq), a) in enumerate(zip(iy, alphas)):
+            # Check that the dual variables that are supposed to be set, are actually valid, i.e. the corresponding
+            # label sets contain the provided sequences.
+            self._assert_input_iy(i, y_seq)
+
+            if y_seq in _y2col[i]:
+                raise ValueError("Each active dual variable should only appear ones in the provided set. Does not hold"
+                                 "for example 'i=%d' with sequence 'y_seq=%s'" % (i, y_seq))
+
+            _alphas[i, col] = a
+            _y2col[i][y_seq] = col
+
+        self._alphas = _alphas
+        self._y2col = _y2col
+        self._iy = iy
+
+        return self
 
     def update(self, i: int, y_seq: Tuple, gamma: float) -> bool:
         """
@@ -167,7 +214,7 @@ class DualVariables(object):
         :param y_seq: tuple of strings, sequence of candidate indices identifying the dual variable
         :param gamma: scalar, step-width used to update the dual variable value
         """
-        self._assert_is_initialized()
+        self.assert_is_initialized()
         self._assert_input_iy(i, y_seq)
 
         try:
@@ -198,7 +245,7 @@ class DualVariables(object):
 
         :return: scalar, dual variable value
         """
-        self._assert_is_initialized()
+        self.assert_is_initialized()
         self._assert_input_iy(i, y_seq)
 
         try:
@@ -215,7 +262,7 @@ class DualVariables(object):
 
         :return: csr_matrix, shape = (N, n_active_dual)
         """
-        self._assert_is_initialized()
+        self.assert_is_initialized()
 
         if type == "csr":
             return csr_matrix(self._alphas)
@@ -230,7 +277,7 @@ class DualVariables(object):
 
         :return: scalar, number of active dual variables (columns in the dual variable matrix)
         """
-        self._assert_is_initialized()
+        self.assert_is_initialized()
 
         return self._alphas.shape[1]
 
@@ -247,9 +294,83 @@ class DualVariables(object):
             tuple, candidate sequence associated with the active dual variable
         )
         """
-        self._assert_is_initialized()
+        self.assert_is_initialized()
 
         return self._iy[c]
+
+    def __sub__(self, other: DUALVARIABLES_T) -> DUALVARIABLES_T:
+        """
+        Creates an DualVariable object where:
+
+            a_sub(i, y) = a_self(i, y) - a_other(i, y)      for all i and y in Sigma_i
+
+        :param other: DualVariable, to subtract from 'self'
+
+        :return: DualVariable, defined over the same domain. The active dual variables are defined by the union of the
+            active dual variables of 'self' and 'other'. Only non-zero dual variables are active. The dual values
+            represent the difference between the dual values.
+        """
+
+        self.assert_is_initialized()
+        other.assert_is_initialized()
+
+        # Check the dual variables in 'other' are defined over the same examples and label sets
+        if not self._eq_dual_domain(self, other):
+            raise ValueError("Dual variables must be defined over the same domain and with the same regularization"
+                             "parameter C.")
+
+        # Determine the union of the active dual variables for both sets
+        _iy_union = list(set(self._iy + other._iy))
+        _alphas_union = []
+        for col, (i, y_seq) in enumerate(_iy_union):
+            # Get dual variable value from 'self' (or left)
+            try:
+                col = self._y2col[i][y_seq]
+                a_left = self._alphas[i, col]
+            except KeyError:
+                a_left = 0.0
+
+            # Get dual variable value from 'other' (or right)
+            try:
+                col = other._y2col[i][y_seq]
+                a_right = other._alphas[i, col]
+            except KeyError:
+                a_right = 0.0
+
+            _alphas_union.append(a_left - a_right)
+
+        # Remove all dual variables those value got zero by the subtraction
+        _iy = [(i, y_seq) for (i, y_seq), a in zip(_iy_union, _alphas_union) if a != 0]
+        _alphas = [a for a in _alphas_union if a != 0]
+
+        return DualVariables(C=self.C, cand_ids=self.l_cand_ids, initialize=False).set_alphas(_iy, _alphas)
+
+    @staticmethod
+    def _eq_dual_domain(left: DUALVARIABLES_T, right: DUALVARIABLES_T) -> bool:
+        """
+        Checks whether two DualVariables classes are defined over the same domain.
+        
+        :param left: DualVariable, first object 
+        
+        :param right: DualVariable, second object
+        
+        :return: boolean, indicating whether the two DualVariable classes are defined over the same domain.
+        """
+        if left.C != right.C:
+            return False
+
+        if left.N != right.N:
+            return False
+
+        for i in range(left.N):
+            if len(left.l_cand_ids[i]) != len(right.l_cand_ids[i]):
+                return False
+
+            for sigma in range(len(left.l_cand_ids[i])):
+                if set(left.l_cand_ids[i][sigma]) != set(right.l_cand_ids[i][sigma]):
+                    return False
+
+        return True
 
 
 class DualVariablesForExample(object):
@@ -699,6 +820,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
             xi += np.maximum(0, max_score - const[i])
         prim_obj = wtw / 2 + (self.C / N) * xi
         prim_obj = prim_obj.flatten().item()
+        assert prim_obj >= dual_obj
 
         return prim_obj, dual_obj, (prim_obj - dual_obj) / (np.abs(prim_obj) + 1)
 
