@@ -545,10 +545,10 @@ class StructuredSVMMetIdent(_StructuredSVM):
         self.batch_size = batch_size
 
         # States defining a fitted SSVM Model
-        self.K_train = None
+        self.K_train = None  # type: np.ndarray
         self.y_train = None
         self.fps_active = None
-        self.alphas = None
+        self.alphas = None  # type: DualVariables
         self.train_set = None
 
         super(StructuredSVMMetIdent, self).__init__(C=C, n_epochs=n_epochs, label_loss=label_loss, rs=rs)
@@ -655,16 +655,19 @@ class StructuredSVMMetIdent(_StructuredSVM):
                             y_val=None, X_orig_train=None, y_orig_train=None):
         print("Epoch: %d / %d" % (epoch, self.n_epochs))
 
-        prim_obj, dual_obj, duality_gap = self._evaluate_primal_and_dual_objective(
+        prim_obj, dual_obj, rel_duality_gap, lin_duality_gap = self._evaluate_primal_and_dual_objective(
             candidates, pre_calc_data={"lab_losses_active": lab_losses_active})
-        print("\tf(w) = %.5f; g(a) = %.5f; step-size = %.5f" % (prim_obj, dual_obj, stepsize))
+        print("\tf(w) = %.5f; g(a) = %.5f\n"
+              "\tstep-size = %.5f\n"
+              "\tRelative duality gap = %.5f; Linearized duality gap = %.5f"
+              % (prim_obj, dual_obj, stepsize, rel_duality_gap, lin_duality_gap))
 
         if train_summary_writer is not None:
             with train_summary_writer.as_default():
                 with tf.name_scope("Objective Functions"):
                     tf.summary.scalar("Primal", prim_obj, epoch)
                     tf.summary.scalar("Dual", dual_obj, epoch)
-                    tf.summary.scalar("Duality gap", duality_gap, epoch)
+                    tf.summary.scalar("Duality gap", rel_duality_gap, epoch)
 
                 with tf.name_scope("Optimizer"):
                     tf.summary.scalar("Number of active dual variables", self.alphas.n_active(), epoch)
@@ -694,6 +697,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
         :param alphas:
         :param y:
         :param candidates:
+        :param verbose:
         :return:
         """
         fps_active = np.zeros((self.alphas.n_active(), candidates.n_fps()))
@@ -792,7 +796,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
         return y_hat_i, score[max_idx]
 
     def _evaluate_primal_and_dual_objective(self, candidates: CandidateSetMetIdent, pre_calc_data: Dict) \
-            -> Tuple[float, float, float]:
+            -> Tuple[float, float, float, float]:
         """
         Function to calculate the dual and primal objective values.
 
@@ -822,7 +826,12 @@ class StructuredSVMMetIdent(_StructuredSVM):
         prim_obj = prim_obj.flatten().item()
         assert prim_obj >= dual_obj
 
-        return prim_obj, dual_obj, (prim_obj - dual_obj) / (np.abs(prim_obj) + 1)
+        # Calculate the different duality gaps
+        lin_duality_gap = prim_obj - dual_obj
+        assert lin_duality_gap >= 0
+        rel_duality_gap = lin_duality_gap / (np.abs(prim_obj) + 1)
+
+        return prim_obj, dual_obj, rel_duality_gap, lin_duality_gap
 
     def predict(self, X: np.ndarray, y: np.ndarray, candidates: CandidateSetMetIdent) -> Dict[int, np.ndarray]:
         """
