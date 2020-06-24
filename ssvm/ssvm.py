@@ -559,7 +559,7 @@ class _StructuredSVM(object):
 
 
 class StructuredSVMMetIdent(_StructuredSVM):
-    def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming", rs=None, batch_size=1):
+    def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming", rs=None, batch_size=1, stepsize="diminishing"):
         self.batch_size = batch_size
 
         # States defining a fitted SSVM Model
@@ -569,7 +569,8 @@ class StructuredSVMMetIdent(_StructuredSVM):
         self.alphas = None  # type: DualVariables
         self.train_set = None
 
-        super(StructuredSVMMetIdent, self).__init__(C=C, n_epochs=n_epochs, label_loss=label_loss, rs=rs)
+        super(StructuredSVMMetIdent, self).__init__(C=C, n_epochs=n_epochs, label_loss=label_loss, rs=rs,
+                                                    stepsize=stepsize)
 
     def fit(self, X: np.ndarray, y: np.ndarray, candidates: CandidateSetMetIdent, num_init_active_vars_per_seq=1,
             train_summary_writer: Optional[ResourceSummaryWriter] = None):

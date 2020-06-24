@@ -43,7 +43,7 @@ if __name__ == "__main__":
     X, fps, mols, mols2cand = read_data(idir)
 
     # Get a smaller subset
-    _, subset = next(ShuffleSplit(n_splits=1, test_size=0.075, random_state=1989).split(X))
+    _, subset = next(ShuffleSplit(n_splits=1, test_size=0.1, random_state=1989).split(X))
     X = X[np.ix_(subset, subset)]
     fps = fps[subset]
     mols = mols[subset]
@@ -67,11 +67,11 @@ if __name__ == "__main__":
     # Tensorflow training summary log-file
     current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     train_log_dir = 'logs/' + current_time + '/train'
-    train_summary_writer = None  # tf_summary.create_file_writer(train_log_dir)
+    train_summary_writer = tf_summary.create_file_writer(train_log_dir)
 
     start = timer()
 
-    svm = StructuredSVMMetIdent(C=300, rs=928, n_epochs=100, batch_size=4) \
+    svm = StructuredSVMMetIdent(C=64, rs=928, n_epochs=250, batch_size=16, stepsize="linesearch") \
         .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=1,
              train_summary_writer=train_summary_writer)
 
