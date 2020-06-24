@@ -298,6 +298,19 @@ class DualVariables(object):
 
         return self._iy[c]
 
+    def get_blocks(self, i: Union[List[int], np.ndarray, int]) -> Tuple[List[Tuple[int, Tuple]], List[float]]:
+        i = np.atleast_1d(i)
+        assert np.all(np.isin(i, np.arange(self.N)))
+
+        iy = []
+        a = []
+        for _i in i:
+            for y_seq in self._y2col[_i]:
+                iy.append((_i, y_seq))
+                a.append(self.get_dual_variable(_i, y_seq))
+
+        return iy, a
+
     def __sub__(self, other: DUALVARIABLES_T) -> DUALVARIABLES_T:
         """
         Creates an DualVariable object where:
@@ -482,7 +495,7 @@ class DualVariablesForExample(object):
 
 
 class _StructuredSVM(object):
-    def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming", rs=None):
+    def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming", rs=None, stepsize="diminishing"):
         """
         Structured Support Vector Machine (SSVM) class.
 
@@ -498,6 +511,11 @@ class _StructuredSVM(object):
             self.label_loss_fun = hamming_loss
         else:
             raise ValueError("Invalid label loss '%s'. Choices are 'hamming'.")
+
+        self.stepsize = stepsize
+        if self.stepsize not in ["diminishing", "linesearch"]:
+            raise ValueError("Invalid stepsize method '%s'. Choices are 'diminishing' and 'linesearch'." %
+                             self.stepsize)
 
         self.rs = check_random_state(rs)  # type: np.random.RandomState
 
@@ -584,8 +602,8 @@ class StructuredSVMMetIdent(_StructuredSVM):
         # Pre-calculate some data needed for the sub-problem solving
         lab_losses = {}
         mol_kernel_l_y = {}
-        for k, s in tqdm(list(it.product(range(self.n_epochs), range(self.batch_size))), desc="Pre-calculate data"):
-            i = i_k[k][s]
+        for k, res_k in tqdm(list(it.product(range(self.n_epochs), range(self.batch_size))), desc="Pre-calculate data"):
+            i = i_k[k][res_k]
 
             # Check whether the relevant stuff was already pre-computed
             if y[i] in lab_losses:
@@ -606,7 +624,8 @@ class StructuredSVMMetIdent(_StructuredSVM):
         print("100")
 
         # Collect active candidate fingerprints and losses
-        self.fps_active, lab_losses_active = self._initialize_active_fingerprints_and_losses(candidates, verbose=True)
+        self.fps_active, lab_losses_active = self._get_active_fingerprints_and_losses(
+            self.alphas, self.y_train, candidates, verbose=True)
 
         k = 0
         if train_summary_writer is None:
@@ -618,12 +637,15 @@ class StructuredSVMMetIdent(_StructuredSVM):
         while k < self.n_epochs:
             # Find the most violating example
             # TODO: Can we solve the sub-problem for a full batch at the same time?
-            res_k = [self._solve_sub_problem(i, candidates, pre_calc_data={"lab_losses": lab_losses,
-                                                                           "mol_kernel_l_y": mol_kernel_l_y})
-                     for i in i_k[k]]
+            res_k = [self._solve_sub_problem(
+                i, candidates, pre_calc_data={"lab_losses": lab_losses, "mol_kernel_l_y": mol_kernel_l_y})
+                for i in i_k[k]]
 
             # Get step-width
-            gamma = self._get_diminishing_stepwidth(k, N)
+            if self.stepsize == "diminishing":
+                gamma = self._get_diminishing_stepwidth(k, N)
+            elif self.stepsize == "linesearch":
+                gamma = self._get_linesearch_stepwidth(i_k[k], res_k, candidates)
 
             # Update the dual variables
             for idx, i in enumerate(i_k[k]):
@@ -692,7 +714,8 @@ class StructuredSVMMetIdent(_StructuredSVM):
                     for tpk in [1, 5, 10, 20]:
                         tf.summary.scalar("Top-%d (training)" % tpk, acc_k_train[tpk - 1], epoch)
 
-    def _initialize_active_fingerprints_and_losses(self, candidates: CandidateSetMetIdent, verbose=False):
+    def _get_active_fingerprints_and_losses(self, alphas: DualVariables, y: np.ndarray,
+                                            candidates: CandidateSetMetIdent, verbose=False):
         """
         :param alphas:
         :param y:
@@ -700,19 +723,19 @@ class StructuredSVMMetIdent(_StructuredSVM):
         :param verbose:
         :return:
         """
-        fps_active = np.zeros((self.alphas.n_active(), candidates.n_fps()))
-        lab_losses_active = np.zeros((self.alphas.n_active(), ))
+        fps_active = np.zeros((alphas.n_active(), candidates.n_fps()))
+        lab_losses_active = np.zeros((alphas.n_active(), ))
 
-        itr = range(self.alphas.n_active())
+        itr = range(alphas.n_active())
         if verbose:
             itr = tqdm(itr, desc="Collect active fingerprints and losses")
 
         for c in itr:
-            j, ybar = self.alphas.get_iy_for_col(c)
+            j, ybar = alphas.get_iy_for_col(c)
             # Get the fingerprints of the active candidates for example j
-            fps_active[c] = candidates.get_candidates_fp(self.y_train[j], ybar)
+            fps_active[c] = candidates.get_candidates_fp(y[j], ybar)
             # Get label loss between the active fingerprint candidate and its corresponding gt fingerprint
-            lab_losses_active[c] = self.label_loss_fun(candidates.get_gt_fp(self.y_train[j]), fps_active[c])
+            lab_losses_active[c] = self.label_loss_fun(candidates.get_gt_fp(y[j]), fps_active[c])
 
         return fps_active, lab_losses_active
 
@@ -921,6 +944,37 @@ class StructuredSVMMetIdent(_StructuredSVM):
                              % score_type)
 
         return acc_k
+
+    def _get_linesearch_stepwidth(self, is_k: List[int], res_k: List[Tuple[Tuple, float]],
+                                  candidates: CandidateSetMetIdent) -> float:
+        """
+
+        :param is_k:
+        :param res_k:
+        :param candidates:
+        :return:
+        """
+        alpha_iy, alpha_a = self.alphas.get_blocks(is_k)
+        s_iy, s_a = [], self.C / len(self.y_train)
+        for idx, i in enumerate(is_k):
+            s_iy.append((i, res_k[idx][0]))
+        s_minus_a = DualVariables(self.C, self.alphas.l_cand_ids, initialize=False).set_alphas(s_iy, s_a) \
+            - DualVariables(self.C, self.alphas.l_cand_ids, initialize=False).set_alphas(alpha_iy, alpha_a)
+
+        B_S = self.alphas.get_dual_variable_matrix(type="csr")
+        bB_bS = s_minus_a.get_dual_variable_matrix(type="csr")  # shape = (N, |\bar{S}|)
+        bS, bl = self._get_active_fingerprints_and_losses(s_minus_a, self.y_train, candidates, verbose=False)
+        L_bS = candidates.get_kernel(bS, candidates.get_gt_fp(self.y_train))  # shape = (|\bar{S}|, N)
+        L_bSS = candidates.get_kernel(bS, self.fps_active)  # shape = (|\bar{S}|, |S|)
+        L_bSbS = candidates.get_kernel(bS)  # shape = (|\bar{S}|, |\bar{S}|)
+
+        s_minus_aTATAa = np.sum(self.K_train * (bB_bS @ (- self.C / len(self.y_train) * L_bS + L_bSS @ B_S.T)))
+        a_minus_sTbl = np.sum(bB_bS @ bl)
+
+        nom = a_minus_sTbl - s_minus_aTATAa
+        den = np.sum(self.K_train * (bB_bS @ L_bSbS @ bB_bS.T))
+
+        return np.maximum(0, np.minimum(1, nom / den))
 
 
 class StructuredSVMSequences(_StructuredSVM):

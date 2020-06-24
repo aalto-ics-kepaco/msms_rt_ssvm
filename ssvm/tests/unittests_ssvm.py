@@ -118,8 +118,8 @@ class TestStructuredSVMMetIdent(unittest.TestCase):
         """
         i = 10
 
-        self.ssvm.fps_active, lab_losses_active = self.ssvm._initialize_active_fingerprints_and_losses(
-            self.cand, verbose=True)
+        self.ssvm.fps_active, lab_losses_active = self.ssvm._get_active_fingerprints_and_losses(
+            self.ssvm.alphas, self.ssvm.y_train, self.cand, verbose=True)
         scores = self.ssvm._get_candidate_scores(i, self.cand, {"lab_losses_active": lab_losses_active})
 
         fps_gt_i = self.cand.get_gt_fp(self.ssvm.y_train[i])[np.newaxis, :]
