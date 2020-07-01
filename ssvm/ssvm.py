@@ -603,19 +603,13 @@ class StructuredSVMMetIdent(_StructuredSVM):
         # Pre-calculate some data needed for the sub-problem solving
         lab_losses = {}
         mol_kernel_l_y = {}
-        for k, res_k in tqdm(list(it.product(range(self.n_epochs), range(self.batch_size))), desc="Pre-calculate data"):
-            i = i_k[k][res_k]
-
-            # Check whether the relevant stuff was already pre-computed
-            if y[i] in lab_losses:
-                continue
-
+        for y_i in tqdm(self.y_train, desc="Pre-calculate data"):
             # Pre-calculate the label loss: Loss of the gt fingerprint to all corresponding candidate fingerprints of i
-            fp_i = candidates.get_gt_fp(y[i])
-            lab_losses[y[i]] = self.label_loss_fun(fp_i, candidates.get_candidates_fp(y[i]))
+            fp_i = candidates.get_gt_fp(y_i)
+            lab_losses[y_i] = self.label_loss_fun(fp_i, candidates.get_candidates_fp(y_i))
 
             # Pre-calculate the kernels between the training examples and candidates
-            mol_kernel_l_y[y[i]] = candidates.getMolKernel_ExpVsCand(y, y[i]).T  # shape = (|Sigma_i|, N)
+            mol_kernel_l_y[y_i] = candidates.getMolKernel_ExpVsCand(self.y_train, y_i).T  # shape = (|Sigma_i|, N)
 
         # Initialize dual variables
         print("Initialize dual variables: ...", end="")
@@ -633,10 +627,17 @@ class StructuredSVMMetIdent(_StructuredSVM):
         L_S = candidates.get_kernel(self.fps_active, candidates.get_gt_fp(self.y_train))  # shape = (|S|, N)
         L_SS = candidates.get_kernel(self.fps_active)  # shape = (|S|, |S|)
 
+        mol_kernel_L_S_Ci = {}
+        for y_i in tqdm(self.y_train, desc="Pre-calculate L_S_Ci kernels"):
+            mol_kernel_L_S_Ci[y_i] = candidates.get_kernel(self.fps_active, candidates.get_candidates_fp(y_i))
+            # shape = (|S|, |C_i|)
+
         k = 0
         if train_summary_writer is None:
             self._write_debug_output(0, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
-                                         "L_SS": L_SS}, candidates, np.nan)
+                                         "L_SS": L_SS, "mol_kernel_l_y": mol_kernel_l_y, "lab_losses": lab_losses,
+                                         "mol_kernel_L_S_Ci": mol_kernel_L_S_Ci},
+                                     candidates, np.nan)
         else:
             self._write_debug_output(0, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
                                          "L_SS": L_SS}, candidates, np.nan, train_summary_writer, X_val,
@@ -705,9 +706,19 @@ class StructuredSVMMetIdent(_StructuredSVM):
                     L_SS = _L_SS
                     assert np.all(np.equal(L_SS, L_SS.T))
 
+                    # Update the L_S_Ci matrices
+                    for y_i in self.y_train:
+                        mol_kernel_L_S_Ci[y_i].resize((mol_kernel_L_S_Ci[y_i].shape[0] + _n_added_active_vars,
+                                                       mol_kernel_L_S_Ci[y_i].shape[1]), refcheck=False)
+                        mol_kernel_L_S_Ci[y_i][-_n_added_active_vars:] = candidates.get_kernel(
+                            self.fps_active[-_n_added_active_vars:], candidates.get_candidates_fp(y_i))
+                        assert not np.any(np.isnan(mol_kernel_L_S_Ci[y_i]))
+
                 if train_summary_writer is None:
                     self._write_debug_output(k + 1, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
-                                                     "L_SS": L_SS}, candidates, gamma)
+                                                     "L_SS": L_SS, "mol_kernel_l_y": mol_kernel_l_y,
+                                                     "lab_losses": lab_losses, "mol_kernel_L_S_Ci": mol_kernel_L_S_Ci},
+                                             candidates, gamma)
                 else:
                     self._write_debug_output(k + 1, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
                                                      "L_SS": L_SS}, candidates, gamma,
@@ -833,8 +844,17 @@ class StructuredSVMMetIdent(_StructuredSVM):
         :return: array-like, shape = (|Sigma_i|, )
         """
         # Get candidate fingerprints for all y in Sigma_i
-        fps_Ci = candidates.get_candidates_fp(self.y_train[i])
-        L_Ci_S = candidates.get_kernel(fps_Ci, self.fps_active)  # shape = (|Sigma_i|, |S|)
+        if "mol_kernel_L_S_Ci" not in pre_calc_data or "mol_kernel_l_y" not in pre_calc_data:
+            fps_Ci = candidates.get_candidates_fp(self.y_train[i])
+        else:
+            fps_Ci = None
+
+        if "mol_kernel_L_S_Ci" in pre_calc_data:
+            L_Ci_S = pre_calc_data["mol_kernel_L_S_Ci"][self.y_train[i]].T
+            assert L_Ci_S.shape[1] == self.fps_active.shape[0]
+        else:
+            L_Ci_S = candidates.get_kernel(fps_Ci, self.fps_active)
+        # L_Ci_S with shape = (|Sigma_i|, |S|)
 
         if "mol_kernel_l_y" in pre_calc_data:
             L_Ci = pre_calc_data["mol_kernel_l_y"][self.y_train[i]]
