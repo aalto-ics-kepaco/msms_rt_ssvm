@@ -25,7 +25,6 @@
 ####
 import os
 import argparse
-import subprocess
 import tensorflow as tf
 import numpy as np
 
@@ -36,6 +35,7 @@ from sklearn.model_selection import GroupKFold
 from ssvm.ssvm import StructuredSVMMetIdent
 from ssvm.examples.utils import read_data
 from ssvm.data_structures import CandidateSetMetIdent
+from ssvm.development.utils import get_git_revision_short_hash
 
 
 HP_C = hp.HParam("C", hp.Discrete([1, 8, 64, 512, 1024]))
@@ -43,13 +43,6 @@ HP_BATCH_SIZE = hp.HParam("batch_size", hp.Discrete([1, 4, 8, 16]))
 HP_NUM_INIT_ACT_VAR = hp.HParam("num_init_act_var", hp.Discrete([1, 6, 12]))
 HP_GRID = list(product(HP_C.domain.values, HP_BATCH_SIZE.domain.values, HP_NUM_INIT_ACT_VAR.domain.values))
 N_TOTAL_PAR_TUP = len(HP_GRID)
-
-
-def get_git_revision_short_hash():
-    """
-    Source: https://stackoverflow.com/a/21901260
-    """
-    return str(subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).strip(), 'utf-8')
 
 
 def get_argument_parser() -> argparse.ArgumentParser:
