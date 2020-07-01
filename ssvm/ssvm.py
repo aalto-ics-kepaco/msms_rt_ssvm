@@ -27,7 +27,7 @@ import numpy as np
 import itertools as it
 import tensorflow as tf
 
-from typing import List, ItemsView, Tuple, ValuesView, KeysView, Iterator, Dict, Union, Optional
+from typing import List, ItemsView, Tuple, ValuesView, KeysView, Iterator, Dict, Union, Optional, TypeVar
 from sklearn.utils.validation import check_random_state
 from sklearn.model_selection import GroupKFold
 from scipy.sparse import csc_matrix, lil_matrix, csr_matrix
@@ -38,9 +38,11 @@ from ssvm.data_structures import SequenceSample, CandidateSetMetIdent
 from ssvm.loss_functions import hamming_loss
 from ssvm.evaluation_tools import get_topk_performance_csifingerid
 
+DUALVARIABLES_T = TypeVar('DUALVARIABLES_T', bound='DualVariables')
+
 
 class DualVariables(object):
-    def __init__(self, C: float, cand_ids: List[List[List[str]]], num_init_active_vars=1, rs=None):
+    def __init__(self, C: float, cand_ids: List[List[List[str]]], num_init_active_vars=1, rs=None, initialize=True):
         """
 
         :param C: scalar, regularization parameter of the Structured SVM
@@ -66,6 +68,9 @@ class DualVariables(object):
             If seed is an int, return a new RandomState instance seeded with seed.
             If seed is already a RandomState instance, return it.
             Otherwise raise ValueError.
+
+        :param initialize: boolean, indicating whether the dual variables should be initialized upon object
+            construction.
         """
         self.C = C
         assert self.C > 0, "The regularization parameter must be positive."
@@ -79,10 +84,38 @@ class DualVariables(object):
         self.num_init_active_vars = num_init_active_vars
         assert self.num_init_active_vars > 0
 
-        # Initialize the dual variables
-        self._alphas, self._y2col, self._iy = self._get_initial_alphas()
+        if initialize:
+            # Initialize the dual variables
+            self.initialize_alphas()
+        else:
+            self._alphas = None
+            self._y2col = None
+            self._iy = None
 
-    def _get_initial_alphas(self) -> Tuple[lil_matrix, List[Dict], List[Tuple]]:
+    def _assert_input_iy(self, i: int, y_seq: Tuple):
+        """
+        :raises: ValueError, if the label sequence 'y_seq' is not valid for example 'i'.
+
+        :param i, scalar, sequence example index
+        :param y_seq: tuple of strings, sequence of candidate indices identifying the dual variable
+        """
+        # Test: Are we trying to update a valid label sequence for the current example
+        for sigma, y_sigma in enumerate(y_seq):
+            if y_sigma not in self.l_cand_ids[i][sigma]:
+                raise ValueError("For example %d at sequence element %d the label %s does not exist." %
+                                 (i, sigma, y_sigma))
+
+    def _is_initialized(self):
+        if (self._alphas is None) or (self._y2col is None) or (self._iy is None):
+            return False
+
+        return True
+
+    def assert_is_initialized(self):
+        if not self._is_initialized():
+            raise RuntimeError("Dual variables are not initialized. Call 'initialize_alphas' first.")
+
+    def initialize_alphas(self):
         """
         Return initialized dual variables.
 
@@ -124,20 +157,54 @@ class DualVariables(object):
         # TODO For faster verification of the label sequence correctness, we transform all candidate set lists in to sets
         # self.l_cand_ids = [for cand_ids_seq in (for cand_ids_exp in self.l_cand_ids)]
 
-        return _alphas, _y2col, _iy
+        self._alphas = _alphas
+        self._y2col = _y2col
+        self._iy = _iy
 
-    def _assert_input_iy(self, i: int, y_seq: Tuple):
+    def set_alphas(self, iy: List[Tuple[int, Tuple]], alphas: Union[float, List[float], np.ndarray]) -> DUALVARIABLES_T:
         """
-        :raises: ValueError, if the label sequence 'y_seq' is not valid for example 'i'.
+        Sets the values for the active dual variables. Class must not be initialized before. This function does not
+        do any checks on the feasibility of the resulting DualVariable object.
 
-        :param i, scalar, sequence example index
-        :param y_seq: tuple of strings, sequence of candidate indices identifying the dual variable
+        :param iy: List of tuples, collecting the active dual variables.
+
+        :param alphas: List or scalar, dual value(s) corresponding to the active variables. If a scalar is provided, its
+            repeated to the length of 'iy'.
+
+        :return: The DualVariable class itself.
         """
-        # Test: Are we trying to update a valid label sequence for the current example
-        for sigma, y_sigma in enumerate(y_seq):
-            if y_sigma not in self.l_cand_ids[i][sigma]:
-                raise ValueError("For example %d at sequence element %d the label %s does not exist." %
-                                 (i, sigma, y_sigma))
+        if isinstance(alphas, List) or isinstance(alphas, np.ndarray):
+            if len(iy) != len(alphas):
+                raise ValueError("Number of dual variables values must be equal the number of active dual variables.")
+        elif np.isscalar(alphas):
+            alphas = [alphas] * len(iy)
+        else:
+            raise ValueError("Dual variables must be passed as list or scalar.")
+
+        if self._is_initialized():
+            raise RuntimeError("Cannot set alphas of an already initialized dual variable. Use 'update' function "
+                               "instead.")
+
+        _alphas = lil_matrix((self.N, len(iy)))
+        _y2col = [{} for _ in range(self.N)]
+
+        for col, ((i, y_seq), a) in enumerate(zip(iy, alphas)):
+            # Check that the dual variables that are supposed to be set, are actually valid, i.e. the corresponding
+            # label sets contain the provided sequences.
+            self._assert_input_iy(i, y_seq)
+
+            if y_seq in _y2col[i]:
+                raise ValueError("Each active dual variable should only appear ones in the provided set. Does not hold"
+                                 "for example 'i=%d' with sequence 'y_seq=%s'" % (i, y_seq))
+
+            _alphas[i, col] = a
+            _y2col[i][y_seq] = col
+
+        self._alphas = _alphas
+        self._y2col = _y2col
+        self._iy = iy
+
+        return self
 
     def update(self, i: int, y_seq: Tuple, gamma: float) -> bool:
         """
@@ -147,6 +214,7 @@ class DualVariables(object):
         :param y_seq: tuple of strings, sequence of candidate indices identifying the dual variable
         :param gamma: scalar, step-width used to update the dual variable value
         """
+        self.assert_is_initialized()
         self._assert_input_iy(i, y_seq)
 
         try:
@@ -177,6 +245,7 @@ class DualVariables(object):
 
         :return: scalar, dual variable value
         """
+        self.assert_is_initialized()
         self._assert_input_iy(i, y_seq)
 
         try:
@@ -193,6 +262,8 @@ class DualVariables(object):
 
         :return: csr_matrix, shape = (N, n_active_dual)
         """
+        self.assert_is_initialized()
+
         if type == "csr":
             return csr_matrix(self._alphas)
         elif type == "csc":
@@ -206,6 +277,8 @@ class DualVariables(object):
 
         :return: scalar, number of active dual variables (columns in the dual variable matrix)
         """
+        self.assert_is_initialized()
+
         return self._alphas.shape[1]
 
     def get_iy_for_col(self, c: int) -> Tuple[int, Tuple]:
@@ -221,7 +294,96 @@ class DualVariables(object):
             tuple, candidate sequence associated with the active dual variable
         )
         """
+        self.assert_is_initialized()
+
         return self._iy[c]
+
+    def get_blocks(self, i: Union[List[int], np.ndarray, int]) -> Tuple[List[Tuple[int, Tuple]], List[float]]:
+        i = np.atleast_1d(i)
+        assert np.all(np.isin(i, np.arange(self.N)))
+
+        iy = []
+        a = []
+        for _i in i:
+            for y_seq in self._y2col[_i]:
+                iy.append((_i, y_seq))
+                a.append(self.get_dual_variable(_i, y_seq))
+
+        return iy, a
+
+    def __sub__(self, other: DUALVARIABLES_T) -> DUALVARIABLES_T:
+        """
+        Creates an DualVariable object where:
+
+            a_sub(i, y) = a_self(i, y) - a_other(i, y)      for all i and y in Sigma_i
+
+        :param other: DualVariable, to subtract from 'self'
+
+        :return: DualVariable, defined over the same domain. The active dual variables are defined by the union of the
+            active dual variables of 'self' and 'other'. Only non-zero dual variables are active. The dual values
+            represent the difference between the dual values.
+        """
+
+        self.assert_is_initialized()
+        other.assert_is_initialized()
+
+        # Check the dual variables in 'other' are defined over the same examples and label sets
+        if not self._eq_dual_domain(self, other):
+            raise ValueError("Dual variables must be defined over the same domain and with the same regularization"
+                             "parameter C.")
+
+        # Determine the union of the active dual variables for both sets
+        _iy_union = list(set(self._iy + other._iy))
+        _alphas_union = []
+        for col, (i, y_seq) in enumerate(_iy_union):
+            # Get dual variable value from 'self' (or left)
+            try:
+                col = self._y2col[i][y_seq]
+                a_left = self._alphas[i, col]
+            except KeyError:
+                a_left = 0.0
+
+            # Get dual variable value from 'other' (or right)
+            try:
+                col = other._y2col[i][y_seq]
+                a_right = other._alphas[i, col]
+            except KeyError:
+                a_right = 0.0
+
+            _alphas_union.append(a_left - a_right)
+
+        # Remove all dual variables those value got zero by the subtraction
+        _iy = [(i, y_seq) for (i, y_seq), a in zip(_iy_union, _alphas_union) if a != 0]
+        _alphas = [a for a in _alphas_union if a != 0]
+
+        return DualVariables(C=self.C, cand_ids=self.l_cand_ids, initialize=False).set_alphas(_iy, _alphas)
+
+    @staticmethod
+    def _eq_dual_domain(left: DUALVARIABLES_T, right: DUALVARIABLES_T) -> bool:
+        """
+        Checks whether two DualVariables classes are defined over the same domain.
+        
+        :param left: DualVariable, first object 
+        
+        :param right: DualVariable, second object
+        
+        :return: boolean, indicating whether the two DualVariable classes are defined over the same domain.
+        """
+        if left.C != right.C:
+            return False
+
+        if left.N != right.N:
+            return False
+
+        for i in range(left.N):
+            if len(left.l_cand_ids[i]) != len(right.l_cand_ids[i]):
+                return False
+
+            for sigma in range(len(left.l_cand_ids[i])):
+                if set(left.l_cand_ids[i][sigma]) != set(right.l_cand_ids[i][sigma]):
+                    return False
+
+        return True
 
 
 class DualVariablesForExample(object):
@@ -333,7 +495,7 @@ class DualVariablesForExample(object):
 
 
 class _StructuredSVM(object):
-    def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming", rs=None):
+    def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming", rs=None, stepsize="diminishing"):
         """
         Structured Support Vector Machine (SSVM) class.
 
@@ -349,6 +511,11 @@ class _StructuredSVM(object):
             self.label_loss_fun = hamming_loss
         else:
             raise ValueError("Invalid label loss '%s'. Choices are 'hamming'.")
+
+        self.stepsize = stepsize
+        if self.stepsize not in ["diminishing", "linesearch"]:
+            raise ValueError("Invalid stepsize method '%s'. Choices are 'diminishing' and 'linesearch'." %
+                             self.stepsize)
 
         self.rs = check_random_state(rs)  # type: np.random.RandomState
 
@@ -392,17 +559,18 @@ class _StructuredSVM(object):
 
 
 class StructuredSVMMetIdent(_StructuredSVM):
-    def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming", rs=None, batch_size=1):
+    def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming", rs=None, batch_size=1, stepsize="diminishing"):
         self.batch_size = batch_size
 
         # States defining a fitted SSVM Model
-        self.K_train = None
+        self.K_train = None  # type: np.ndarray
         self.y_train = None
         self.fps_active = None
-        self.alphas = None
+        self.alphas = None  # type: DualVariables
         self.train_set = None
 
-        super(StructuredSVMMetIdent, self).__init__(C=C, n_epochs=n_epochs, label_loss=label_loss, rs=rs)
+        super(StructuredSVMMetIdent, self).__init__(C=C, n_epochs=n_epochs, label_loss=label_loss, rs=rs,
+                                                    stepsize=stepsize)
 
     def fit(self, X: np.ndarray, y: np.ndarray, candidates: CandidateSetMetIdent, num_init_active_vars_per_seq=1,
             train_summary_writer: Optional[ResourceSummaryWriter] = None):
@@ -435,8 +603,8 @@ class StructuredSVMMetIdent(_StructuredSVM):
         # Pre-calculate some data needed for the sub-problem solving
         lab_losses = {}
         mol_kernel_l_y = {}
-        for k, s in tqdm(list(it.product(range(self.n_epochs), range(self.batch_size))), desc="Pre-calculate data"):
-            i = i_k[k][s]
+        for k, res_k in tqdm(list(it.product(range(self.n_epochs), range(self.batch_size))), desc="Pre-calculate data"):
+            i = i_k[k][res_k]
 
             # Check whether the relevant stuff was already pre-computed
             if y[i] in lab_losses:
@@ -457,65 +625,115 @@ class StructuredSVMMetIdent(_StructuredSVM):
         print("100")
 
         # Collect active candidate fingerprints and losses
-        self.fps_active, lab_losses_active = self._initialize_active_fingerprints_and_losses(candidates, verbose=True)
+        self.fps_active, lab_losses_active = self._get_active_fingerprints_and_losses(
+            self.alphas, self.y_train, candidates, verbose=True)
+
+        # Pre-calculate kernel molecule kernel matrices
+        L = candidates.getMolKernel_ExpVsExp(self.y_train)  # shape = (N, N)
+        L_S = candidates.get_kernel(self.fps_active, candidates.get_gt_fp(self.y_train))  # shape = (|S|, N)
+        L_SS = candidates.get_kernel(self.fps_active)  # shape = (|S|, |S|)
 
         k = 0
         if train_summary_writer is None:
-            self._write_debug_output(0, lab_losses_active, candidates, np.nan)
+            self._write_debug_output(0, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
+                                         "L_SS": L_SS}, candidates, np.nan)
         else:
-            self._write_debug_output(0, lab_losses_active, candidates, np.nan, train_summary_writer, X_val,
+            self._write_debug_output(0, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
+                                         "L_SS": L_SS}, candidates, np.nan, train_summary_writer, X_val,
                                      y_val, X_orig_train, self.y_train)
 
         while k < self.n_epochs:
             # Find the most violating example
             # TODO: Can we solve the sub-problem for a full batch at the same time?
-            res_k = [self._solve_sub_problem(i, candidates, pre_calc_data={"lab_losses": lab_losses,
-                                                                           "mol_kernel_l_y": mol_kernel_l_y})
-                     for i in i_k[k]]
+            res_k = [self._solve_sub_problem(
+                i, candidates, pre_calc_data={"lab_losses": lab_losses, "mol_kernel_l_y": mol_kernel_l_y})
+                for i in i_k[k]]
 
             # Get step-width
-            gamma = self._get_diminishing_stepwidth(k, N)
+            if self.stepsize == "diminishing":
+                gamma = self._get_diminishing_stepwidth(k, N)
+            elif self.stepsize == "linesearch":
+                gamma = self._get_linesearch_stepwidth(i_k[k], res_k, candidates)
 
             # Update the dual variables
+            new_fps = np.full((self.batch_size, self.fps_active.shape[1]), fill_value=np.nan)
+            new_losses = np.full((self.batch_size,), fill_value=np.nan)
+            _lst_row = 0
             for idx, i in enumerate(i_k[k]):
                 y_i_hat = res_k[idx][0]
                 if self.alphas.update(i, y_i_hat, gamma):
                     # Add the fingerprint belonging to the newly added active dual variable
-                    self.fps_active.resize(self.fps_active.shape[0] + 1, self.fps_active.shape[1])
-                    self.fps_active[self.fps_active.shape[0] - 1] = candidates.get_candidates_fp(y[i], y_i_hat)
+                    new_fps[_lst_row, :] = candidates.get_candidates_fp(y[i], y_i_hat)
 
                     # Add the label loss belonging to the newly added active dual variable
-                    lab_losses_active.resize(lab_losses_active.shape[0] + 1)
-                    lab_losses_active[lab_losses_active.shape[0] - 1] = self.label_loss_fun(
-                        self.fps_active[self.fps_active.shape[0] - 1], candidates.get_gt_fp(y[i]))
+                    new_losses[_lst_row] = self.label_loss_fun(new_fps[_lst_row], candidates.get_gt_fp(y[i]))
+
+                    _lst_row += 1
+
+            # Update the 'fps_active', 'lab_losses_active', 'L_S' and 'L_SS'
+            # WARNING: ndarray.resize will change the data structure if we add extend along an axis other than 0.
+            _old_nrow = self.fps_active.shape[0]
+            self.fps_active.resize((self.fps_active.shape[0] + _lst_row, self.fps_active.shape[1]), refcheck=False)
+            self.fps_active[_old_nrow:] = new_fps[:_lst_row]
+            assert not np.any(np.isnan(self.fps_active))
+
+            # Add the label loss belonging to the newly added active dual variable
+            assert _old_nrow == lab_losses_active.shape[0]
+            lab_losses_active.resize((lab_losses_active.shape[0] + _lst_row, ), refcheck=False)
+            lab_losses_active[_old_nrow:] = new_losses[:_lst_row]
+            assert not np.any(np.isnan(lab_losses_active))
 
             assert self._is_feasible_matrix(self.alphas, self.C), "Dual variables not feasible anymore after update."
 
             if (((k + 1) % 10) == 0) or ((k + 1) == self.n_epochs):
+                # Update the L_S and L_SS
+                _n_added_active_vars = self.fps_active.shape[0] - L_S.shape[0]
+                print(self.fps_active.shape[0], L_S.shape[0], _n_added_active_vars)
+                # L_S: Old shape (|S|, N) --> new shape (|S| + n_added, N)
+                L_S.resize((L_S.shape[0] + _n_added_active_vars, L_S.shape[1]), refcheck=False)
+                L_S[-_n_added_active_vars:] = candidates.get_kernel(self.fps_active[-_n_added_active_vars:],
+                                                                    candidates.get_gt_fp(self.y_train))
+
+                # L_SS: Old shape (|S|, |S|) --> new shape (|S| + n_added, |S| + n_added)
+                new_entries = candidates.get_kernel(self.fps_active[-_n_added_active_vars:],
+                                                    self.fps_active)  # shape = (n_added, |S| + n_added)
+                _L_SS = np.zeros((L_SS.shape[0] + _n_added_active_vars, L_SS.shape[1] + _n_added_active_vars))
+                _L_SS[:L_SS.shape[0], :L_SS.shape[1]] = L_SS
+                _L_SS[L_SS.shape[0]:, :] = new_entries
+                _L_SS[:, L_SS.shape[1]:] = new_entries.T
+                L_SS = _L_SS
+                assert np.all(np.equal(L_SS, L_SS.T))
+
                 if train_summary_writer is None:
-                    self._write_debug_output(k + 1, lab_losses_active, candidates, gamma)
+                    self._write_debug_output(k + 1, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
+                                                     "L_SS": L_SS}, candidates, gamma)
                 else:
-                    self._write_debug_output(k + 1, lab_losses_active, candidates, gamma, train_summary_writer, X_val,
+                    self._write_debug_output(k + 1, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
+                                                     "L_SS": L_SS}, candidates, gamma,
+                                             train_summary_writer, X_val,
                                              y_val, X_orig_train, self.y_train)
 
             k += 1
 
         return self
 
-    def _write_debug_output(self, epoch, lab_losses_active, candidates, stepsize, train_summary_writer=None, X_val=None,
+    def _write_debug_output(self, epoch, pre_calc_data, candidates, stepsize, train_summary_writer=None, X_val=None,
                             y_val=None, X_orig_train=None, y_orig_train=None):
         print("Epoch: %d / %d" % (epoch, self.n_epochs))
 
-        prim_obj, dual_obj, duality_gap = self._evaluate_primal_and_dual_objective(
-            candidates, pre_calc_data={"lab_losses_active": lab_losses_active})
-        print("\tf(w) = %.5f; g(a) = %.5f; step-size = %.5f" % (prim_obj, dual_obj, stepsize))
+        prim_obj, dual_obj, rel_duality_gap, lin_duality_gap = self._evaluate_primal_and_dual_objective(
+            candidates, pre_calc_data=pre_calc_data)
+        print("\tf(w) = %.5f; g(a) = %.5f\n"
+              "\tstep-size = %.5f\n"
+              "\tRelative duality gap = %.5f; Linearized duality gap = %.5f"
+              % (prim_obj, dual_obj, stepsize, rel_duality_gap, lin_duality_gap))
 
         if train_summary_writer is not None:
             with train_summary_writer.as_default():
                 with tf.name_scope("Objective Functions"):
                     tf.summary.scalar("Primal", prim_obj, epoch)
                     tf.summary.scalar("Dual", dual_obj, epoch)
-                    tf.summary.scalar("Duality gap", duality_gap, epoch)
+                    tf.summary.scalar("Duality gap", rel_duality_gap, epoch)
 
                 with tf.name_scope("Optimizer"):
                     tf.summary.scalar("Number of active dual variables", self.alphas.n_active(), epoch)
@@ -536,35 +754,58 @@ class StructuredSVMMetIdent(_StructuredSVM):
                 with tf.name_scope("Metric (Training)"):
                     acc_k_train = self.score(X_orig_train, y_orig_train, candidates)
                     print("\tTop-1=%2.2f; Top-5=%2.2f; Top-10=%2.2f\tTraining" %
-                              (acc_k_train[0], acc_k_train[4], acc_k_train[9]))
+                          (acc_k_train[0], acc_k_train[4], acc_k_train[9]))
                     for tpk in [1, 5, 10, 20]:
                         tf.summary.scalar("Top-%d (training)" % tpk, acc_k_train[tpk - 1], epoch)
 
-    def _initialize_active_fingerprints_and_losses(self, candidates: CandidateSetMetIdent, verbose=False):
+    def _get_active_fingerprints_and_losses(self, alphas: DualVariables, y: np.ndarray,
+                                            candidates: CandidateSetMetIdent, verbose=False):
         """
-        :param alphas:
-        :param y:
-        :param candidates:
-        :return:
-        """
-        fps_active = np.zeros((self.alphas.n_active(), candidates.n_fps()))
-        lab_losses_active = np.zeros((self.alphas.n_active(), ))
+        Load the molecular fingerprints corresponding to the molecules of active dual variables. Furthermore, calculate
+        the label losses between the "active fingerprints" and their corresponding ground truth fingerprints.
 
-        itr = range(self.alphas.n_active())
+        :param alphas: DualVariables, dual variable information used to determine the active variable set and
+            fingerprints
+
+        :param y: array-like, shape = (n_train,), string identifier of the ground truth molecules, e.g. the training
+            molecules.
+
+        :param candidates: CandidateSetMetIdent, candidate set information to extract the active fingerprints from
+
+        :param verbose: boolean, indicating whether a tqdm progress bar should be used to show the progress.
+
+        :return: tuple (np.ndarray, np.ndarray)
+            fps_active: shape = (n_active, d_fps), fingerprint vectors corresponding to the active dual variables
+            lab_losses_active: shape = (n_active, ), label loss vector between the active fingerprints and corresponding
+                ground truth fingerprints
+        """
+        fps_active = np.zeros((alphas.n_active(), candidates.n_fps()))
+        lab_losses_active = np.zeros((alphas.n_active(), ))
+
+        itr = range(alphas.n_active())
         if verbose:
             itr = tqdm(itr, desc="Collect active fingerprints and losses")
 
         for c in itr:
-            j, ybar = self.alphas.get_iy_for_col(c)
+            j, ybar = alphas.get_iy_for_col(c)
             # Get the fingerprints of the active candidates for example j
-            fps_active[c] = candidates.get_candidates_fp(self.y_train[j], ybar)
+            fps_active[c] = candidates.get_candidates_fp(y[j], ybar)
             # Get label loss between the active fingerprint candidate and its corresponding gt fingerprint
-            lab_losses_active[c] = self.label_loss_fun(candidates.get_gt_fp(self.y_train[j]), fps_active[c])
+            lab_losses_active[c] = self.label_loss_fun(candidates.get_gt_fp(y[j]), fps_active[c])
 
         return fps_active, lab_losses_active
 
     @staticmethod
     def _is_feasible_matrix(alphas: DualVariables, C: float) -> bool:
+        """
+        Check whether the given dual variables are feasible.
+
+        :param alphas: DualVariables, dual variables to test.
+
+        :param C: scalar, regularization parameter of the support vector machine
+
+        :return: boolean, indicating whether the dual variables are feasible.
+        """
         B = alphas.get_dual_variable_matrix()
         N = B.shape[0]
 
@@ -643,17 +884,17 @@ class StructuredSVMMetIdent(_StructuredSVM):
         return y_hat_i, score[max_idx]
 
     def _evaluate_primal_and_dual_objective(self, candidates: CandidateSetMetIdent, pre_calc_data: Dict) \
-            -> Tuple[float, float, float]:
+            -> Tuple[float, float, float, float]:
         """
         Function to calculate the dual and primal objective values.
 
         :return:
         """
         # Pre-calculate some matrices
-        L = candidates.getMolKernel_ExpVsExp(self.y_train)  # shape = (N, N)
+        L = pre_calc_data["L"]
         B_S = self.alphas.get_dual_variable_matrix(type="csr")  # shape = (N, |S|)
-        L_S = candidates.get_kernel(self.fps_active, candidates.get_gt_fp(self.y_train))  # shape = (|S|, N)
-        L_SS = candidates.get_kernel(self.fps_active)  # shape = (|S|, |S|)
+        L_S = pre_calc_data["L_S"]  # shape = (|S|, N)
+        L_SS = pre_calc_data["L_SS"]  # shape = (|S|, |S|)
 
         # Calculate the dual objective
         N = self.K_train.shape[0]
@@ -671,8 +912,14 @@ class StructuredSVMMetIdent(_StructuredSVM):
             xi += np.maximum(0, max_score - const[i])
         prim_obj = wtw / 2 + (self.C / N) * xi
         prim_obj = prim_obj.flatten().item()
+        assert prim_obj >= dual_obj
 
-        return prim_obj, dual_obj, (prim_obj - dual_obj) / (np.abs(prim_obj) + 1)
+        # Calculate the different duality gaps
+        lin_duality_gap = prim_obj - dual_obj
+        assert lin_duality_gap >= 0
+        rel_duality_gap = lin_duality_gap / (np.abs(prim_obj) + 1)
+
+        return prim_obj, dual_obj, rel_duality_gap, lin_duality_gap
 
     def predict(self, X: np.ndarray, y: np.ndarray, candidates: CandidateSetMetIdent) -> Dict[int, np.ndarray]:
         """
@@ -762,6 +1009,44 @@ class StructuredSVMMetIdent(_StructuredSVM):
                              % score_type)
 
         return acc_k
+
+    def _get_linesearch_stepwidth(self, is_k: List[int], res_k: List[Tuple[Tuple, float]],
+                                  candidates: CandidateSetMetIdent) -> float:
+        """
+
+        :param is_k:
+        :param res_k:
+        :param candidates:
+        :return:
+        """
+        alpha_iy, alpha_a = self.alphas.get_blocks(is_k)
+        s_iy, s_a = [], self.C / len(self.y_train)
+        for idx, i in enumerate(is_k):
+            s_iy.append((i, res_k[idx][0]))
+        s_minus_a = DualVariables(self.C, self.alphas.l_cand_ids, initialize=False).set_alphas(s_iy, s_a) \
+            - DualVariables(self.C, self.alphas.l_cand_ids, initialize=False).set_alphas(alpha_iy, alpha_a)
+
+        B_S = self.alphas.get_dual_variable_matrix(type="csr")
+        bB_bS = s_minus_a.get_dual_variable_matrix(type="csr")  # shape = (N, |\bar{S}|)
+
+        bS, bl = self._get_active_fingerprints_and_losses(s_minus_a, self.y_train, candidates, verbose=False)
+        L_bS = candidates.get_kernel(bS, candidates.get_gt_fp(self.y_train))  # shape = (|\bar{S}|, N)
+        L_bSS = candidates.get_kernel(bS, self.fps_active)  # shape = (|\bar{S}|, |S|)
+        L_bSbS = candidates.get_kernel(bS)  # shape = (|\bar{S}|, |\bar{S}|)
+
+        _ass = np.where((bB_bS != 0).sum(axis=1))[0]
+        # FIXME: This assertions fail if a candidate set has only one element, and a - s is zero even for an i in I.
+        # assert len(_ass) == len(is_k)
+        assert np.all(np.isin(_ass, is_k))
+        bB_bS = bB_bS[is_k]  # shape = (|I|, |\bar{S}|)
+
+        s_minus_aTATAa = np.sum(self.K_train[is_k] * (bB_bS @ (- self.C / len(self.y_train) * L_bS + L_bSS @ B_S.T)))
+        a_minus_sTbl = np.sum(bB_bS @ bl)
+
+        nom = a_minus_sTbl - s_minus_aTATAa
+        den = np.sum(self.K_train[np.ix_(is_k, is_k)] * (bB_bS @ L_bSbS @ bB_bS.T))
+
+        return np.maximum(0, np.minimum(1, nom / den))
 
 
 class StructuredSVMSequences(_StructuredSVM):
