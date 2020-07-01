@@ -670,39 +670,40 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
                     _lst_row += 1
 
-            # Update the 'fps_active', 'lab_losses_active', 'L_S' and 'L_SS'
-            # WARNING: ndarray.resize will change the data structure if we add extend along an axis other than 0.
-            _old_nrow = self.fps_active.shape[0]
-            self.fps_active.resize((self.fps_active.shape[0] + _lst_row, self.fps_active.shape[1]), refcheck=False)
-            self.fps_active[_old_nrow:] = new_fps[:_lst_row]
-            assert not np.any(np.isnan(self.fps_active))
+            if _lst_row > 0:
+                # Update the 'fps_active', 'lab_losses_active', 'L_S' and 'L_SS'
+                # WARNING: ndarray.resize will change the data structure if we add extend along an axis other than 0.
+                _old_nrow = self.fps_active.shape[0]
+                self.fps_active.resize((self.fps_active.shape[0] + _lst_row, self.fps_active.shape[1]), refcheck=False)
+                self.fps_active[_old_nrow:] = new_fps[:_lst_row]
+                assert not np.any(np.isnan(self.fps_active))
 
-            # Add the label loss belonging to the newly added active dual variable
-            assert _old_nrow == lab_losses_active.shape[0]
-            lab_losses_active.resize((lab_losses_active.shape[0] + _lst_row, ), refcheck=False)
-            lab_losses_active[_old_nrow:] = new_losses[:_lst_row]
-            assert not np.any(np.isnan(lab_losses_active))
+                # Add the label loss belonging to the newly added active dual variable
+                assert _old_nrow == lab_losses_active.shape[0]
+                lab_losses_active.resize((lab_losses_active.shape[0] + _lst_row, ), refcheck=False)
+                lab_losses_active[_old_nrow:] = new_losses[:_lst_row]
+                assert not np.any(np.isnan(lab_losses_active))
 
             assert self._is_feasible_matrix(self.alphas, self.C), "Dual variables not feasible anymore after update."
 
             if (((k + 1) % 10) == 0) or ((k + 1) == self.n_epochs):
-                # Update the L_S and L_SS
                 _n_added_active_vars = self.fps_active.shape[0] - L_S.shape[0]
-                print(self.fps_active.shape[0], L_S.shape[0], _n_added_active_vars)
-                # L_S: Old shape (|S|, N) --> new shape (|S| + n_added, N)
-                L_S.resize((L_S.shape[0] + _n_added_active_vars, L_S.shape[1]), refcheck=False)
-                L_S[-_n_added_active_vars:] = candidates.get_kernel(self.fps_active[-_n_added_active_vars:],
-                                                                    candidates.get_gt_fp(self.y_train))
+                if _n_added_active_vars > 0:
+                    # Update the L_S and L_SS
+                    # L_S: Old shape (|S|, N) --> new shape (|S| + n_added, N)
+                    L_S.resize((L_S.shape[0] + _n_added_active_vars, L_S.shape[1]), refcheck=False)
+                    L_S[-_n_added_active_vars:] = candidates.get_kernel(self.fps_active[-_n_added_active_vars:],
+                                                                        candidates.get_gt_fp(self.y_train))
 
-                # L_SS: Old shape (|S|, |S|) --> new shape (|S| + n_added, |S| + n_added)
-                new_entries = candidates.get_kernel(self.fps_active[-_n_added_active_vars:],
-                                                    self.fps_active)  # shape = (n_added, |S| + n_added)
-                _L_SS = np.zeros((L_SS.shape[0] + _n_added_active_vars, L_SS.shape[1] + _n_added_active_vars))
-                _L_SS[:L_SS.shape[0], :L_SS.shape[1]] = L_SS
-                _L_SS[L_SS.shape[0]:, :] = new_entries
-                _L_SS[:, L_SS.shape[1]:] = new_entries.T
-                L_SS = _L_SS
-                assert np.all(np.equal(L_SS, L_SS.T))
+                    # L_SS: Old shape (|S|, |S|) --> new shape (|S| + n_added, |S| + n_added)
+                    new_entries = candidates.get_kernel(self.fps_active[-_n_added_active_vars:],
+                                                        self.fps_active)  # shape = (n_added, |S| + n_added)
+                    _L_SS = np.zeros((L_SS.shape[0] + _n_added_active_vars, L_SS.shape[1] + _n_added_active_vars))
+                    _L_SS[:L_SS.shape[0], :L_SS.shape[1]] = L_SS
+                    _L_SS[L_SS.shape[0]:, :] = new_entries
+                    _L_SS[:, L_SS.shape[1]:] = new_entries.T
+                    L_SS = _L_SS
+                    assert np.all(np.equal(L_SS, L_SS.T))
 
                 if train_summary_writer is None:
                     self._write_debug_output(k + 1, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
