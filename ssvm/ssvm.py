@@ -711,18 +711,30 @@ class StructuredSVMMetIdent(_StructuredSVM):
                 with tf.name_scope("Metric (Training)"):
                     acc_k_train = self.score(X_orig_train, y_orig_train, candidates)
                     print("\tTop-1=%2.2f; Top-5=%2.2f; Top-10=%2.2f\tTraining" %
-                              (acc_k_train[0], acc_k_train[4], acc_k_train[9]))
+                          (acc_k_train[0], acc_k_train[4], acc_k_train[9]))
                     for tpk in [1, 5, 10, 20]:
                         tf.summary.scalar("Top-%d (training)" % tpk, acc_k_train[tpk - 1], epoch)
 
     def _get_active_fingerprints_and_losses(self, alphas: DualVariables, y: np.ndarray,
                                             candidates: CandidateSetMetIdent, verbose=False):
         """
-        :param alphas:
-        :param y:
-        :param candidates:
-        :param verbose:
-        :return:
+        Load the molecular fingerprints corresponding to the molecules of active dual variables. Furthermore, calculate
+        the label losses between the "active fingerprints" and their corresponding ground truth fingerprints.
+
+        :param alphas: DualVariables, dual variable information used to determine the active variable set and
+            fingerprints
+
+        :param y: array-like, shape = (n_train,), string identifier of the ground truth molecules, e.g. the training
+            molecules.
+
+        :param candidates: CandidateSetMetIdent, candidate set information to extract the active fingerprints from
+
+        :param verbose: boolean, indicating whether a tqdm progress bar should be used to show the progress.
+
+        :return: tuple (np.ndarray, np.ndarray)
+            fps_active: shape = (n_active, d_fps), fingerprint vectors corresponding to the active dual variables
+            lab_losses_active: shape = (n_active, ), label loss vector between the active fingerprints and corresponding
+                ground truth fingerprints
         """
         fps_active = np.zeros((alphas.n_active(), candidates.n_fps()))
         lab_losses_active = np.zeros((alphas.n_active(), ))
@@ -742,6 +754,15 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
     @staticmethod
     def _is_feasible_matrix(alphas: DualVariables, C: float) -> bool:
+        """
+        Check whether the given dual variables are feasible.
+
+        :param alphas: DualVariables, dual variables to test.
+
+        :param C: scalar, regularization parameter of the support vector machine
+
+        :return: boolean, indicating whether the dual variables are feasible.
+        """
         B = alphas.get_dual_variable_matrix()
         N = B.shape[0]
 
