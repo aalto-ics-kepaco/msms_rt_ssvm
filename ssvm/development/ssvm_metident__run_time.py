@@ -37,6 +37,7 @@ from ssvm.development.utils import get_git_revision_short_hash
 N_SAMPLES = 100
 N_REPS = 3
 BATCH_SIZE = 4
+STEPSIZE = "linesearch"
 
 ODIR = "./profiling/"
 
@@ -61,12 +62,12 @@ if __name__ == "__main__":
     ts = []
     for r in range(N_REPS):
         start = timer()
-        StructuredSVMMetIdent(C=128, rs=928, n_epochs=40, batch_size=BATCH_SIZE, stepsize="linesearch") \
+        StructuredSVMMetIdent(C=128, rs=928, n_epochs=40, batch_size=BATCH_SIZE, stepsize=STEPSIZE) \
             .fit(X, mols, candidates=cand, num_init_active_vars_per_seq=1)
         ts.append([timer() - start])
 
-    ts = pd.DataFrame(ts, columns=["Time (s)"]).aggregate(func=[np.mean, np.median, np.max])  # type: pd.DataFrame
+    ts = pd.DataFrame(ts, columns=["Time (s)"]).aggregate(func=[np.mean, np.median, np.min])  # type: pd.DataFrame
     print(ts)
 
-    ts.to_csv(os.path.join(ODIR, "run_time__%s__n_samples=%d__n_rep=%d__batch_size=%d.csv" % (
-        get_git_revision_short_hash(), N_SAMPLES, N_REPS, BATCH_SIZE)), index=False)
+    ts.to_csv(os.path.join(ODIR, "run_time__%s__n_samples=%d__n_rep=%d__batch_size=%d__stepsize=%s.csv" % (
+        get_git_revision_short_hash(), N_SAMPLES, N_REPS, BATCH_SIZE, STEPSIZE)), index=False)
