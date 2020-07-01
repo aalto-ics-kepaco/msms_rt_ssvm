@@ -78,17 +78,18 @@ class DualVariables(object):
         self.N = len(cand_ids)
         # Store a shuffled version of the candidate sets for each example and sequence element
         self.rs = check_random_state(rs)
-        self.l_cand_ids = []
-        for i in range(self.N):
-            self.l_cand_ids.append([self.rs.permutation(_cand_ids).tolist() for _cand_ids in cand_ids[i]])
 
         self.num_init_active_vars = num_init_active_vars
         assert self.num_init_active_vars > 0
 
         if initialize:
+            self.l_cand_ids = []
+            for i in range(self.N):
+                self.l_cand_ids.append([self.rs.permutation(_cand_ids).tolist() for _cand_ids in cand_ids[i]])
             # Initialize the dual variables
             self.initialize_alphas()
         else:
+            self.l_cand_ids = cand_ids
             self._alphas = None  # type: lil_matrix
             self._y2col = None
             self._iy = None
@@ -898,7 +899,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
             L_Ci = candidates.get_kernel(fps_Ci, candidates.get_gt_fp(self.y_train))
         # L_Ci with shape = (|Sigma_i|, N)
 
-        B_S = self.alphas.get_dual_variable_matrix(type="csr")  # shape = (N, |Sigma_i|)
+        B_S = self.alphas.get_dual_variable_matrix(type="dense")  # shape = (N, |Sigma_i|)
 
         N = self.K_train.shape[0]
 
@@ -949,7 +950,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
         """
         # Pre-calculate some matrices
         L = pre_calc_data["L"]
-        B_S = self.alphas.get_dual_variable_matrix(type="csr")  # shape = (N, |S|)
+        B_S = self.alphas.get_dual_variable_matrix(type="dense")  # shape = (N, |S|)
         L_S = pre_calc_data["L_S"]  # shape = (|S|, N)
         L_SS = pre_calc_data["L_SS"]  # shape = (|S|, |S|)
 
@@ -1000,7 +1001,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
             X = X[:, self.train_set]
         assert X.shape[1] == self.K_train.shape[0]
 
-        B_S = self.alphas.get_dual_variable_matrix(type="csc")
+        B_S = self.alphas.get_dual_variable_matrix(type="dense")
         N = B_S.shape[0]
         score = {}
 
@@ -1083,8 +1084,8 @@ class StructuredSVMMetIdent(_StructuredSVM):
         s_minus_a = DualVariables(self.C, self.alphas.l_cand_ids, initialize=False).set_alphas(s_iy, s_a) \
             - DualVariables(self.C, self.alphas.l_cand_ids, initialize=False).set_alphas(alpha_iy, alpha_a)
 
-        B_S = self.alphas.get_dual_variable_matrix(type="csr")
-        bB_bS = s_minus_a.get_dual_variable_matrix(type="csr")  # shape = (N, |\bar{S}|)
+        B_S = self.alphas.get_dual_variable_matrix(type="dense")
+        bB_bS = s_minus_a.get_dual_variable_matrix(type="dense")  # shape = (N, |\bar{S}|)
 
         bS, bl = self._get_active_fingerprints_and_losses(s_minus_a, self.y_train, candidates, verbose=False)
         L_bS = candidates.get_kernel(bS, candidates.get_gt_fp(self.y_train))  # shape = (|\bar{S}|, N)
