@@ -647,8 +647,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
             # Find the most violating example
             # TODO: Can we solve the sub-problem for a full batch at the same time?
             res_k = [self._solve_sub_problem(
-                i, candidates, pre_calc_data={"lab_losses": lab_losses, "mol_kernel_l_y": mol_kernel_l_y,
-                                              "mol_kernel_L_S_Ci": mol_kernel_L_S_Ci})
+                i, candidates, pre_calc_data={"lab_losses": lab_losses, "mol_kernel_l_y": mol_kernel_l_y})
                 for i in i_k[k]]
 
             # Get step-width
@@ -686,15 +685,6 @@ class StructuredSVMMetIdent(_StructuredSVM):
                 lab_losses_active[_old_nrow:] = new_losses[:_lst_row]
                 assert not np.any(np.isnan(lab_losses_active))
 
-                # Update the L_S_Ci matrices
-                for y_i in self.train_set:
-                    assert _old_nrow == mol_kernel_L_S_Ci[y_i].shape[0]
-                    mol_kernel_L_S_Ci[y_i].resize((mol_kernel_L_S_Ci[y_i].shape[0] + _lst_row,
-                                                   mol_kernel_L_S_Ci[y_i].shape[1]), refcheck=False)
-                    mol_kernel_L_S_Ci[y_i][_old_nrow:] = candidates.get_kernel(new_fps[:_lst_row],
-                                                                               candidates.get_candidates_fp(y_i))
-                    assert not np.any(np.isnan(mol_kernel_L_S_Ci[y_i]))
-
             assert self._is_feasible_matrix(self.alphas, self.C), "Dual variables not feasible anymore after update."
 
             if (((k + 1) % 10) == 0) or ((k + 1) == self.n_epochs):
@@ -715,6 +705,14 @@ class StructuredSVMMetIdent(_StructuredSVM):
                     _L_SS[:, L_SS.shape[1]:] = new_entries.T
                     L_SS = _L_SS
                     assert np.all(np.equal(L_SS, L_SS.T))
+
+                    # Update the L_S_Ci matrices
+                    for y_i in self.y_train:
+                        mol_kernel_L_S_Ci[y_i].resize((mol_kernel_L_S_Ci[y_i].shape[0] + _n_added_active_vars,
+                                                       mol_kernel_L_S_Ci[y_i].shape[1]), refcheck=False)
+                        mol_kernel_L_S_Ci[y_i][-_n_added_active_vars:] = candidates.get_kernel(
+                            self.fps_active[-_n_added_active_vars:], candidates.get_candidates_fp(y_i))
+                        assert not np.any(np.isnan(mol_kernel_L_S_Ci[y_i]))
 
                 if train_summary_writer is None:
                     self._write_debug_output(k + 1, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
@@ -853,7 +851,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
         if "mol_kernel_L_S_Ci" in pre_calc_data:
             L_Ci_S = pre_calc_data["mol_kernel_L_S_Ci"][self.y_train[i]].T
-            assert L_Ci_S.shape[1] == self.fps_active[0]
+            assert L_Ci_S.shape[1] == self.fps_active.shape[0]
         else:
             L_Ci_S = candidates.get_kernel(fps_Ci, self.fps_active)
         # L_Ci_S with shape = (|Sigma_i|, |S|)
