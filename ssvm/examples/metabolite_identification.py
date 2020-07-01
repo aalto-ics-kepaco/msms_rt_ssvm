@@ -67,11 +67,11 @@ if __name__ == "__main__":
     # Tensorflow training summary log-file
     current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     train_log_dir = 'logs/' + current_time + '/train'
-    train_summary_writer = tf_summary.create_file_writer(train_log_dir)
+    train_summary_writer = None  # tf_summary.create_file_writer(train_log_dir)
 
     start = timer()
 
-    svm = StructuredSVMMetIdent(C=64, rs=928, n_epochs=250, batch_size=16, stepsize="linesearch") \
+    svm = StructuredSVMMetIdent(C=128, rs=928, n_epochs=50, batch_size=8, stepsize="linesearch") \
         .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=1,
              train_summary_writer=train_summary_writer)
 
