@@ -627,10 +627,16 @@ class StructuredSVMMetIdent(_StructuredSVM):
         L_S = candidates.get_kernel(self.fps_active, candidates.get_gt_fp(self.y_train))  # shape = (|S|, N)
         L_SS = candidates.get_kernel(self.fps_active)  # shape = (|S|, |S|)
 
+        mol_kernel_L_S_Ci = {}
+        for y_i in tqdm(self.y_train, desc="Pre-calculate L_S_Ci kernels"):
+            mol_kernel_L_S_Ci[y_i] = candidates.get_kernel(self.fps_active, candidates.get_candidates_fp(y_i))
+            # shape = (|S|, |C_i|)
+
         k = 0
         if train_summary_writer is None:
             self._write_debug_output(0, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
-                                         "L_SS": L_SS, "mol_kernel_l_y": mol_kernel_l_y, "lab_losses": lab_losses},
+                                         "L_SS": L_SS, "mol_kernel_l_y": mol_kernel_l_y, "lab_losses": lab_losses,
+                                         "mol_kernel_L_S_Ci": mol_kernel_L_S_Ci},
                                      candidates, np.nan)
         else:
             self._write_debug_output(0, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
@@ -641,7 +647,8 @@ class StructuredSVMMetIdent(_StructuredSVM):
             # Find the most violating example
             # TODO: Can we solve the sub-problem for a full batch at the same time?
             res_k = [self._solve_sub_problem(
-                i, candidates, pre_calc_data={"lab_losses": lab_losses, "mol_kernel_l_y": mol_kernel_l_y})
+                i, candidates, pre_calc_data={"lab_losses": lab_losses, "mol_kernel_l_y": mol_kernel_l_y,
+                                              "mol_kernel_L_S_Ci": mol_kernel_L_S_Ci})
                 for i in i_k[k]]
 
             # Get step-width
@@ -679,6 +686,15 @@ class StructuredSVMMetIdent(_StructuredSVM):
                 lab_losses_active[_old_nrow:] = new_losses[:_lst_row]
                 assert not np.any(np.isnan(lab_losses_active))
 
+                # Update the L_S_Ci matrices
+                for y_i in self.train_set:
+                    assert _old_nrow == mol_kernel_L_S_Ci[y_i].shape[0]
+                    mol_kernel_L_S_Ci[y_i].resize((mol_kernel_L_S_Ci[y_i].shape[0] + _lst_row,
+                                                   mol_kernel_L_S_Ci[y_i].shape[1]), refcheck=False)
+                    mol_kernel_L_S_Ci[y_i][_old_nrow:] = candidates.get_kernel(new_fps[:_lst_row],
+                                                                               candidates.get_candidates_fp(y_i))
+                    assert not np.any(np.isnan(mol_kernel_L_S_Ci[y_i]))
+
             assert self._is_feasible_matrix(self.alphas, self.C), "Dual variables not feasible anymore after update."
 
             if (((k + 1) % 10) == 0) or ((k + 1) == self.n_epochs):
@@ -703,7 +719,8 @@ class StructuredSVMMetIdent(_StructuredSVM):
                 if train_summary_writer is None:
                     self._write_debug_output(k + 1, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
                                                      "L_SS": L_SS, "mol_kernel_l_y": mol_kernel_l_y,
-                                                     "lab_losses": lab_losses}, candidates, gamma)
+                                                     "lab_losses": lab_losses, "mol_kernel_L_S_Ci": mol_kernel_L_S_Ci},
+                                             candidates, gamma)
                 else:
                     self._write_debug_output(k + 1, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
                                                      "L_SS": L_SS}, candidates, gamma,
@@ -829,8 +846,17 @@ class StructuredSVMMetIdent(_StructuredSVM):
         :return: array-like, shape = (|Sigma_i|, )
         """
         # Get candidate fingerprints for all y in Sigma_i
-        fps_Ci = candidates.get_candidates_fp(self.y_train[i])
-        L_Ci_S = candidates.get_kernel(fps_Ci, self.fps_active)  # shape = (|Sigma_i|, |S|)
+        if "mol_kernel_L_S_Ci" not in pre_calc_data or "mol_kernel_l_y" not in pre_calc_data:
+            fps_Ci = candidates.get_candidates_fp(self.y_train[i])
+        else:
+            fps_Ci = None
+
+        if "mol_kernel_L_S_Ci" in pre_calc_data:
+            L_Ci_S = pre_calc_data["mol_kernel_L_S_Ci"][self.y_train[i]].T
+            assert L_Ci_S.shape[1] == self.fps_active[0]
+        else:
+            L_Ci_S = candidates.get_kernel(fps_Ci, self.fps_active)
+        # L_Ci_S with shape = (|Sigma_i|, |S|)
 
         if "mol_kernel_l_y" in pre_calc_data:
             L_Ci = pre_calc_data["mol_kernel_l_y"][self.y_train[i]]
