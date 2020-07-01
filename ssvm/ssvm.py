@@ -25,6 +25,7 @@
 ####
 import numpy as np
 import itertools as it
+import more_itertools as mit
 import tensorflow as tf
 
 from typing import List, ItemsView, Tuple, ValuesView, KeysView, Iterator, Dict, Union, Optional, TypeVar
@@ -88,7 +89,7 @@ class DualVariables(object):
             # Initialize the dual variables
             self.initialize_alphas()
         else:
-            self._alphas = None
+            self._alphas = None  # type: lil_matrix
             self._y2col = None
             self._iy = None
 
@@ -268,6 +269,8 @@ class DualVariables(object):
             return csr_matrix(self._alphas)
         elif type == "csc":
             return csc_matrix(self._alphas)
+        elif type == "dense":
+            return self._alphas.toarray()
         else:
             raise ValueError("Invalid sparse matrix type: '%s'. Choices are 'csr' and 'csc'.")
 
@@ -504,7 +507,7 @@ class _StructuredSVM(object):
         :param label_loss: string, Which label loss should be used. Default is 'hamming' loss.
         """
         self.C = C
-        self.n_epochs = n_epochs
+        self.max_n_epochs = n_epochs
         self.label_loss = label_loss
 
         if self.label_loss == "hamming":
@@ -590,15 +593,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
         # Assign the training inputs and labels (candidate identifier)
         self.K_train = X
         self.y_train = y
-
-        # Number of training sequences
-        N = len(self.K_train)
-
-        # To allow pre-calculation of some relevant data, we already draw the random sequence of examples we use for the
-        # optimization.
-        i_k = []
-        for _ in range(self.n_epochs):
-            i_k.append(self.rs.choice(N, size=self.batch_size, replace=False))
+        N = len(self.K_train)  # Number of training sequences
 
         # Pre-calculate some data needed for the sub-problem solving
         lab_losses = {}
@@ -640,106 +635,139 @@ class StructuredSVMMetIdent(_StructuredSVM):
             mol_kernel_L_S_Ci[y_i] = candidates.get_kernel(self.fps_active, candidates.get_candidates_fp(y_i))
             # shape = (|S|, |C_i|)
 
-        k = 0
+
         if train_summary_writer is None:
-            self._write_debug_output(0, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
-                                         "L_SS": L_SS, "mol_kernel_l_y": mol_kernel_l_y, "lab_losses": lab_losses,
-                                         "mol_kernel_L_S_Ci": mol_kernel_L_S_Ci},
-                                     candidates, np.nan)
+            self._write_debug_output(0,
+                                     {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
+                                      "L_SS": L_SS, "mol_kernel_l_y": mol_kernel_l_y, "lab_losses": lab_losses,
+                                      "mol_kernel_L_S_Ci": mol_kernel_L_S_Ci},
+                                     candidates,
+                                     np.nan)
         else:
-            self._write_debug_output(0, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
-                                         "L_SS": L_SS}, candidates, np.nan, train_summary_writer, X_val,
-                                     y_val, X_orig_train, self.y_train)
+            self._write_debug_output(0,
+                                     {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
+                                      "L_SS": L_SS},
+                                     candidates,
+                                     np.nan,
+                                     train_summary_writer,
+                                     X_val, y_val, X_orig_train, self.y_train)
 
-        while k < self.n_epochs:
-            # Find the most violating example
-            # TODO: Can we solve the sub-problem for a full batch at the same time?
-            res_k = [self._solve_sub_problem(
-                i, candidates, pre_calc_data={"lab_losses": lab_losses, "mol_kernel_l_y": mol_kernel_l_y})
-                for i in i_k[k]]
+        step = 1
+        for epoch in range(self.max_n_epochs):  # Full pass over the data
+            for batch in mit.chunked(np.random.RandomState(epoch).permutation(np.arange(N)), self.batch_size):
+                for i in batch:
+                    y_i = self.y_train[i]
+                    if mol_kernel_L_S_Ci[y_i].shape[0] == self.fps_active.shape[0]:
+                        continue
 
-            # Get step-width
-            if self.stepsize == "diminishing":
-                gamma = self._get_diminishing_stepwidth(k, N)
-            elif self.stepsize == "linesearch":
-                gamma = self._get_linesearch_stepwidth(i_k[k], res_k, candidates)
+                    # example i requires an update for the L_S_Ci
+                    _n_added_active_vars = self.fps_active.shape[0] - mol_kernel_L_S_Ci[y_i].shape[0]
+                    assert _n_added_active_vars > 0
 
-            # Update the dual variables
-            new_fps = np.full((self.batch_size, self.fps_active.shape[1]), fill_value=np.nan)
-            new_losses = np.full((self.batch_size,), fill_value=np.nan)
-            _lst_row = 0
-            for idx, i in enumerate(i_k[k]):
-                y_i_hat = res_k[idx][0]
-                if self.alphas.update(i, y_i_hat, gamma):
-                    # Add the fingerprint belonging to the newly added active dual variable
-                    new_fps[_lst_row, :] = candidates.get_candidates_fp(y[i], y_i_hat)
+                    mol_kernel_L_S_Ci[y_i].resize((mol_kernel_L_S_Ci[y_i].shape[0] + _n_added_active_vars,
+                                                   mol_kernel_L_S_Ci[y_i].shape[1]), refcheck=False)
+                    mol_kernel_L_S_Ci[y_i][-_n_added_active_vars:] = candidates.get_kernel(
+                        self.fps_active[-_n_added_active_vars:], candidates.get_candidates_fp(y_i))
+                    assert not np.any(np.isnan(mol_kernel_L_S_Ci[y_i]))
+
+                # Find the most violating example
+                # TODO: Can we solve the sub-problem for a full batch at the same time?
+                # HINT: After pre-calculation was introduces, we actually do not use the CPU anymore as efficient.
+                # HINT: We should give again a try with the joblib.
+                res_batch = [self._solve_sub_problem(
+                    i, candidates, pre_calc_data={"lab_losses": lab_losses, "mol_kernel_l_y": mol_kernel_l_y,
+                                                  "mol_kernel_L_S_Ci": mol_kernel_L_S_Ci})
+                    for i in batch]
+
+                # Get step-width
+                if self.stepsize == "diminishing":
+                    gamma = self._get_diminishing_stepwidth(step - 1, N)
+                elif self.stepsize == "linesearch":
+                    gamma = self._get_linesearch_stepwidth(batch, res_batch, candidates)
+
+                # Update the dual variables
+                new_fps = np.full((self.batch_size, self.fps_active.shape[1]), fill_value=np.nan)
+                new_losses = np.full((self.batch_size, ), fill_value=np.nan)
+                _lst_row = 0
+                for idx, i in enumerate(batch):
+                    y_i_hat = res_batch[idx][0]
+                    if self.alphas.update(i, y_i_hat, gamma):
+                        # Add the fingerprint belonging to the newly added active dual variable
+                        new_fps[_lst_row, :] = candidates.get_candidates_fp(y[i], y_i_hat)
+
+                        # Add the label loss belonging to the newly added active dual variable
+                        new_losses[_lst_row] = self.label_loss_fun(new_fps[_lst_row], candidates.get_gt_fp(y[i]))
+
+                        _lst_row += 1
+
+                if _lst_row > 0:
+                    # Update the 'fps_active' and 'lab_losses_active'
+                    # WARNING: ndarray.resize will change the data structure if we add extend along an axis other than 0.
+                    _old_nrow = self.fps_active.shape[0]
+                    self.fps_active.resize((self.fps_active.shape[0] + _lst_row, self.fps_active.shape[1]), refcheck=False)
+                    self.fps_active[_old_nrow:] = new_fps[:_lst_row]
+                    assert not np.any(np.isnan(self.fps_active))
 
                     # Add the label loss belonging to the newly added active dual variable
-                    new_losses[_lst_row] = self.label_loss_fun(new_fps[_lst_row], candidates.get_gt_fp(y[i]))
+                    assert _old_nrow == lab_losses_active.shape[0]
+                    lab_losses_active.resize((lab_losses_active.shape[0] + _lst_row, ), refcheck=False)
+                    lab_losses_active[_old_nrow:] = new_losses[:_lst_row]
+                    assert not np.any(np.isnan(lab_losses_active))
 
-                    _lst_row += 1
+                assert self._is_feasible_matrix(self.alphas, self.C), "Dual variables not feasible anymore after update."
 
-            if _lst_row > 0:
-                # Update the 'fps_active' and 'lab_losses_active'
-                # WARNING: ndarray.resize will change the data structure if we add extend along an axis other than 0.
-                _old_nrow = self.fps_active.shape[0]
-                self.fps_active.resize((self.fps_active.shape[0] + _lst_row, self.fps_active.shape[1]), refcheck=False)
-                self.fps_active[_old_nrow:] = new_fps[:_lst_row]
-                assert not np.any(np.isnan(self.fps_active))
+                if (step % 10) == 0:
+                    _n_added_active_vars = self.fps_active.shape[0] - L_S.shape[0]
+                    if _n_added_active_vars > 0:
+                        # Update the L_S and L_SS
+                        # L_S: Old shape (|S|, N) --> new shape (|S| + n_added, N)
+                        L_S.resize((L_S.shape[0] + _n_added_active_vars, L_S.shape[1]), refcheck=False)
+                        L_S[-_n_added_active_vars:] = candidates.get_kernel(self.fps_active[-_n_added_active_vars:],
+                                                                            candidates.get_gt_fp(self.y_train))
 
-                # Add the label loss belonging to the newly added active dual variable
-                assert _old_nrow == lab_losses_active.shape[0]
-                lab_losses_active.resize((lab_losses_active.shape[0] + _lst_row, ), refcheck=False)
-                lab_losses_active[_old_nrow:] = new_losses[:_lst_row]
-                assert not np.any(np.isnan(lab_losses_active))
-
-            assert self._is_feasible_matrix(self.alphas, self.C), "Dual variables not feasible anymore after update."
-
-            if (((k + 1) % 10) == 0) or ((k + 1) == self.n_epochs):
-                _n_added_active_vars = self.fps_active.shape[0] - L_S.shape[0]
-                if _n_added_active_vars > 0:
-                    # Update the L_S and L_SS
-                    # L_S: Old shape (|S|, N) --> new shape (|S| + n_added, N)
-                    L_S.resize((L_S.shape[0] + _n_added_active_vars, L_S.shape[1]), refcheck=False)
-                    L_S[-_n_added_active_vars:] = candidates.get_kernel(self.fps_active[-_n_added_active_vars:],
-                                                                        candidates.get_gt_fp(self.y_train))
-
-                    # L_SS: Old shape (|S|, |S|) --> new shape (|S| + n_added, |S| + n_added)
-                    new_entries = candidates.get_kernel(self.fps_active[-_n_added_active_vars:],
-                                                        self.fps_active)  # shape = (n_added, |S| + n_added)
-                    _L_SS = np.zeros((L_SS.shape[0] + _n_added_active_vars, L_SS.shape[1] + _n_added_active_vars))
-                    _L_SS[:L_SS.shape[0], :L_SS.shape[1]] = L_SS
-                    _L_SS[L_SS.shape[0]:, :] = new_entries
-                    _L_SS[:, L_SS.shape[1]:] = new_entries.T
-                    L_SS = _L_SS
-                    assert np.all(np.equal(L_SS, L_SS.T))
+                        # L_SS: Old shape (|S|, |S|) --> new shape (|S| + n_added, |S| + n_added)
+                        new_entries = candidates.get_kernel(self.fps_active[-_n_added_active_vars:],
+                                                            self.fps_active)  # shape = (n_added, |S| + n_added)
+                        _L_SS = np.zeros((L_SS.shape[0] + _n_added_active_vars, L_SS.shape[1] + _n_added_active_vars))
+                        _L_SS[:L_SS.shape[0], :L_SS.shape[1]] = L_SS
+                        _L_SS[L_SS.shape[0]:, :] = new_entries
+                        _L_SS[:, L_SS.shape[1]:] = new_entries.T
+                        L_SS = _L_SS
+                        assert np.all(np.equal(L_SS, L_SS.T))
 
                     # Update the L_S_Ci matrices
                     for y_i in mol_kernel_L_S_Ci:
+                        if mol_kernel_L_S_Ci[y_i].shape[0] == self.fps_active.shape[0]:
+                            # There is nothing to update here
+                            continue
+
+                        _n_added_active_vars = self.fps_active.shape[0] - mol_kernel_L_S_Ci[y_i].shape[0]
+                        assert _n_added_active_vars > 0
+
                         mol_kernel_L_S_Ci[y_i].resize((mol_kernel_L_S_Ci[y_i].shape[0] + _n_added_active_vars,
                                                        mol_kernel_L_S_Ci[y_i].shape[1]), refcheck=False)
                         mol_kernel_L_S_Ci[y_i][-_n_added_active_vars:] = candidates.get_kernel(
                             self.fps_active[-_n_added_active_vars:], candidates.get_candidates_fp(y_i))
                         assert not np.any(np.isnan(mol_kernel_L_S_Ci[y_i]))
 
-                if train_summary_writer is None:
-                    self._write_debug_output(k + 1, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
-                                                     "L_SS": L_SS, "mol_kernel_l_y": mol_kernel_l_y,
-                                                     "lab_losses": lab_losses, "mol_kernel_L_S_Ci": mol_kernel_L_S_Ci},
-                                             candidates, gamma)
-                else:
-                    self._write_debug_output(k + 1, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
-                                                     "L_SS": L_SS}, candidates, gamma,
-                                             train_summary_writer, X_val,
-                                             y_val, X_orig_train, self.y_train)
+                    if train_summary_writer is None:
+                        self._write_debug_output(step, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
+                                                        "L_SS": L_SS, "mol_kernel_l_y": mol_kernel_l_y,
+                                                        "lab_losses": lab_losses, "mol_kernel_L_S_Ci": mol_kernel_L_S_Ci},
+                                                 candidates, gamma)
+                    else:
+                        self._write_debug_output(step, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
+                                                        "L_SS": L_SS}, candidates, gamma,
+                                                 train_summary_writer, X_val,
+                                                 y_val, X_orig_train, self.y_train)
 
-            k += 1
+                step += 1
 
         return self
 
-    def _write_debug_output(self, epoch, pre_calc_data, candidates, stepsize, train_summary_writer=None, X_val=None,
+    def _write_debug_output(self, step, pre_calc_data, candidates, stepsize, train_summary_writer=None, X_val=None,
                             y_val=None, X_orig_train=None, y_orig_train=None):
-        print("Epoch: %d / %d" % (epoch, self.n_epochs))
+        print("Step: %d / %d" % (step, (self.max_n_epochs * (self.K_train.shape[0] // self.batch_size))))
 
         prim_obj, dual_obj, rel_duality_gap, lin_duality_gap = self._evaluate_primal_and_dual_objective(
             candidates, pre_calc_data=pre_calc_data)
@@ -751,32 +779,32 @@ class StructuredSVMMetIdent(_StructuredSVM):
         if train_summary_writer is not None:
             with train_summary_writer.as_default():
                 with tf.name_scope("Objective Functions"):
-                    tf.summary.scalar("Primal", prim_obj, epoch)
-                    tf.summary.scalar("Dual", dual_obj, epoch)
-                    tf.summary.scalar("Duality gap", rel_duality_gap, epoch)
+                    tf.summary.scalar("Primal", prim_obj, step)
+                    tf.summary.scalar("Dual", dual_obj, step)
+                    tf.summary.scalar("Duality gap", rel_duality_gap, step)
 
                 with tf.name_scope("Optimizer"):
-                    tf.summary.scalar("Number of active dual variables", self.alphas.n_active(), epoch)
-                    tf.summary.scalar("Step-size", stepsize, epoch)
+                    tf.summary.scalar("Number of active dual variables", self.alphas.n_active(), step)
+                    tf.summary.scalar("Step-size", stepsize, step)
 
                 tf.summary.histogram(
                     "Dual variable distribution",
                     data=np.array(np.sum(self.alphas.get_dual_variable_matrix(), axis=0)).flatten(),
-                    buckets=100, step=epoch)
+                    buckets=100, step=step)
 
                 with tf.name_scope("Metric (Validation)"):
                     acc_k_val = self.score(X_val, y_val, candidates)
                     print("\tTop-1=%2.2f; Top-5=%2.2f; Top-10=%2.2f\tValidation" %
                           (acc_k_val[0], acc_k_val[4], acc_k_val[9]))
                     for tpk in [1, 5, 10, 20]:
-                        tf.summary.scalar("Top-%d (validation)" % tpk, acc_k_val[tpk - 1], epoch)
+                        tf.summary.scalar("Top-%d (validation)" % tpk, acc_k_val[tpk - 1], step)
 
                 with tf.name_scope("Metric (Training)"):
                     acc_k_train = self.score(X_orig_train, y_orig_train, candidates)
                     print("\tTop-1=%2.2f; Top-5=%2.2f; Top-10=%2.2f\tTraining" %
                           (acc_k_train[0], acc_k_train[4], acc_k_train[9]))
                     for tpk in [1, 5, 10, 20]:
-                        tf.summary.scalar("Top-%d (training)" % tpk, acc_k_train[tpk - 1], epoch)
+                        tf.summary.scalar("Top-%d (training)" % tpk, acc_k_train[tpk - 1], step)
 
     def _get_active_fingerprints_and_losses(self, alphas: DualVariables, y: np.ndarray,
                                             candidates: CandidateSetMetIdent, verbose=False):
@@ -1097,7 +1125,7 @@ class StructuredSVMSequences(_StructuredSVM):
         assert self._is_feasible(alphas, self.C), "Initial dual variables must be feasible."
 
         k = 0
-        while k < self.n_epochs:
+        while k < self.max_n_epochs:
             # Pick a random coordinate to update
             i = self.rs.choice(N)
 

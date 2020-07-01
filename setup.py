@@ -14,7 +14,8 @@ setup(
         "scipy",
         "joblib",
         "tensorflow",
-        "tqdm"
+        "tqdm",
+        "more-itertools"
     ],
 
     # Metadata
