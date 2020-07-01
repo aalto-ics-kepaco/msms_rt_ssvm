@@ -603,7 +603,11 @@ class StructuredSVMMetIdent(_StructuredSVM):
         # Pre-calculate some data needed for the sub-problem solving
         lab_losses = {}
         mol_kernel_l_y = {}
-        for y_i in tqdm(self.y_train, desc="Pre-calculate data"):
+        for i in tqdm(range(N), desc="Pre-calculate data"):
+            y_i = self.y_train[i]
+            if y_i in lab_losses:
+                continue
+
             # Pre-calculate the label loss: Loss of the gt fingerprint to all corresponding candidate fingerprints of i
             fp_i = candidates.get_gt_fp(y_i)
             lab_losses[y_i] = self.label_loss_fun(fp_i, candidates.get_candidates_fp(y_i))
@@ -628,7 +632,11 @@ class StructuredSVMMetIdent(_StructuredSVM):
         L_SS = candidates.get_kernel(self.fps_active)  # shape = (|S|, |S|)
 
         mol_kernel_L_S_Ci = {}
-        for y_i in tqdm(self.y_train, desc="Pre-calculate L_S_Ci kernels"):
+        for i in tqdm(range(N), desc="Pre-calculate L_S_Ci kernels"):
+            y_i = self.y_train[i]
+            if y_i in mol_kernel_L_S_Ci:
+                continue
+
             mol_kernel_L_S_Ci[y_i] = candidates.get_kernel(self.fps_active, candidates.get_candidates_fp(y_i))
             # shape = (|S|, |C_i|)
 
@@ -672,7 +680,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
                     _lst_row += 1
 
             if _lst_row > 0:
-                # Update the 'fps_active', 'lab_losses_active', 'L_S' and 'L_SS'
+                # Update the 'fps_active' and 'lab_losses_active'
                 # WARNING: ndarray.resize will change the data structure if we add extend along an axis other than 0.
                 _old_nrow = self.fps_active.shape[0]
                 self.fps_active.resize((self.fps_active.shape[0] + _lst_row, self.fps_active.shape[1]), refcheck=False)
@@ -707,7 +715,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
                     assert np.all(np.equal(L_SS, L_SS.T))
 
                     # Update the L_S_Ci matrices
-                    for y_i in self.y_train:
+                    for y_i in mol_kernel_L_S_Ci:
                         mol_kernel_L_S_Ci[y_i].resize((mol_kernel_L_S_Ci[y_i].shape[0] + _n_added_active_vars,
                                                        mol_kernel_L_S_Ci[y_i].shape[1]), refcheck=False)
                         mol_kernel_L_S_Ci[y_i][-_n_added_active_vars:] = candidates.get_kernel(
