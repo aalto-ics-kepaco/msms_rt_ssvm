@@ -630,7 +630,8 @@ class StructuredSVMMetIdent(_StructuredSVM):
         k = 0
         if train_summary_writer is None:
             self._write_debug_output(0, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
-                                         "L_SS": L_SS, "mol_kernel_l_y": mol_kernel_l_y}, candidates, np.nan)
+                                         "L_SS": L_SS, "mol_kernel_l_y": mol_kernel_l_y, "lab_losses": lab_losses},
+                                     candidates, np.nan)
         else:
             self._write_debug_output(0, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
                                          "L_SS": L_SS}, candidates, np.nan, train_summary_writer, X_val,
@@ -701,7 +702,8 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
                 if train_summary_writer is None:
                     self._write_debug_output(k + 1, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
-                                                     "L_SS": L_SS, "mol_kernel_l_y": mol_kernel_l_y}, candidates, gamma)
+                                                     "L_SS": L_SS, "mol_kernel_l_y": mol_kernel_l_y,
+                                                     "lab_losses": lab_losses}, candidates, gamma)
                 else:
                     self._write_debug_output(k + 1, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
                                                      "L_SS": L_SS}, candidates, gamma,
