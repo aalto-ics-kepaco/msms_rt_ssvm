@@ -603,19 +603,13 @@ class StructuredSVMMetIdent(_StructuredSVM):
         # Pre-calculate some data needed for the sub-problem solving
         lab_losses = {}
         mol_kernel_l_y = {}
-        for k, res_k in tqdm(list(it.product(range(self.n_epochs), range(self.batch_size))), desc="Pre-calculate data"):
-            i = i_k[k][res_k]
-
-            # Check whether the relevant stuff was already pre-computed
-            if y[i] in lab_losses:
-                continue
-
+        for y_i in tqdm(self.y_train, desc="Pre-calculate data"):
             # Pre-calculate the label loss: Loss of the gt fingerprint to all corresponding candidate fingerprints of i
-            fp_i = candidates.get_gt_fp(y[i])
-            lab_losses[y[i]] = self.label_loss_fun(fp_i, candidates.get_candidates_fp(y[i]))
+            fp_i = candidates.get_gt_fp(y_i)
+            lab_losses[y_i] = self.label_loss_fun(fp_i, candidates.get_candidates_fp(y_i))
 
             # Pre-calculate the kernels between the training examples and candidates
-            mol_kernel_l_y[y[i]] = candidates.getMolKernel_ExpVsCand(y, y[i]).T  # shape = (|Sigma_i|, N)
+            mol_kernel_l_y[y_i] = candidates.getMolKernel_ExpVsCand(self.y_train, y_i).T  # shape = (|Sigma_i|, N)
 
         # Initialize dual variables
         print("Initialize dual variables: ...", end="")
@@ -636,7 +630,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
         k = 0
         if train_summary_writer is None:
             self._write_debug_output(0, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
-                                         "L_SS": L_SS}, candidates, np.nan)
+                                         "L_SS": L_SS, "mol_kernel_l_y": mol_kernel_l_y}, candidates, np.nan)
         else:
             self._write_debug_output(0, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
                                          "L_SS": L_SS}, candidates, np.nan, train_summary_writer, X_val,
@@ -707,7 +701,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
                 if train_summary_writer is None:
                     self._write_debug_output(k + 1, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
-                                                     "L_SS": L_SS}, candidates, gamma)
+                                                     "L_SS": L_SS, "mol_kernel_l_y": mol_kernel_l_y}, candidates, gamma)
                 else:
                     self._write_debug_output(k + 1, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
                                                      "L_SS": L_SS}, candidates, gamma,
