@@ -25,62 +25,48 @@
 ####
 import os
 import numpy as np
-import datetime
-import tensorflow.summary as tf_summary
+import pandas as pd
 
-from sklearn.model_selection import GroupKFold, ShuffleSplit
+from timeit import default_timer as timer
 
 from ssvm.data_structures import CandidateSetMetIdent
 from ssvm.ssvm import StructuredSVMMetIdent
 from ssvm.examples.utils import read_data
+from ssvm.development.utils import get_git_revision_short_hash
 
+N_SAMPLES = 100
+N_REPS = 3
+BATCH_SIZE = 4
+
+ODIR = "./profiling/"
 
 if __name__ == "__main__":
-    from timeit import default_timer as timer
 
     # Read in training spectra, fingerprints and candidate set information
-    idir = "/home/bach/Documents/doctoral/data/metindent_ismb2016"  # "/run/media/bach/EVO500GB/data/metident_ismb2016"
+    idir = "/home/bach/Documents/doctoral/data/metindent_ismb2016"
     X, fps, mols, mols2cand = read_data(idir)
 
-    # Get a smaller subset
-    _, subset = next(ShuffleSplit(n_splits=1, test_size=0.1, random_state=1989).split(X))
+    # Extract a subset of the full training data
+    subset = np.sort(
+        np.random.RandomState(1989).choice(len(X), size=np.minimum(len(X), N_SAMPLES).astype(int), replace=False)
+    )
     X = X[np.ix_(subset, subset)]
     fps = fps[subset]
     mols = mols[subset]
-    print("Total number of examples:", len(mols))
+    print("Number of examples:", len(X))
 
     # Wrap the candidate sets for easier access
     cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(idir, "candidates"), preload_data=True)
 
-    # Get train test split
-    train, test = next(GroupKFold(n_splits=4).split(X, groups=mols))
-    # train, test = next(ShuffleSplit(n_splits=1, test_size=0.25, random_state=20201).split(X))
-    # np.savetxt(os.path.join(idir, "train_set.txt"), train)
-    # np.savetxt(os.path.join(idir, "test_set.txt"), test)
+    ts = []
+    for r in range(N_REPS):
+        start = timer()
+        StructuredSVMMetIdent(C=128, rs=928, n_epochs=40, batch_size=BATCH_SIZE, stepsize="linesearch") \
+            .fit(X, mols, candidates=cand, num_init_active_vars_per_seq=1)
+        ts.append([timer() - start])
 
-    X_train = X[np.ix_(train, train)]
-    X_test = X[np.ix_(test, train)]
-    mols_train = mols[train]
-    mols_test = mols[test]
-    assert not np.any(np.isin(mols_test, mols_train))
+    ts = pd.DataFrame(ts, columns=["Time (s)"]).aggregate(func=[np.mean, np.median, np.max])  # type: pd.DataFrame
+    print(ts)
 
-    # Tensorflow training summary log-file
-    current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    train_log_dir = 'logs/' + current_time + '/train'
-    train_summary_writer = None  # tf_summary.create_file_writer(train_log_dir)
-
-    start = timer()
-
-    svm = StructuredSVMMetIdent(C=128, rs=928, n_epochs=50, batch_size=8, stepsize="linesearch") \
-        .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=1,
-             train_summary_writer=train_summary_writer)
-
-    end = timer()
-    print("version 03: %fs" % (end - start))
-
-    for score_type in ["predicted", "random", "first_candidate"]:
-        print(score_type)
-        print("Top-1=%.2f, Top-5=%.2f, Top-10=%.2f, Top-20=%.2f" %
-              tuple(svm.score(X_test, mols_test, candidates=cand, score_type=score_type)[[0, 4, 9, 19]]))
-
-
+    ts.to_csv(os.path.join(ODIR, "run_time__%s__n_samples=%d__n_rep=%d__batch_size=%d.csv" % (
+        get_git_revision_short_hash(), N_SAMPLES, N_REPS, BATCH_SIZE)), index=False)
