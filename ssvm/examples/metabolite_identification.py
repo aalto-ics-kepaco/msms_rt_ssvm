@@ -71,7 +71,7 @@ if __name__ == "__main__":
 
     start = timer()
 
-    svm = StructuredSVMMetIdent(C=128, rs=928, n_epochs=3, batch_size=8, stepsize="linesearch") \
+    svm = StructuredSVMMetIdent(C=128, rs=928, n_epochs=10, batch_size=8, stepsize="linesearch") \
         .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=1,
              train_summary_writer=train_summary_writer)
 
