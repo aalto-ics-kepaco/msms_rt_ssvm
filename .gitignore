@@ -6,3 +6,4 @@ venv
 **/logs
 ssvm/tests/small_metabolite_data.pkl.gz
 slurm-*.out
+**/profiling
