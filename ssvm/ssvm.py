@@ -571,241 +571,375 @@ class StructuredSVMMetIdent(_StructuredSVM):
         self.y_train = None
         self.fps_active = None
         self.alphas = None  # type: DualVariables
-        self.train_set = None
+        self.N = None
 
         super(StructuredSVMMetIdent, self).__init__(C=C, n_epochs=n_epochs, label_loss=label_loss, rs=rs,
                                                     stepsize=stepsize)
 
+    @staticmethod
+    def _sanitize_fit_args(idict, keys, bool_default):
+        if idict is None:
+            idict = {}
+
+        for key in keys:
+            if key not in idict:
+                idict[key] = bool_default
+
+        return idict
+
     def fit(self, X: np.ndarray, y: np.ndarray, candidates: CandidateSetMetIdent, num_init_active_vars_per_seq=1,
-            train_summary_writer: Optional[ResourceSummaryWriter] = None):
+            debug_args: Optional[Dict] = None, pre_calc_args: Optional[Dict] = None):
         """
         Train the SSVM given a dataset.
+
+        :param debug_args: dict or None, Dictionary containing parameters for the debugging. If it is None, no debugging
+            or any other information, such as objective values, are tracked during the fitting process.
+
+            Dictionary (key: value):
+
+                "track_objectives": boolean, indicating whether primal and dual objective values as well as the duality
+                    gap should be printed / written to tensorboard.
+
+                "track_dual_variables": boolean, indicating whether information regarding the dual variables should be
+                    tracked. Those include a dual value histogram, the number of active variables (a(i, y) > 0) and the
+                    minimum dual value (min_(i, y) a(i, y)).
+
+                "track_stepsize": boolean, indicating whether the step-size should be tracked.
+
+                "track_topk_acc": boolean, indicating whether the top-k accuracies (1, 5, 10, 20) should be calculated
+                    during the optimization. If True, the training set is split into training' (90%) and validation
+                    (10%). The accuracy is calculated for both sets.
+
+                "summary_writer": ResourceSummaryWriter, output the debugging information to Tensorboard. If this key is
+                    missing, the debugging information will be only printed to the standard output.
+
+        :param pre_calc_args: dict or None, Dictionary defining which data will be pre-computed, i.e. we trade
+            memory against CPU. If needed, the pre_calculated data is updated, e.g. if the set of active variables
+            changes. If it is None, no all data will be computed on the fly (should have the lowest memory footprint).
+
+            Dictionary (key: value)
+
+                "pre_calc_label_losses": boolean, indicating whether the label losses between the ground truth molecular
+                    structure and their corresponding candidate structures (for all examples i) should be calculated.
+                    This parameter does not effect the label losses between the gt structures and the active ones, as
+                    this data is always pre-computed.
+
+                "pre_calc_L_Ci_S_matrices": boolean, indicating whether the matrices between the candidate and active
+                    molecular structures should be pre-calculated and updated. Those matrices can become quite large
+                    and therefore consume a lot of memory. In total, all matrices consume the space of (M, |S|), where
+                    M is practically the number of _all_ candidates.
+                    WARN: UPDATE NEEDED WHEN ACTIVE SET CHANGES
+
+                "pre_calc_L_Ci_matrices": boolean, indicating whether the matrices between training molecular structures
+                    and the candidate structures should be pre-calculated (for all examples i). In total, all matrices
+                    consume the space of (M, N).
+
+                --- Related to debug information ---
+
+                "pre_calc_L_matrices": boolean, indicating whether the L (n_train, n_train), L_S (|S|, n_train) and L_SS
+                    (|S|, |S|) matrices should pre-computed. This are needed for the objective value tracking. This
+                    parameter has an effect only, if 'track_objectives' is True.
+                    WARN: UPDATE NEEDED WHEN ACTIVE SET CHANGES
         """
-        # Split of some training data as a validation set, if Tensorboard debug information are written out.
-        if train_summary_writer is not None:
-            # take 10% of the data for validation
-            self.train_set, val_set = next(GroupKFold(n_splits=10).split(X, groups=y))
-            X_orig_train = np.array(X[self.train_set])
-            X_val = X[val_set]  # shape = (n_val, n_original_train)
-            X = X[np.ix_(self.train_set, self.train_set)]
-            y_val = y[val_set]
-            y = y[self.train_set]
+        # Simple check for kernelized inputs on the spectra side
+        if not np.array_equal(X, X.T):
+            raise ValueError("Currently we only except kernelized inputs on the spectra side. This is tested, by "
+                             "checking X == X.T.")
+
+        # Handle debug arguments
+        debug_args = self._sanitize_fit_args(
+            debug_args, ["track_objectives", "track_topk_acc", "track_stepsize", "track_dual_variables"], False)
+
+        if debug_args["track_topk_acc"]:
+            # Split full training dataset into training' (90%) and validation (10%)
+            train_set, val_set = next(GroupKFold(n_splits=10).split(X, groups=y))
+
+            # Here:
+            #   n_train  ... original size of full training set
+            #   n_train' ... size of 90% of the original training set
+            #   n_val    ... size of 10% of the original training set, used as validation set
+            data_for_topk_acc = {
+                "X_val": X[np.ix_(val_set, train_set)],  # shape = (n_val, n_train')
+                "y_val": y[val_set]                      # shape = (n_val, )
+            }
+
+            # New data for training: training'
+            X = X[np.ix_(train_set, train_set)]  # shape = (n_train', n_train')
+            y = y[train_set]                     # shape = (n_train', )
+        else:
+            data_for_topk_acc = {}
 
         # Assign the training inputs and labels (candidate identifier)
         self.K_train = X
         self.y_train = y
-        N = len(self.K_train)  # Number of training sequences
-
-        # Pre-calculate some data needed for the sub-problem solving
-        lab_losses = {}
-        mol_kernel_l_y = {}
-        for i in tqdm(range(N), desc="Pre-calculate data"):
-            y_i = self.y_train[i]
-            if y_i in lab_losses:
-                continue
-
-            # Pre-calculate the label loss: Loss of the gt fingerprint to all corresponding candidate fingerprints of i
-            fp_i = candidates.get_gt_fp(y_i)
-            lab_losses[y_i] = self.label_loss_fun(fp_i, candidates.get_candidates_fp(y_i))
-
-            # Pre-calculate the kernels between the training examples and candidates
-            mol_kernel_l_y[y_i] = candidates.getMolKernel_ExpVsCand(self.y_train, y_i).T  # shape = (|Sigma_i|, N)
+        self.N = len(self.K_train)  # Number of training examples: n_train or n_train' depending on the debug args.
 
         # Initialize dual variables
         print("Initialize dual variables: ...", end="")
-        self.alphas = DualVariables(C=self.C, cand_ids=[[candidates.get_labelspace(y[i])] for i in range(N)],
+        self.alphas = DualVariables(C=self.C, cand_ids=[[candidates.get_labelspace(y[i])] for i in range(self.N)],
                                     rs=self.rs, num_init_active_vars=num_init_active_vars_per_seq)
         assert self._is_feasible_matrix(self.alphas, self.C), "Initial dual variables must be feasible."
         print("100")
 
-        # Collect active candidate fingerprints and losses
-        self.fps_active, lab_losses_active = self._get_active_fingerprints_and_losses(
+        # Collect fingerprints and label losses corresponding to the (initially) active dual variables
+        self.fps_active, label_losses_active = self._get_active_fingerprints_and_losses(
             self.alphas, self.y_train, candidates, verbose=True)
+        # fps_active with shape           (|S|, d_fps) DONE: Update after every step
+        # label_losses_active with shape  (|S|, )      DONE: Update after every step
 
-        # Pre-calculate kernel molecule kernel matrices
-        L = candidates.getMolKernel_ExpVsExp(self.y_train)  # shape = (N, N)
-        L_S = candidates.get_kernel(self.fps_active, candidates.get_gt_fp(self.y_train))  # shape = (|S|, N)
-        L_SS = candidates.get_kernel(self.fps_active)  # shape = (|S|, |S|)
+        # Pre-calculate data as requested
+        pre_calc_args = self._sanitize_fit_args(
+            pre_calc_args, ["pre_calc_label_losses", "pre_calc_L_Ci_S_matrices", "pre_calc_L_Ci_matrices",
+                            "pre_calc_L_matrices"], False)
 
-        mol_kernel_L_S_Ci = {}
-        for i in tqdm(range(N), desc="Pre-calculate L_S_Ci kernels"):
+        label_losses = {}       # Memory: O(M)
+        mol_kernel_L_Ci = {}    # Memory: O(N x M)
+        mol_kernel_L_S_Ci = {}  # Memory: O(|S| x M)    DONE: Update for current batch before each step.
+        #                       TODO: For all data every k'th step for debugging.
+        #   NOTE(1): |S| grows with the iterations
+        #   NOTE(2): The matrices are stored in transpose (|S| x |C_i|). This allows the usage
+        #            of the "np.ndarray.resize" function. Matrices are transposed when accessed.
+        for i in tqdm(range(self.N), desc="Pre-calculate data (Losses, L_Ci and L_Ci_S matrices"):
             y_i = self.y_train[i]
-            if y_i in mol_kernel_L_S_Ci:
-                continue
 
-            mol_kernel_L_S_Ci[y_i] = candidates.get_kernel(self.fps_active, candidates.get_candidates_fp(y_i))
-            # shape = (|S|, |C_i|)
+            if pre_calc_args["pre_calc_label_losses"] and y_i not in label_losses:
+                # Label loss: Loss of the gt fingerprint to all corresponding candidate fingerprints of i
+                label_losses[y_i] = self.label_loss_fun(candidates.get_gt_fp(y_i), candidates.get_candidates_fp(y_i))
+
+            if pre_calc_args["pre_calc_L_Ci_matrices"] and y_i not in mol_kernel_L_Ci:
+                # Kernels between the training examples and candidates
+                mol_kernel_L_Ci[y_i] = candidates.getMolKernel_ExpVsCand(self.y_train, y_i).T  # shape = (|Sigma_i|, N)
+
+            if pre_calc_args["pre_calc_L_Ci_S_matrices"] and y_i not in mol_kernel_L_S_Ci:
+                # Kernels between active structures and all candidates of i
+                mol_kernel_L_S_Ci[y_i] = candidates.get_kernel(self.fps_active, candidates.get_candidates_fp(y_i))
+                # shape = (|S|, |C_i|)
+
+        pre_calc_data = {"label_losses_active": label_losses_active,
+                         "label_losses": label_losses,
+                         "mol_kernel_L_Ci": mol_kernel_L_Ci,
+                         "mol_kernel_L_S_Ci": mol_kernel_L_S_Ci}
+
+        # Memory: O(N**2) + O(|S| x N) + O(|S| x |S|)
+        if pre_calc_args["pre_calc_L_matrices"]:
+            # Pre-calculate kernel molecule kernel matrices
+            pre_calc_data["L"] = candidates.getMolKernel_ExpVsExp(self.y_train)
+            pre_calc_data["L_S"] = candidates.get_kernel(self.fps_active, candidates.get_gt_fp(self.y_train))
+            pre_calc_data["L_SS"] = candidates.get_kernel(self.fps_active)
+            # L with shape    (N, N)
+            # L_S with shape  (|S|, N)                  DONE: Update only every k'th step for debugging
+            # L_SS with sahep (|S|, |S|)                DONE: Update only every k'th step for debugging
 
 
-        if train_summary_writer is None:
-            self._write_debug_output(0,
-                                     {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
-                                      "L_SS": L_SS, "mol_kernel_l_y": mol_kernel_l_y, "lab_losses": lab_losses,
-                                      "mol_kernel_L_S_Ci": mol_kernel_L_S_Ci},
-                                     candidates,
-                                     np.nan)
-        else:
-            self._write_debug_output(0,
-                                     {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
-                                      "L_SS": L_SS},
-                                     candidates,
-                                     np.nan,
-                                     train_summary_writer,
-                                     X_val, y_val, X_orig_train, self.y_train)
+        k = 0
+        self._write_debug_output(debug_args, epoch=0, step_batch=0, step_total=k, stepsize=np.nan,
+                                 data_for_topk_acc=data_for_topk_acc, pre_calc_data=pre_calc_data,
+                                 candidates=candidates)
 
-        step = 1
         for epoch in range(self.max_n_epochs):  # Full pass over the data
-            for batch in mit.chunked(np.random.RandomState(epoch).permutation(np.arange(N)), self.batch_size):
-                for i in batch:
-                    y_i = self.y_train[i]
-                    if mol_kernel_L_S_Ci[y_i].shape[0] == self.fps_active.shape[0]:
-                        continue
+            for step, batch in enumerate(
+                    mit.chunked(np.random.RandomState(epoch).permutation(np.arange(self.N)), self.batch_size)):
+                # Update mol_kernel_L_S_Ci for the current batch
+                # ----------------------------------------------
+                if pre_calc_args["pre_calc_L_Ci_S_matrices"]:
+                    for i in batch:
+                        y_i = self.y_train[i]
+                        if pre_calc_args["mol_kernel_L_S_Ci"][y_i].shape[0] == self.fps_active.shape[0]:
+                            # Nothing to update
+                            continue
 
-                    # example i requires an update for the L_S_Ci
-                    _n_added_active_vars = self.fps_active.shape[0] - mol_kernel_L_S_Ci[y_i].shape[0]
-                    assert _n_added_active_vars > 0
+                        # example i requires an update for the L_S_Ci
+                        _n_missing = self.fps_active.shape[0] - pre_calc_args["mol_kernel_L_S_Ci"][y_i].shape[0]
+                        assert _n_missing > 0
 
-                    mol_kernel_L_S_Ci[y_i].resize((mol_kernel_L_S_Ci[y_i].shape[0] + _n_added_active_vars,
-                                                   mol_kernel_L_S_Ci[y_i].shape[1]), refcheck=False)
-                    mol_kernel_L_S_Ci[y_i][-_n_added_active_vars:] = candidates.get_kernel(
-                        self.fps_active[-_n_added_active_vars:], candidates.get_candidates_fp(y_i))
-                    assert not np.any(np.isnan(mol_kernel_L_S_Ci[y_i]))
+                        # Change size by adding one row
+                        pre_calc_args["mol_kernel_L_S_Ci"][y_i].resize(
+                            (pre_calc_args["mol_kernel_L_S_Ci"][y_i].shape[0] + _n_missing,
+                             pre_calc_args["mol_kernel_L_S_Ci"][y_i].shape[1]),
+                            refcheck=False)
 
-                # Find the most violating example
-                # TODO: Can we solve the sub-problem for a full batch at the same time?
-                # HINT: After pre-calculation was introduces, we actually do not use the CPU anymore as efficient.
-                # HINT: We should give again a try with the joblib.
-                res_batch = [self._solve_sub_problem(
-                    i, candidates, pre_calc_data={"lab_losses": lab_losses, "mol_kernel_l_y": mol_kernel_l_y,
-                                                  "mol_kernel_L_S_Ci": mol_kernel_L_S_Ci})
-                    for i in batch]
+                        # Fill the missing values
+                        pre_calc_args["mol_kernel_L_S_Ci"][y_i][-_n_missing:] = candidates.get_kernel(
+                            self.fps_active[-_n_missing:], candidates.get_candidates_fp(y_i))
+                        assert not np.any(np.isnan(pre_calc_args["mol_kernel_L_S_Ci"][y_i]))
 
-                # Get step-width
+                # -----------------
+                # SOLVE SUB-PROBLEM
+                # -----------------
+                res_batch = [self._solve_sub_problem(i, candidates, pre_calc_data=pre_calc_data) for i in batch]
+
+                # -----------------
+                # GET THE STEP SIZE
+                # -----------------
                 if self.stepsize == "diminishing":
-                    gamma = self._get_diminishing_stepwidth(step - 1, N)
+                    gamma = self._get_diminishing_stepwidth(k, self.N)
                 elif self.stepsize == "linesearch":
                     gamma = self._get_linesearch_stepwidth(batch, res_batch, candidates)
+                else:
+                    raise ValueError(
+                        "Invalid stepsize method '%s'. Choices are 'diminishing' and 'linesearch'." % self.stepsize)
 
-                # Update the dual variables
-                new_fps = np.full((self.batch_size, self.fps_active.shape[1]), fill_value=np.nan)
-                new_losses = np.full((self.batch_size, ), fill_value=np.nan)
-                _lst_row = 0
+                # -------------------------
+                # UPDATE THE DUAL VARIABLES
+                # -------------------------
+                _new_fps = np.full((self.batch_size, self.fps_active.shape[1]), fill_value=np.nan)
+                _new_losses = np.full((self.batch_size, ), fill_value=np.nan)
+                _n_added = 0
                 for idx, i in enumerate(batch):
                     y_i_hat = res_batch[idx][0]
+                    # HINT: Here happens the actual update ...
                     if self.alphas.update(i, y_i_hat, gamma):
                         # Add the fingerprint belonging to the newly added active dual variable
-                        new_fps[_lst_row, :] = candidates.get_candidates_fp(y[i], y_i_hat)
+                        _new_fps[_n_added, :] = candidates.get_candidates_fp(y[i], y_i_hat)
 
                         # Add the label loss belonging to the newly added active dual variable
-                        new_losses[_lst_row] = self.label_loss_fun(new_fps[_lst_row], candidates.get_gt_fp(y[i]))
+                        _new_losses[_n_added] = self.label_loss_fun(_new_fps[_n_added], candidates.get_gt_fp(y[i]))
 
-                        _lst_row += 1
+                        _n_added += 1
 
-                if _lst_row > 0:
-                    # Update the 'fps_active' and 'lab_losses_active'
-                    # WARNING: ndarray.resize will change the data structure if we add extend along an axis other than 0.
+                if _n_added > 0:
+                    # Update the 'fps_active' and 'label_losses_active'
                     _old_nrow = self.fps_active.shape[0]
-                    self.fps_active.resize((self.fps_active.shape[0] + _lst_row, self.fps_active.shape[1]), refcheck=False)
-                    self.fps_active[_old_nrow:] = new_fps[:_lst_row]
+                    self.fps_active.resize((self.fps_active.shape[0] + _n_added, self.fps_active.shape[1]),
+                                           refcheck=False)
+                    self.fps_active[_old_nrow:] = _new_fps[:_n_added]
                     assert not np.any(np.isnan(self.fps_active))
 
                     # Add the label loss belonging to the newly added active dual variable
-                    assert _old_nrow == lab_losses_active.shape[0]
-                    lab_losses_active.resize((lab_losses_active.shape[0] + _lst_row, ), refcheck=False)
-                    lab_losses_active[_old_nrow:] = new_losses[:_lst_row]
-                    assert not np.any(np.isnan(lab_losses_active))
+                    assert _old_nrow == pre_calc_data["label_losses_active"].shape[0]
+                    pre_calc_data["label_losses_active"].resize(
+                        (pre_calc_data["label_losses_active"].shape[0] + _n_added, ), refcheck=False)
+                    pre_calc_data["label_losses_active"][_old_nrow:] = _new_losses[:_n_added]
+                    assert not np.any(np.isnan(pre_calc_data["label_losses_active"]))
 
-                assert self._is_feasible_matrix(self.alphas, self.C), "Dual variables not feasible anymore after update."
+                assert self._is_feasible_matrix(self.alphas, self.C), \
+                    "Dual variables not feasible anymore after update."
 
-                if (step % 10) == 0:
-                    _n_added_active_vars = self.fps_active.shape[0] - L_S.shape[0]
-                    if _n_added_active_vars > 0:
-                        # Update the L_S and L_SS
-                        # L_S: Old shape (|S|, N) --> new shape (|S| + n_added, N)
-                        L_S.resize((L_S.shape[0] + _n_added_active_vars, L_S.shape[1]), refcheck=False)
-                        L_S[-_n_added_active_vars:] = candidates.get_kernel(self.fps_active[-_n_added_active_vars:],
-                                                                            candidates.get_gt_fp(self.y_train))
+                # Write out debug information
+                # ---------------------------
+                if (k % 10) == 0:  # TODO: write out debug information every 10'th iteration --> make it a parameter
+                    if pre_calc_args["pre_calc_L_matrices"]:
+                        _n_missing = self.fps_active.shape[0] - pre_calc_data["L_S"].shape[0]
+                        if _n_missing > 0:
+                            # Update the L_S and L_SS
+                            # -----------------------
+                            # L_S: Old shape (|S|, N) --> new shape (|S| + n_added, N)
+                            pre_calc_data["L_S"].resize(
+                                (pre_calc_data["L_S"].shape[0] + _n_missing, pre_calc_data["L_S"].shape[1]),
+                                refcheck=False)
+                            pre_calc_data["L_S"][-_n_missing:] = candidates.get_kernel(
+                                self.fps_active[-_n_missing:], candidates.get_gt_fp(self.y_train))
 
-                        # L_SS: Old shape (|S|, |S|) --> new shape (|S| + n_added, |S| + n_added)
-                        new_entries = candidates.get_kernel(self.fps_active[-_n_added_active_vars:],
-                                                            self.fps_active)  # shape = (n_added, |S| + n_added)
-                        _L_SS = np.zeros((L_SS.shape[0] + _n_added_active_vars, L_SS.shape[1] + _n_added_active_vars))
-                        _L_SS[:L_SS.shape[0], :L_SS.shape[1]] = L_SS
-                        _L_SS[L_SS.shape[0]:, :] = new_entries
-                        _L_SS[:, L_SS.shape[1]:] = new_entries.T
-                        L_SS = _L_SS
-                        assert np.all(np.equal(L_SS, L_SS.T))
+                            # L_SS: Old shape (|S|, |S|) --> new shape (|S| + n_added, |S| + n_added)
+                            new_entries = candidates.get_kernel(self.fps_active[-_n_missing:],
+                                                                self.fps_active)  # shape = (n_added, |S| + n_added)
+                            _L_SS = np.zeros((pre_calc_data["L_SS"].shape[0] + _n_missing,
+                                              pre_calc_data["L_SS"].shape[1] + _n_missing))
+                            _L_SS[:pre_calc_data["L_SS"].shape[0], :pre_calc_data["L_SS"].shape[1]] = pre_calc_data["L_SS"]
+                            _L_SS[pre_calc_data["L_SS"].shape[0]:, :] = new_entries
+                            _L_SS[:, pre_calc_data["L_SS"].shape[1]:] = new_entries.T
+                            pre_calc_data["L_SS"] = _L_SS
+                            assert np.all(np.equal(pre_calc_data["L_SS"], pre_calc_data["L_SS"].T))
 
                     # Update the L_S_Ci matrices
-                    for y_i in mol_kernel_L_S_Ci:
-                        if mol_kernel_L_S_Ci[y_i].shape[0] == self.fps_active.shape[0]:
-                            # There is nothing to update here
-                            continue
+                    # --------------------------
+                    if pre_calc_args["pre_calc_L_Ci_S_matrices"]:
+                        for y_i in pre_calc_args["mol_kernel_L_S_Ci"]:
+                            if pre_calc_args["mol_kernel_L_S_Ci"][y_i].shape[0] == self.fps_active.shape[0]:
+                                # There is nothing to update here
+                                continue
 
-                        _n_added_active_vars = self.fps_active.shape[0] - mol_kernel_L_S_Ci[y_i].shape[0]
-                        assert _n_added_active_vars > 0
+                            _n_missing = self.fps_active.shape[0] - pre_calc_args["mol_kernel_L_S_Ci"][y_i].shape[0]
+                            assert _n_missing > 0
 
-                        mol_kernel_L_S_Ci[y_i].resize((mol_kernel_L_S_Ci[y_i].shape[0] + _n_added_active_vars,
-                                                       mol_kernel_L_S_Ci[y_i].shape[1]), refcheck=False)
-                        mol_kernel_L_S_Ci[y_i][-_n_added_active_vars:] = candidates.get_kernel(
-                            self.fps_active[-_n_added_active_vars:], candidates.get_candidates_fp(y_i))
-                        assert not np.any(np.isnan(mol_kernel_L_S_Ci[y_i]))
+                            pre_calc_args["mol_kernel_L_S_Ci"][y_i].resize(
+                                (pre_calc_args["mol_kernel_L_S_Ci"][y_i].shape[0] + _n_missing,
+                                 pre_calc_args["mol_kernel_L_S_Ci"][y_i].shape[1]),
+                                refcheck=False)
+                            pre_calc_args["mol_kernel_L_S_Ci"][y_i][-_n_missing:] = candidates.get_kernel(
+                                self.fps_active[-_n_missing:], candidates.get_candidates_fp(y_i))
+                            assert not np.any(np.isnan(pre_calc_args["mol_kernel_L_S_Ci"][y_i]))
 
-                    if train_summary_writer is None:
-                        self._write_debug_output(step, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
-                                                        "L_SS": L_SS, "mol_kernel_l_y": mol_kernel_l_y,
-                                                        "lab_losses": lab_losses, "mol_kernel_L_S_Ci": mol_kernel_L_S_Ci},
-                                                 candidates, gamma)
-                    else:
-                        self._write_debug_output(step, {"lab_losses_active": lab_losses_active, "L": L, "L_S": L_S,
-                                                        "L_SS": L_SS}, candidates, gamma,
-                                                 train_summary_writer, X_val,
-                                                 y_val, X_orig_train, self.y_train)
+                    self._write_debug_output(debug_args, epoch=epoch, step_batch=step, step_total=k + 1,
+                                             stepsize=gamma, data_for_topk_acc=data_for_topk_acc,
+                                             pre_calc_data=pre_calc_data, candidates=candidates)
 
-                step += 1
+                k += 1
 
         return self
 
-    def _write_debug_output(self, step, pre_calc_data, candidates, stepsize, train_summary_writer=None, X_val=None,
-                            y_val=None, X_orig_train=None, y_orig_train=None):
-        print("Step: %d / %d" % (step, (self.max_n_epochs * (self.K_train.shape[0] // self.batch_size))))
+    def _write_debug_output(self, debug_args, epoch, step_batch, step_total, stepsize, pre_calc_data, data_for_topk_acc,
+                            candidates):
+        """
 
-        prim_obj, dual_obj, rel_duality_gap, lin_duality_gap = self._evaluate_primal_and_dual_objective(
-            candidates, pre_calc_data=pre_calc_data)
-        print("\tf(w) = %.5f; g(a) = %.5f\n"
-              "\tstep-size = %.5f\n"
-              "\tRelative duality gap = %.5f; Linearized duality gap = %.5f"
-              % (prim_obj, dual_obj, stepsize, rel_duality_gap, lin_duality_gap))
+        :param step:
+        :param epoch:
+        :param stepsize:
+        :param pre_calc_data:
+        :param data_for_topk_acc:
+        :param candidates:
+        :return:
+        """
+        # Get the summary writer if provided
+        try:
+            summary_writer = debug_args["summary_writer"]
+        except KeyError:
+            summary_writer = None
 
-        if train_summary_writer is not None:
-            with train_summary_writer.as_default():
-                with tf.name_scope("Objective Functions"):
-                    tf.summary.scalar("Primal", prim_obj, step)
-                    tf.summary.scalar("Dual", dual_obj, step)
-                    tf.summary.scalar("Duality gap", rel_duality_gap, step)
+        print("Epoch %d / %d; Step: %d / %d (per epoch); Step total: %d" % (
+            epoch, self.max_n_epochs, step_batch, np.ceil(self.K_train.shape[0] / self.batch_size), step_total))
 
-                with tf.name_scope("Optimizer"):
-                    tf.summary.scalar("Number of active dual variables", self.alphas.n_active(), step)
-                    tf.summary.scalar("Step-size", stepsize, step)
+        if debug_args["track_objectives"]:
+            prim_obj, dual_obj, rel_duality_gap, lin_duality_gap = self._evaluate_primal_and_dual_objective(
+                candidates, pre_calc_data=pre_calc_data)
+            print("\tf(w) = %.5f; g(a) = %.5f\n"
+                  "\tRelative duality gap = %.5f; Linear duality gap = %.5f"
+                  % (prim_obj, dual_obj, rel_duality_gap, lin_duality_gap))
 
-                tf.summary.histogram(
-                    "Dual variable distribution",
-                    data=np.array(np.sum(self.alphas.get_dual_variable_matrix(), axis=0)).flatten(),
-                    buckets=100, step=step)
+            if summary_writer:
+                with summary_writer.as_default():
+                    with tf.name_scope("Objective Functions"):
+                        tf.summary.scalar("Primal", prim_obj, step_total)
+                        tf.summary.scalar("Dual", dual_obj, step_total)
+                        tf.summary.scalar("Duality gap", rel_duality_gap, step_total)
 
-                with tf.name_scope("Metric (Validation)"):
-                    acc_k_val = self.score(X_val, y_val, candidates)
-                    print("\tTop-1=%2.2f; Top-5=%2.2f; Top-10=%2.2f\tValidation" %
-                          (acc_k_val[0], acc_k_val[4], acc_k_val[9]))
+        if debug_args["track_dual_variables"]:
+            print("\tNumber of active variables = %d" % self.alphas.n_active())
+
+            if summary_writer:
+                with summary_writer.as_default():
+                    with tf.name_scope("Optimizer"):
+                        tf.summary.scalar("Number of active dual variables", self.alphas.n_active(), step_total)
+
+                    tf.summary.histogram(
+                        "Dual variable distribution",
+                        data=np.array(np.sum(self.alphas.get_dual_variable_matrix(), axis=0)).flatten(),
+                        buckets=100, step=step_total)
+
+        if debug_args["track_stepsize"]:
+            print("\tStep size = %.5f" % stepsize)
+
+            if summary_writer:
+                with summary_writer.as_default():
+                    with tf.name_scope("Optimizer"):
+                        tf.summary.scalar("Step-size", stepsize, step_total)
+
+        if debug_args["track_topk_acc"]:
+            acc_k_train = self.score(self.K_train, self.y_train, candidates)
+            print("\tTop-1=%2.2f; Top-5=%2.2f; Top-10=%2.2f\tTraining" % (
+                acc_k_train[0], acc_k_train[4], acc_k_train[9]))
+
+            acc_k_val = self.score(data_for_topk_acc["X_val"], data_for_topk_acc["y_val"], candidates)
+            print("\tTop-1=%2.2f; Top-5=%2.2f; Top-10=%2.2f\tValidation" % (acc_k_val[0], acc_k_val[4], acc_k_val[9]))
+
+            if summary_writer:
+                with summary_writer.as_default():
                     for tpk in [1, 5, 10, 20]:
-                        tf.summary.scalar("Top-%d (validation)" % tpk, acc_k_val[tpk - 1], step)
+                        with tf.name_scope("Metric (Training)"):
+                            tf.summary.scalar("Top-%d (training)" % tpk, acc_k_train[tpk - 1], step_total)
 
-                with tf.name_scope("Metric (Training)"):
-                    acc_k_train = self.score(X_orig_train, y_orig_train, candidates)
-                    print("\tTop-1=%2.2f; Top-5=%2.2f; Top-10=%2.2f\tTraining" %
-                          (acc_k_train[0], acc_k_train[4], acc_k_train[9]))
-                    for tpk in [1, 5, 10, 20]:
-                        tf.summary.scalar("Top-%d (training)" % tpk, acc_k_train[tpk - 1], step)
+                        with tf.name_scope("Metric (Validation)"):
+                            tf.summary.scalar("Top-%d (validation)" % tpk, acc_k_val[tpk - 1], step_total)
 
     def _get_active_fingerprints_and_losses(self, alphas: DualVariables, y: np.ndarray,
                                             candidates: CandidateSetMetIdent, verbose=False):
@@ -829,7 +963,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
                 ground truth fingerprints
         """
         fps_active = np.zeros((alphas.n_active(), candidates.n_fps()))
-        lab_losses_active = np.zeros((alphas.n_active(), ))
+        label_losses_active = np.zeros((alphas.n_active(), ))
 
         itr = range(alphas.n_active())
         if verbose:
@@ -840,9 +974,9 @@ class StructuredSVMMetIdent(_StructuredSVM):
             # Get the fingerprints of the active candidates for example j
             fps_active[c] = candidates.get_candidates_fp(y[j], ybar)
             # Get label loss between the active fingerprint candidate and its corresponding gt fingerprint
-            lab_losses_active[c] = self.label_loss_fun(candidates.get_gt_fp(y[j]), fps_active[c])
+            label_losses_active[c] = self.label_loss_fun(candidates.get_gt_fp(y[j]), fps_active[c])
 
-        return fps_active, lab_losses_active
+        return fps_active, label_losses_active
 
     @staticmethod
     def _is_feasible_matrix(alphas: DualVariables, C: float) -> bool:
@@ -881,6 +1015,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
         :return: array-like, shape = (|Sigma_i|, )
         """
         # Get candidate fingerprints for all y in Sigma_i
+        # TODO: Make compatible with "pre_calc_data" stuff ...
         if "mol_kernel_L_S_Ci" not in pre_calc_data or "mol_kernel_l_y" not in pre_calc_data:
             fps_Ci = candidates.get_candidates_fp(self.y_train[i])
         else:
@@ -925,8 +1060,8 @@ class StructuredSVMMetIdent(_StructuredSVM):
         cand_scores = self._get_candidate_scores(i, candidates, pre_calc_data)
 
         # Get the label loss for example i
-        if "lab_losses" in pre_calc_data:
-            loss = pre_calc_data["lab_losses"][self.y_train[i]]
+        if self.y_train[i] in pre_calc_data["label_losses"]:
+            loss = pre_calc_data["label_losses"][self.y_train[i]]
         else:
             fp_i = candidates.get_gt_fp(self.y_train[i]).flatten()
             loss = self.label_loss_fun(fp_i, candidates.get_candidates_fp(self.y_train[i]))
@@ -995,12 +1130,6 @@ class StructuredSVMMetIdent(_StructuredSVM):
             keys are integer indices of each spectrum;
             values are array-like with shape = (|Sigma_i|,) containing predicted candidate scores
         """
-        if self.train_set is not None:
-            # Remove those training examples, that where part of the validation set and therefore not used for fitting
-            # the model.
-            X = X[:, self.train_set]
-        assert X.shape[1] == self.K_train.shape[0]
-
         B_S = self.alphas.get_dual_variable_matrix(type="dense")
         N = B_S.shape[0]
         score = {}
