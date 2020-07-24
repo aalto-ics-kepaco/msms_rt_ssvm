@@ -730,7 +730,6 @@ class StructuredSVMMetIdent(_StructuredSVM):
             # L_S with shape  (|S|, N)                  DONE: Update only every k'th step for debugging
             # L_SS with sahep (|S|, |S|)                DONE: Update only every k'th step for debugging
 
-
         k = 0
         self._write_debug_output(debug_args, epoch=0, step_batch=0, step_total=k, stepsize=np.nan,
                                  data_for_topk_acc=data_for_topk_acc, pre_calc_data=pre_calc_data,
@@ -744,24 +743,24 @@ class StructuredSVMMetIdent(_StructuredSVM):
                 if pre_calc_args["pre_calc_L_Ci_S_matrices"]:
                     for i in batch:
                         y_i = self.y_train[i]
-                        if pre_calc_args["mol_kernel_L_S_Ci"][y_i].shape[0] == self.fps_active.shape[0]:
+                        if pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[0] == self.fps_active.shape[0]:
                             # Nothing to update
                             continue
 
                         # example i requires an update for the L_S_Ci
-                        _n_missing = self.fps_active.shape[0] - pre_calc_args["mol_kernel_L_S_Ci"][y_i].shape[0]
+                        _n_missing = self.fps_active.shape[0] - pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[0]
                         assert _n_missing > 0
 
                         # Change size by adding one row
-                        pre_calc_args["mol_kernel_L_S_Ci"][y_i].resize(
-                            (pre_calc_args["mol_kernel_L_S_Ci"][y_i].shape[0] + _n_missing,
-                             pre_calc_args["mol_kernel_L_S_Ci"][y_i].shape[1]),
+                        pre_calc_data["mol_kernel_L_S_Ci"][y_i].resize(
+                            (pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[0] + _n_missing,
+                             pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[1]),
                             refcheck=False)
 
                         # Fill the missing values
-                        pre_calc_args["mol_kernel_L_S_Ci"][y_i][-_n_missing:] = candidates.get_kernel(
+                        pre_calc_data["mol_kernel_L_S_Ci"][y_i][-_n_missing:] = candidates.get_kernel(
                             self.fps_active[-_n_missing:], candidates.get_candidates_fp(y_i))
-                        assert not np.any(np.isnan(pre_calc_args["mol_kernel_L_S_Ci"][y_i]))
+                        assert not np.any(np.isnan(pre_calc_data["mol_kernel_L_S_Ci"][y_i]))
 
                 # -----------------
                 # SOLVE SUB-PROBLEM
@@ -844,21 +843,21 @@ class StructuredSVMMetIdent(_StructuredSVM):
                     # Update the L_S_Ci matrices
                     # --------------------------
                     if pre_calc_args["pre_calc_L_Ci_S_matrices"]:
-                        for y_i in pre_calc_args["mol_kernel_L_S_Ci"]:
-                            if pre_calc_args["mol_kernel_L_S_Ci"][y_i].shape[0] == self.fps_active.shape[0]:
+                        for y_i in pre_calc_data["mol_kernel_L_S_Ci"]:
+                            if pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[0] == self.fps_active.shape[0]:
                                 # There is nothing to update here
                                 continue
 
-                            _n_missing = self.fps_active.shape[0] - pre_calc_args["mol_kernel_L_S_Ci"][y_i].shape[0]
+                            _n_missing = self.fps_active.shape[0] - pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[0]
                             assert _n_missing > 0
 
-                            pre_calc_args["mol_kernel_L_S_Ci"][y_i].resize(
-                                (pre_calc_args["mol_kernel_L_S_Ci"][y_i].shape[0] + _n_missing,
-                                 pre_calc_args["mol_kernel_L_S_Ci"][y_i].shape[1]),
+                            pre_calc_data["mol_kernel_L_S_Ci"][y_i].resize(
+                                (pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[0] + _n_missing,
+                                 pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[1]),
                                 refcheck=False)
-                            pre_calc_args["mol_kernel_L_S_Ci"][y_i][-_n_missing:] = candidates.get_kernel(
+                            pre_calc_data["mol_kernel_L_S_Ci"][y_i][-_n_missing:] = candidates.get_kernel(
                                 self.fps_active[-_n_missing:], candidates.get_candidates_fp(y_i))
-                            assert not np.any(np.isnan(pre_calc_args["mol_kernel_L_S_Ci"][y_i]))
+                            assert not np.any(np.isnan(pre_calc_data["mol_kernel_L_S_Ci"][y_i]))
 
                     self._write_debug_output(debug_args, epoch=epoch, step_batch=step, step_total=k + 1,
                                              stepsize=gamma, data_for_topk_acc=data_for_topk_acc,

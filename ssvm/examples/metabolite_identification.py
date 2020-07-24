@@ -43,7 +43,7 @@ if __name__ == "__main__":
     X, fps, mols, mols2cand = read_data(idir)
 
     # Get a smaller subset
-    _, subset = next(ShuffleSplit(n_splits=1, test_size=0.1, random_state=1989).split(X))
+    _, subset = next(ShuffleSplit(n_splits=1, test_size=0.05, random_state=1989).split(X))
     X = X[np.ix_(subset, subset)]
     fps = fps[subset]
     mols = mols[subset]
@@ -73,7 +73,10 @@ if __name__ == "__main__":
 
     svm = StructuredSVMMetIdent(C=128, rs=928, n_epochs=10, batch_size=8, stepsize="linesearch") \
         .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=1,
-             train_summary_writer=train_summary_writer)
+             pre_calc_args={"pre_calc_label_losses": True,
+                            "pre_calc_L_Ci_S_matrices": True,
+                            "pre_calc_L_Ci_matrices": True,
+                            "pre_calc_L_matrices": True})
 
     end = timer()
     print("version 03: %fs" % (end - start))
