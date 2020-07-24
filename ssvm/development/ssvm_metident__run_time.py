@@ -92,7 +92,8 @@ if __name__ == "__main__":
     ts = pd.DataFrame(ts, columns=["pre_calc_label_losses", "pre_calc_L_Ci_S_matrices", "pre_calc_L_Ci_matrices",
                                    "pre_calc_L_matrices", "Time (s)", "Top-1", "Top-5", "Top-10"]) \
         .groupby(["pre_calc_label_losses", "pre_calc_L_Ci_S_matrices", "pre_calc_L_Ci_matrices", "pre_calc_L_matrices"]) \
-        .aggregate(func=[np.mean, np.median, np.min])  # type: pd.DataFrame
+        .aggregate(func=[np.mean, np.median, np.min]) \
+        .reset_index()  # type: pd.DataFrame
     print(ts)
 
     ts.to_csv(os.path.join(ODIR, "run_time__%s__n_samples=%d__n_rep=%d__batch_size=%d__stepsize=%s.csv" % (
