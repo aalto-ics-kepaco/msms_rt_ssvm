@@ -1014,20 +1014,29 @@ class StructuredSVMMetIdent(_StructuredSVM):
         :return: array-like, shape = (|Sigma_i|, )
         """
         # Get candidate fingerprints for all y in Sigma_i
-        # TODO: Make compatible with "pre_calc_data" stuff ...
-        if "mol_kernel_L_S_Ci" not in pre_calc_data or "mol_kernel_l_y" not in pre_calc_data:
-            fps_Ci = candidates.get_candidates_fp(self.y_train[i])
+        if "mol_kernel_L_S_Ci" not in pre_calc_data or self.y_train[i] not in pre_calc_data["mol_kernel_L_S_Ci"]:
+            L_Ci_S_available = False
         else:
-            fps_Ci = None
+            L_Ci_S_available = True
 
-        if "mol_kernel_L_S_Ci" in pre_calc_data:
+        if "mol_kernel_l_y" not in pre_calc_data or self.y_train[i] not in pre_calc_data["mol_kernel_l_y"]:
+            L_Ci_available = False
+        else:
+            L_Ci_available = True
+
+        if  L_Ci_available and L_Ci_S_available:
+            fps_Ci = None
+        else:
+            fps_Ci = candidates.get_candidates_fp(self.y_train[i])
+
+        if L_Ci_S_available:
             L_Ci_S = pre_calc_data["mol_kernel_L_S_Ci"][self.y_train[i]].T
             assert L_Ci_S.shape[1] == self.fps_active.shape[0]
         else:
             L_Ci_S = candidates.get_kernel(fps_Ci, self.fps_active)
         # L_Ci_S with shape = (|Sigma_i|, |S|)
 
-        if "mol_kernel_l_y" in pre_calc_data:
+        if L_Ci_available:
             L_Ci = pre_calc_data["mol_kernel_l_y"][self.y_train[i]]
         else:
             L_Ci = candidates.get_kernel(fps_Ci, candidates.get_gt_fp(self.y_train))
