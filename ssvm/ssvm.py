@@ -551,7 +551,7 @@ class _StructuredSVM(object):
         return True
 
     @staticmethod
-    def _get_diminishing_stepwidth(k: int, N: int) -> float:
+    def _get_step_size_diminishing(k: int, N: int) -> float:
         """
         Step-width calculation after [1].
 
@@ -771,9 +771,9 @@ class StructuredSVMMetIdent(_StructuredSVM):
                 # GET THE STEP SIZE
                 # -----------------
                 if self.stepsize == "diminishing":
-                    gamma = self._get_diminishing_stepwidth(k, self.N)
+                    gamma = self._get_step_size_diminishing(k, self.N)
                 elif self.stepsize == "linesearch":
-                    gamma = self._get_linesearch_stepwidth(batch, res_batch, candidates)
+                    gamma = self._get_step_size_linesearch(batch, res_batch, candidates)
                 else:
                     raise ValueError(
                         "Invalid stepsize method '%s'. Choices are 'diminishing' and 'linesearch'." % self.stepsize)
@@ -1092,15 +1092,20 @@ class StructuredSVMMetIdent(_StructuredSVM):
         :return:
         """
         # Pre-calculate some matrices
-        L = pre_calc_data["L"]
-        B_S = self.alphas.get_dual_variable_matrix(type="dense")  # shape = (N, |S|)
-        L_S = pre_calc_data["L_S"]  # shape = (|S|, N)
-        L_SS = pre_calc_data["L_SS"]  # shape = (|S|, |S|)
+        if "L" in pre_calc_data:
+            L  = pre_calc_data["L"]
+            L_S = pre_calc_data["L_S"]  # shape = (|S|, N)
+            L_SS = pre_calc_data["L_SS"]  # shape = (|S|, |S|)
+        else:
+            L = candidates.getMolKernel_ExpVsExp(self.y_train)
+            L_S = candidates.get_kernel(self.fps_active, candidates.get_gt_fp(self.y_train))
+            L_SS = candidates.get_kernel(self.fps_active)
 
         # Calculate the dual objective
+        B_S = self.alphas.get_dual_variable_matrix(type="dense")  # shape = (N, |S|)
         N = self.K_train.shape[0]
         aTATAa = np.sum(self.K_train * ((self.C**2 / N**2 * L) + (B_S @ (L_SS @ B_S.T - 2 * self.C / N * L_S))))
-        aTl = np.sum(B_S @ pre_calc_data["lab_losses_active"])
+        aTl = np.sum(B_S @ pre_calc_data["label_losses_active"])
         dual_obj = aTl - aTATAa / 2
 
         # Calculate the primal objective
@@ -1205,14 +1210,16 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
         return acc_k
 
-    def _get_linesearch_stepwidth(self, is_k: List[int], res_k: List[Tuple[Tuple, float]],
+    def _get_step_size_linesearch(self, is_k: List[int], res_k: List[Tuple[Tuple, float]],
                                   candidates: CandidateSetMetIdent) -> float:
         """
+        Implementation of the line-search algorithm for the step-size determination.
 
-        :param is_k:
+        :param is_k: list, indices of the training examples of the batch in iteration k
         :param res_k:
         :param candidates:
-        :return:
+
+        :return: scalar, step-size determined using line-search
         """
         alpha_iy, alpha_a = self.alphas.get_blocks(is_k)
         s_iy, s_a = [], self.C / len(self.y_train)
@@ -1241,7 +1248,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
         nom = a_minus_sTbl - s_minus_aTATAa
         den = np.sum(self.K_train[np.ix_(is_k, is_k)] * (bB_bS @ L_bSbS @ bB_bS.T))
 
-        return np.maximum(0, np.minimum(1, nom / den))
+        return np.clip(nom / den, 0, 1).item()
 
 
 class StructuredSVMSequences(_StructuredSVM):
@@ -1271,7 +1278,7 @@ class StructuredSVMSequences(_StructuredSVM):
             y_i_hat = self._solve_sub_problem(alphas, data, i)
 
             # Get step-width
-            gamma = self._get_diminishing_stepwidth(k, N)
+            gamma = self._get_step_size_diminishing(k, N)
 
             # Update the dual variables
             alphas[i].update(y_i_hat, gamma)
