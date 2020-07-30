@@ -1074,7 +1074,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
             fp_i = candidates.get_gt_fp(self.y_train[i]).flatten()
             loss = self.label_loss_fun(fp_i, candidates.get_candidates_fp(self.y_train[i]))
 
-        score = np.array(loss + cand_scores).flatten()
+        score = np.array(loss + cand_scores).flatten()  # I + III (see B.4)
 
         # Find the max-violator
         max_idx = np.argmax(score).item()
@@ -1111,10 +1111,10 @@ class StructuredSVMMetIdent(_StructuredSVM):
         # Calculate the primal objective
         wtw = aTATAa
         assert wtw >= 0
-        const = np.sum((self.C / N * L - L_S.T @ B_S.T) * self.K_train, axis=1)
+        const = np.sum((self.C / N * L - L_S.T @ B_S.T) * self.K_train, axis=1)  # II (see B.4)
         xi = 0
         for i in range(N):
-            _, max_score = self._solve_sub_problem(i, candidates, pre_calc_data)
+            _, max_score = self._solve_sub_problem(i, candidates, pre_calc_data)  # z_i(y) (see B.4)
             xi += np.maximum(0, max_score - const[i])
         prim_obj = wtw / 2 + (self.C / N) * xi
         prim_obj = prim_obj.flatten().item()

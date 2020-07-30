@@ -82,7 +82,8 @@ if __name__ == "__main__":
                      pre_calc_args={"pre_calc_label_losses": label_losses,
                                     "pre_calc_L_Ci_S_matrices": L_Ci_S_matrices,
                                     "pre_calc_L_Ci_matrices": L_Ci_matrices,
-                                    "pre_calc_L_matrices": L_matrices})
+                                    "pre_calc_L_matrices": L_matrices},
+                     debug_args={"track_objectives": True})
             topkacc = ssvm.score(X_test, mols_test, candidates=cand)
             ts.append([label_losses, L_Ci_S_matrices, L_Ci_matrices, L_matrices, timer() - start,
                        topkacc[0], topkacc[4], topkacc[10]])
@@ -97,4 +98,4 @@ if __name__ == "__main__":
     print(ts)
 
     ts.to_csv(os.path.join(ODIR, "run_time__%s__n_samples=%d__n_rep=%d__batch_size=%d__stepsize=%s.csv" % (
-        get_git_revision_short_hash(), N_SAMPLES, N_REPS, BATCH_SIZE, STEPSIZE)), index=False)
+        get_git_revision_short_hash(), N_SAMPLES, N_REPS, BATCH_SIZE, STEPSIZE)), index=False, sep="|")
