@@ -28,7 +28,6 @@ import numpy as np
 import pandas as pd
 
 from scipy.io import loadmat
-from scipy.sparse import csr_matrix
 from typing import List, Tuple, Union, Dict, Optional
 from sklearn.model_selection import GroupKFold
 from sklearn.utils.validation import check_random_state, check_is_fitted

@@ -77,23 +77,23 @@ if __name__ == "__main__":
 
         for r in range(N_REPS):
             start = timer()
-            ssvm = StructuredSVMMetIdent(C=128, rs=928, n_epochs=5, batch_size=BATCH_SIZE, stepsize=STEPSIZE) \
+            ssvm = StructuredSVMMetIdent(C=128, rs=928, max_n_epochs=5, batch_size=BATCH_SIZE, stepsize=STEPSIZE) \
                 .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=1,
                      pre_calc_args={"pre_calc_label_losses": label_losses,
                                     "pre_calc_L_Ci_S_matrices": L_Ci_S_matrices,
                                     "pre_calc_L_Ci_matrices": L_Ci_matrices,
                                     "pre_calc_L_matrices": L_matrices},
-                     debug_args={"track_objectives": True})
+                     debug_args={"track_objectives": False})
             topkacc = ssvm.score(X_test, mols_test, candidates=cand)
-            ts.append([label_losses, L_Ci_S_matrices, L_Ci_matrices, L_matrices, timer() - start,
-                       topkacc[0], topkacc[4], topkacc[10]])
+            ts.append([label_losses, L_Ci_S_matrices, L_Ci_matrices, L_matrices, timer() - start])
 
             print(ts[-1])
 
     ts = pd.DataFrame(ts, columns=["pre_calc_label_losses", "pre_calc_L_Ci_S_matrices", "pre_calc_L_Ci_matrices",
-                                   "pre_calc_L_matrices", "Time (s)", "Top-1", "Top-5", "Top-10"]) \
+                                   "pre_calc_L_matrices", "Time (s)"]) \
         .groupby(["pre_calc_label_losses", "pre_calc_L_Ci_S_matrices", "pre_calc_L_Ci_matrices", "pre_calc_L_matrices"]) \
-        .aggregate(func=[np.mean, np.median, np.min]) \
+        .aggregate(func=[np.median, np.min]) \
+        .round(2) \
         .reset_index()  # type: pd.DataFrame
     print(ts)
 
