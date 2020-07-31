@@ -71,7 +71,7 @@ def get_argument_parser() -> argparse.ArgumentParser:
 
 
 def train_test_model(hparams, n_epochs, train_summary_writer):
-    ssvm = StructuredSVMMetIdent(C=hparams[HP_C], rs=928, n_epochs=n_epochs, batch_size=hparams[HP_BATCH_SIZE]) \
+    ssvm = StructuredSVMMetIdent(C=hparams[HP_C], rs=928, max_n_epochs=n_epochs, batch_size=hparams[HP_BATCH_SIZE]) \
         .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=hparams[HP_NUM_INIT_ACT_VAR],
              debug_args={"track_objectives": True,
                          "track_topk_acc": True,
