@@ -667,15 +667,19 @@ class StructuredSVMMetIdent(_StructuredSVM):
             #   n_train' ... size of 90% of the original training set
             #   n_val    ... size of 10% of the original training set, used as validation set
             data_for_topk_acc = {
-                "X_val": X[np.ix_(val_set, train_set)],  # shape = (n_val, n_train')
-                "y_val": y[val_set]                      # shape = (n_val, )
+                "X_val": X[val_set],                    # shape = (n_val, n_train)
+                "y_val": y[val_set],                    # shape = (n_val, )
+                "X_orig_train": np.array(X[train_set])  # shape = (n_train', n_train) FIXME: this is nasty
             }
 
             # New data for training: training'
             X = X[np.ix_(train_set, train_set)]  # shape = (n_train', n_train')
             y = y[train_set]                     # shape = (n_train', )
+
+            self.train_set = train_set
         else:
             data_for_topk_acc = {}
+            self.train_set = None
 
         # Assign the training inputs and labels (candidate identifier)
         self.K_train = X
@@ -951,7 +955,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
                         tf.summary.scalar("Step-size", stepsize, step_total)
 
         if debug_args["track_topk_acc"]:
-            acc_k_train = self.score(self.K_train, self.y_train, candidates, pre_calc_data=pre_calc_data)
+            acc_k_train = self.score(data_for_topk_acc["X_orig_train"], self.y_train, candidates, pre_calc_data=pre_calc_data)
             print("\tTop-1=%2.2f; Top-5=%2.2f; Top-10=%2.2f\tTraining" % (
                 acc_k_train[0], acc_k_train[4], acc_k_train[9]))
 
@@ -1175,6 +1179,12 @@ class StructuredSVMMetIdent(_StructuredSVM):
         """
         if pre_calc_data is None:
             pre_calc_data = {"mol_kernel_L_Ci": {}, "mol_kernel_L_S_Ci": {}}
+
+        if self.train_set is not None:
+            # Remove those training examples, that where part of the validation set and therefore not used for fitting
+            # the model.
+            X = X[:, self.train_set]
+        assert X.shape[1] == self.K_train.shape[0]
 
         B_S = self.alphas.get_dual_variable_matrix(type="dense")
         N = B_S.shape[0]
