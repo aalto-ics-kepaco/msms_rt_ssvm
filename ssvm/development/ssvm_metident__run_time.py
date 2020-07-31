@@ -83,7 +83,7 @@ if __name__ == "__main__":
                                     "pre_calc_L_Ci_S_matrices": L_Ci_S_matrices,
                                     "pre_calc_L_Ci_matrices": L_Ci_matrices,
                                     "pre_calc_L_matrices": L_matrices},
-                     debug_args={"track_objectives": False})
+                     debug_args={"track_objectives": True, "track_topk_acc": True})
             topkacc = ssvm.score(X_test, mols_test, candidates=cand)
             ts.append([label_losses, L_Ci_S_matrices, L_Ci_matrices, L_matrices, timer() - start])
 
