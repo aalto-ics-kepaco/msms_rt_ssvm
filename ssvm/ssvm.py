@@ -155,7 +155,7 @@ class DualVariables(object):
         _alphas.resize(self.N, col)
         assert not np.any(_alphas.tocsc().sum(axis=0) == 0)
 
-        # TODO For faster verification of the label sequence correctness, we transform all candidate set lists in to sets
+        # TODO Faster verification of the label sequence correctness, we transform all candidate set lists in to sets
         # self.l_cand_ids = [for cand_ids_seq in (for cand_ids_exp in self.l_cand_ids)]
 
         self._alphas = _alphas
@@ -522,7 +522,7 @@ class _StructuredSVM(object):
                              self.stepsize)
 
         self.conv_criteria = conv_criteria
-        if self.conv_criteria not in ["max_epochs", "rel_duality_gap_decay"]:
+        if self.conv_criteria not in ["max_epochs", "rel_duality_gap_decay", "normalized_duality_gap"]:
             raise ValueError("Invalid convergence criteria '%s'." % self.conv_criteria)
 
         self.conv_threshold = conv_threshold
@@ -688,7 +688,8 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
         # Initialize dual variables
         print("Initialize dual variables: ...", end="")
-        self.alphas = DualVariables(C=self.C, cand_ids=[[candidates.get_labelspace(y[i])] for i in range(self.N)],
+        self.alphas = DualVariables(C=self.C, cand_ids=[[candidates.get_labelspace(y[i], for_training=True)]
+                                                        for i in range(self.N)],
                                     rs=self.rs, num_init_active_vars=num_init_active_vars_per_seq)
         assert self._is_feasible_matrix(self.alphas, self.C), "Initial dual variables must be feasible."
         print("100")
@@ -716,15 +717,18 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
             if pre_calc_args["pre_calc_label_losses"] and y_i not in label_losses:
                 # Label loss: Loss of the gt fingerprint to all corresponding candidate fingerprints of i
-                label_losses[y_i] = self.label_loss_fun(candidates.get_gt_fp(y_i), candidates.get_candidates_fp(y_i))
+                label_losses[y_i] = self.label_loss_fun(candidates.get_gt_fp(y_i),
+                                                        candidates.get_candidate_fps(y_i, for_training=True))
 
             if pre_calc_args["pre_calc_L_Ci_matrices"] and y_i not in mol_kernel_L_Ci:
                 # Kernels between the training examples and candidates
-                mol_kernel_L_Ci[y_i] = candidates.getMolKernel_ExpVsCand(self.y_train, y_i).T  # shape = (|Sigma_i|, N)
+                mol_kernel_L_Ci[y_i] = candidates.getMolKernel_ExpVsCand(self.y_train, y_i,
+                                                                         for_training=True).T  # shape = (|Sigma_i|, N)
 
             if pre_calc_args["pre_calc_L_Ci_S_matrices"] and y_i not in mol_kernel_L_S_Ci:
                 # Kernels between active structures and all candidates of i
-                mol_kernel_L_S_Ci[y_i] = candidates.get_kernel(self.fps_active, candidates.get_candidates_fp(y_i))
+                mol_kernel_L_S_Ci[y_i] = candidates.get_kernel(self.fps_active,
+                                                               candidates.get_candidate_fps(y_i, for_training=True))
                 # shape = (|S|, |C_i|)
 
         pre_calc_data = {"label_losses_active": label_losses_active,
@@ -781,7 +785,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
                     # HINT: Here happens the actual update ...
                     if self.alphas.update(i, y_i_hat, gamma):
                         # Add the fingerprint belonging to the newly added active dual variable
-                        _new_fps[_n_added, :] = candidates.get_candidates_fp(y[i], y_i_hat)
+                        _new_fps[_n_added, :] = candidates.get_candidate_fps(y[i], y_i_hat, for_training=True)
 
                         # Add the label loss belonging to the newly added active dual variable
                         _new_losses[_n_added] = self.label_loss_fun(_new_fps[_n_added], candidates.get_gt_fp(y[i]))
@@ -806,35 +810,23 @@ class StructuredSVMMetIdent(_StructuredSVM):
                 assert self._is_feasible_matrix(self.alphas, self.C), \
                     "Dual variables not feasible anymore after update."
 
-
-                # if (k % 10) == 0:  # TODO: write out debug information every 10'th iteration --> make it a parameter
-                #     # Update the L_S and L_SS
-                #     # -----------------------
-                #     self._update_L_matrices(pre_calc_args, pre_calc_data, candidates)
-                #
-                #     # Update the L_S_Ci matrices
-                #     # --------------------------
-                #     self._update_L_Ci_S_matrices(pre_calc_args, pre_calc_data, candidates)
-                #
-                #     self._write_debug_output(debug_args, epoch=epoch + 1, step_batch=step + 1, step_total=k + 1,
-                #                              stepsize=gamma, data_for_topk_acc=data_for_topk_acc,
-                #                              pre_calc_data=pre_calc_data, candidates=candidates)
-
                 k += 1
 
             # Write out debug information
             # ---------------------------
             self._update_L_matrices(pre_calc_args, pre_calc_data, candidates)
             self._update_L_Ci_S_matrices(pre_calc_args, pre_calc_data, candidates)
-            convergence_value = self._write_debug_output(debug_args, epoch=epoch + 1, step_batch=-1, step_total=k + 1,
+            convergence_value = self._write_debug_output(debug_args, epoch=epoch + 1, step_batch=-1, step_total=k,
                                                          stepsize=gamma, data_for_topk_acc=data_for_topk_acc,
                                                          pre_calc_data=pre_calc_data, candidates=candidates)
 
             # After every pass we check the convergence
-            if self.conv_criteria == "rel_duality_gap_decay":
+            if self.conv_criteria in ["rel_duality_gap_decay", "normalized_duality_gap"]:
                 if convergence_value < self.conv_threshold:
                     print("Convergence of '%s': val=%f" % (self.conv_criteria, convergence_value))
                     break
+
+        self.k = k
 
         return self
 
@@ -880,7 +872,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
                      pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[1]),
                     refcheck=False)
                 pre_calc_data["mol_kernel_L_S_Ci"][y_i][-_n_missing:] = candidates.get_kernel(
-                    self.fps_active[-_n_missing:], candidates.get_candidates_fp(y_i))
+                    self.fps_active[-_n_missing:], candidates.get_candidate_fps(y_i, for_training=True))
                 assert not np.any(np.isnan(pre_calc_data["mol_kernel_L_S_Ci"][y_i]))
 
     def _write_debug_output(self, debug_args, epoch, step_batch, step_total, stepsize, pre_calc_data, data_for_topk_acc,
@@ -955,7 +947,8 @@ class StructuredSVMMetIdent(_StructuredSVM):
                         tf.summary.scalar("Step-size", stepsize, step_total)
 
         if debug_args["track_topk_acc"]:
-            acc_k_train = self.score(data_for_topk_acc["X_orig_train"], self.y_train, candidates, pre_calc_data=pre_calc_data)
+            acc_k_train = self.score(data_for_topk_acc["X_orig_train"], self.y_train, candidates,
+                                     pre_calc_data=pre_calc_data)
             print("\tTop-1=%2.2f; Top-5=%2.2f; Top-10=%2.2f\tTraining" % (
                 acc_k_train[0], acc_k_train[4], acc_k_train[9]))
 
@@ -1004,7 +997,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
         for c in itr:
             j, ybar = alphas.get_iy_for_col(c)
             # Get the fingerprints of the active candidates for example j
-            fps_active[c] = candidates.get_candidates_fp(y[j], ybar)
+            fps_active[c] = candidates.get_candidate_fps(y[j], ybar, for_training=True)
             # Get label loss between the active fingerprint candidate and its corresponding gt fingerprint
             label_losses_active[c] = self.label_loss_fun(candidates.get_gt_fp(y[j]), fps_active[c])
 
@@ -1060,7 +1053,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
         if L_Ci_available and L_Ci_S_available:
             fps_Ci = None
         else:
-            fps_Ci = candidates.get_candidates_fp(self.y_train[i])
+            fps_Ci = candidates.get_candidate_fps(self.y_train[i], for_training=True)
 
         if L_Ci_S_available:
             L_Ci_S = pre_calc_data["mol_kernel_L_S_Ci"][self.y_train[i]].T
@@ -1105,7 +1098,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
             loss = pre_calc_data["label_losses"][self.y_train[i]]
         else:
             fp_i = candidates.get_gt_fp(self.y_train[i]).flatten()
-            loss = self.label_loss_fun(fp_i, candidates.get_candidates_fp(self.y_train[i]))
+            loss = self.label_loss_fun(fp_i, candidates.get_candidate_fps(self.y_train[i], for_training=True))
 
         score = np.array(loss + cand_scores).flatten()  # I + III (see B.4)
 
@@ -1113,7 +1106,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
         max_idx = np.argmax(score).item()
 
         # Get the corresponding candidate sequence label
-        y_hat_i = (candidates.get_labelspace(self.y_train[i])[max_idx], )
+        y_hat_i = (candidates.get_labelspace(self.y_train[i], for_training=True)[max_idx], )
 
         return y_hat_i, score[max_idx]
 
@@ -1179,6 +1172,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
         """
         if pre_calc_data is None:
             pre_calc_data = {"mol_kernel_L_Ci": {}, "mol_kernel_L_S_Ci": {}}
+            for_training = False
 
         if self.train_set is not None:
             # Remove those training examples, that where part of the validation set and therefore not used for fitting
@@ -1195,13 +1189,15 @@ class StructuredSVMMetIdent(_StructuredSVM):
             if y[i] in pre_calc_data["mol_kernel_L_Ci"]:
                 mol_kernel_l_y_i = pre_calc_data["mol_kernel_L_Ci"][y[i]].T
             else:
-                mol_kernel_l_y_i = candidates.getMolKernel_ExpVsCand(self.y_train, y[i])
+                mol_kernel_l_y_i = candidates.getMolKernel_ExpVsCand(self.y_train, y[i],
+                                                                     for_training=for_training)
 
             # ...
             if y[i] in pre_calc_data["mol_kernel_L_S_Ci"]:
                 L_Ci_S = pre_calc_data["mol_kernel_L_S_Ci"][y[i]]
             else:
-                L_Ci_S = candidates.get_kernel(self.fps_active, candidates.get_candidates_fp(y[i]))
+                L_Ci_S = candidates.get_kernel(self.fps_active, candidates.get_candidate_fps(y[i],
+                                                                                             for_training=for_training))
 
             s_ybar_y = X[i] @ B_S @ L_Ci_S
 
@@ -1300,7 +1296,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
         nom = a_minus_sTbl - s_minus_aTATAa
         den = np.sum(self.K_train[np.ix_(is_k, is_k)] * (bB_bS @ L_bSbS @ bB_bS.T))
 
-        return np.clip(nom / den, 0, 1).item()
+        return np.clip(nom / (den + 1e-8), 0, 1).item()
 
 
 class StructuredSVMSequences(_StructuredSVM):

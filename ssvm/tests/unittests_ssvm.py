@@ -135,10 +135,10 @@ class TestStructuredSVMMetIdent(unittest.TestCase):
 
         # Part that is specific to each candidate y in Sigma_i
         s3 = self.ssvm.C / self.N * self.cand.get_kernel(
-            self.cand.get_candidates_fp(self.ssvm.y_train[i]), fps_gt) @ self.ssvm.K_train[i]
+            self.cand.get_candidate_fps(self.ssvm.y_train[i]), fps_gt) @ self.ssvm.K_train[i]
         self.assertEqual((len(self.cand.get_labelspace(self.ssvm.y_train[i])),), s3.shape)
 
-        s4 = self.cand.get_kernel(self.cand.get_candidates_fp(self.ssvm.y_train[i]),
+        s4 = self.cand.get_kernel(self.cand.get_candidate_fps(self.ssvm.y_train[i]),
                                   self.ssvm.fps_active) @ B.T @ self.ssvm.K_train[i]
         self.assertEqual((len(self.cand.get_labelspace(self.ssvm.y_train[i])),), s4.shape)
 
