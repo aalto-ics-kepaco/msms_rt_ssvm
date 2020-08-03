@@ -120,7 +120,8 @@ class TestStructuredSVMMetIdent(unittest.TestCase):
 
         self.ssvm.fps_active, lab_losses_active = self.ssvm._get_active_fingerprints_and_losses(
             self.ssvm.alphas, self.ssvm.y_train, self.cand, verbose=True)
-        scores = self.ssvm._get_candidate_scores(i, self.cand, {"lab_losses_active": lab_losses_active})
+        scores = self.ssvm._get_candidate_scores(i, self.cand, {
+            "lab_losses_active": lab_losses_active, "mol_kernel_L_S_Ci": {}, "mol_kernel_L_Ci": {}})
 
         fps_gt_i = self.cand.get_gt_fp(self.ssvm.y_train[i])[np.newaxis, :]
         fps_gt = self.cand.get_gt_fp(self.ssvm.y_train)
@@ -134,12 +135,12 @@ class TestStructuredSVMMetIdent(unittest.TestCase):
         self.assertTrue(np.isscalar(s2))
 
         # Part that is specific to each candidate y in Sigma_i
-        s3 = self.ssvm.C / self.N * self.cand.get_kernel(
-            self.cand.get_candidate_fps(self.ssvm.y_train[i]), fps_gt) @ self.ssvm.K_train[i]
+        L_Ci = self.cand.get_kernel(self.cand.get_candidate_fps(self.ssvm.y_train[i]), fps_gt)
+        s3 = self.ssvm.C / self.N * L_Ci @ self.ssvm.K_train[i]
         self.assertEqual((len(self.cand.get_labelspace(self.ssvm.y_train[i])),), s3.shape)
 
-        s4 = self.cand.get_kernel(self.cand.get_candidate_fps(self.ssvm.y_train[i]),
-                                  self.ssvm.fps_active) @ B.T @ self.ssvm.K_train[i]
+        L_Ci_S = self.cand.get_kernel(self.cand.get_candidate_fps(self.ssvm.y_train[i]), self.ssvm.fps_active)
+        s4 = L_Ci_S @ (B.T @ self.ssvm.K_train[i])
         self.assertEqual((len(self.cand.get_labelspace(self.ssvm.y_train[i])),), s4.shape)
 
         np.testing.assert_allclose(scores, (s3 - s4))
@@ -454,6 +455,100 @@ class TestDualVariables(unittest.TestCase):
         self.assertFalse(DualVariables._eq_dual_domain(alpha_1a, alpha_2b))
         self.assertFalse(DualVariables._eq_dual_domain(alpha_2a, alpha_2b))
 
+    def test_deepcopy(self):
+        from copy import deepcopy
+
+        cand_ids = [
+            [
+                ["M1", "M2"],
+                ["M1", "M2", "M19", "M10"],
+                ["M20", "M4", "M5"],
+                ["M2"],
+                ["M3", "M56", "M8"]
+            ],
+            [
+                ["M1"],
+                ["M1", "M2", "M3", "M10", "M20"],
+                ["M4", "M5"],
+                ["M2", "M4"],
+                ["M7", "M9", "M8"]
+            ],
+            [
+                ["M1", "M2", "M3"],
+                ["M1", "M2", "M9", "M10", "M22"],
+                ["M20", "M7"],
+                ["M2", "M99"],
+                ["M72", "M8"]
+            ]
+        ]
+        alpha = DualVariables(C=2, cand_ids=cand_ids, rs=120)
+        alpha_cp = deepcopy(alpha)
+        self.assertEqual(alpha.get_dual_variable_matrix().shape,
+                         alpha_cp.get_dual_variable_matrix().shape)
+
+        alpha.update(0, ("M1", "M2", "M20", "M2", "M3"), gamma=0.25)
+        self.assertEqual(4, alpha.n_active())
+        self.assertEqual(3, alpha_cp.n_active())
+        self.assertNotEqual(alpha.get_dual_variable_matrix().shape,
+                            alpha_cp.get_dual_variable_matrix().shape)
+
+    def test_multiplication(self):
+        cand_ids = [
+            [
+                ["M1", "M2", "M19", "M10"]
+            ],
+            [
+                ["M7", "M9", "M8"]
+            ],
+            [
+                ["M72", "M11"]
+            ],
+            [
+                ["M12", "M13", "M3", "M4", "M22"]
+            ]
+        ]
+        C = 1.5
+        N = len(cand_ids)
+
+        # factor != 0
+        for i, fac in enumerate([-1, -0.78, 0.64, 1, 2]):
+            alphas = DualVariables(C=C, cand_ids=cand_ids, rs=i)
+
+            fac_mul_alphas = fac * alphas
+            alphas_fac_mul = alphas * fac
+
+            self.assertIsInstance(fac_mul_alphas, DualVariables)
+            self.assertIsInstance(alphas_fac_mul, DualVariables)
+
+            self.assertTrue(DualVariables._eq_dual_domain(alphas, alphas_fac_mul))
+            self.assertTrue(DualVariables._eq_dual_domain(alphas, fac_mul_alphas))
+
+            for i, y_seq in alphas._iy:
+                self.assertEqual((C / N), alphas.get_dual_variable(i, y_seq))
+                self.assertEqual((C / N) * fac, fac_mul_alphas.get_dual_variable(i, y_seq))
+                self.assertEqual((C / N) * fac, alphas_fac_mul.get_dual_variable(i, y_seq))
+
+        # factor == 0
+        alphas = DualVariables(C=C, cand_ids=cand_ids, rs=1)
+
+        fac_mul_alphas = 0 * alphas
+        alphas_fac_mul = alphas * 0
+
+        self.assertIsInstance(fac_mul_alphas, DualVariables)
+        self.assertIsInstance(alphas_fac_mul, DualVariables)
+
+        self.assertEqual([], fac_mul_alphas._iy)
+        self.assertEqual((alphas.N, 0), fac_mul_alphas.get_dual_variable_matrix().shape)
+        self.assertEqual([{} for _ in range(N)], fac_mul_alphas._y2col)
+
+        self.assertEqual([], alphas_fac_mul._iy)
+        self.assertEqual((alphas.N, 0), alphas_fac_mul.get_dual_variable_matrix().shape)
+        self.assertEqual([{} for _ in range(N)], alphas_fac_mul._y2col)
+
+    def test_addition(self):
+        # TODO: Implement
+        self.skipTest("Not implemented yet.")
+
     def test_subtraction(self):
         cand_ids = [
             [
@@ -482,6 +577,10 @@ class TestDualVariables(unittest.TestCase):
         # Test subtracting an empty dual variable set ==> no changes
         sub_alphas = alphas - (alphas - alphas)
         self.assertTrue(DualVariables._eq_dual_domain(alphas, sub_alphas))
+        self.assertEqual(len(alphas._iy), len(sub_alphas._iy))
+        for i, y_seq in alphas._iy:
+            self.assertIn((i, y_seq), sub_alphas._iy)
+            self.assertEqual(alphas.get_dual_variable(i, y_seq), sub_alphas.get_dual_variable(i, y_seq))
 
         # Test subtracting two non-empty dual variable sets
         alphas_2 = DualVariables(C=1.5, cand_ids=cand_ids, rs=2)

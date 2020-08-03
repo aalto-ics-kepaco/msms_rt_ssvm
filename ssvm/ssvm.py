@@ -28,6 +28,7 @@ import itertools as it
 import more_itertools as mit
 import tensorflow as tf
 
+from copy import deepcopy
 from typing import List, ItemsView, Tuple, ValuesView, KeysView, Iterator, Dict, Union, Optional, TypeVar
 from sklearn.utils.validation import check_random_state
 from sklearn.model_selection import GroupKFold
@@ -178,7 +179,7 @@ class DualVariables(object):
             if len(iy) != len(alphas):
                 raise ValueError("Number of dual variables values must be equal the number of active dual variables.")
         elif np.isscalar(alphas):
-            alphas = [alphas] * len(iy)
+            alphas = np.full((len(iy), ), fill_value=alphas)
         else:
             raise ValueError("Dual variables must be passed as list or scalar.")
 
@@ -316,20 +317,40 @@ class DualVariables(object):
 
         return iy, a
 
+    def __mul__(self, fac: Union[float, int]) -> DUALVARIABLES_T:
+        if not np.isscalar(fac):
+            raise ValueError("Can only multiply with scalar.")
+
+        if fac == 0:
+            return DualVariables(self.C, self.l_cand_ids, initialize=False).set_alphas([], [])
+        else:
+            out = deepcopy(self)
+            out._alphas *= fac
+            return out
+
+    def __rmul__(self, other):
+        return self.__mul__(other)
+
     def __sub__(self, other: DUALVARIABLES_T) -> DUALVARIABLES_T:
+        return self._add(-1 * other)
+
+    def __add__(self, other: DUALVARIABLES_T) -> DUALVARIABLES_T:
+        return self._add(other)
+
+    def _add(self, other: DUALVARIABLES_T) -> DUALVARIABLES_T:
         """
         Creates an DualVariable object where:
 
-            a_sub(i, y) = a_self(i, y) - a_other(i, y)      for all i and y in Sigma_i
+            a_sub(i, y) = a_self(i, y) + a_other(i, y)      for all i and y in Sigma_i
 
-        :param other: DualVariable, to subtract from 'self'
+        :param other: DualVariable, add to 'self'
 
         :return: DualVariable, defined over the same domain. The active dual variables are defined by the union of the
             active dual variables of 'self' and 'other'. Only non-zero dual variables are active. The dual values
-            represent the difference between the dual values.
+            represent the sum of the dual values.
 
         Note: The resulting DualVariable object can store the dual values of the active variables in an arbitrary order.
-              The columns of the dual variable matrix containing the difference values, can have a different order than
+              The columns of the dual variable matrix containing the added values, can have a different order than
               the original matrix. Therefore, the active fingerprint set needs to be rebuild after the subtraction
               operation to ensure that the dual values are in the correct order.
         """
@@ -360,7 +381,7 @@ class DualVariables(object):
             except KeyError:
                 a_right = 0.0
 
-            _alphas_union.append(a_left - a_right)
+            _alphas_union.append(a_left + a_right)
 
         # Remove all dual variables those value got zero by the subtraction
         _iy = [(i, y_seq) for (i, y_seq), a in zip(_iy_union, _alphas_union) if a != 0]
