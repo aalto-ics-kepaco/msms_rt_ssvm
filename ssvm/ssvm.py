@@ -237,6 +237,8 @@ class DualVariables(object):
         _r[0, col] = 0  # we already updated the selected candidate y_seq
         self._alphas[i] -= _r
 
+        assert self.n_active() == self._alphas.getnnz()
+
         return is_new
 
     def get_dual_variable(self, i: int, y_seq: tuple) -> float:
@@ -325,6 +327,11 @@ class DualVariables(object):
         :return: DualVariable, defined over the same domain. The active dual variables are defined by the union of the
             active dual variables of 'self' and 'other'. Only non-zero dual variables are active. The dual values
             represent the difference between the dual values.
+
+        Note: The resulting DualVariable object can store the dual values of the active variables in an arbitrary order.
+              The columns of the dual variable matrix containing the difference values, can have a different order than
+              the original matrix. Therefore, the active fingerprint set needs to be rebuild after the subtraction
+              operation to ensure that the dual values are in the correct order.
         """
 
         self.assert_is_initialized()
@@ -499,7 +506,7 @@ class DualVariablesForExample(object):
 
 class _StructuredSVM(object):
     def __init__(self, C=1.0, max_n_epochs=1000, label_loss="hamming", rs=None, stepsize="diminishing",
-                 conv_criteria="max_epochs", conv_threshold=1e-2):
+                 conv_criteria="max_epochs", conv_threshold=1e-2, maintain_aggregated_model=False):
         """
         Structured Support Vector Machine (SSVM) class.
 
@@ -526,6 +533,7 @@ class _StructuredSVM(object):
             raise ValueError("Invalid convergence criteria '%s'." % self.conv_criteria)
 
         self.conv_threshold = conv_threshold
+        self.maintain_aggregated_model = maintain_aggregated_model
 
         self.rs = check_random_state(rs)  # type: np.random.RandomState
 
@@ -570,7 +578,7 @@ class _StructuredSVM(object):
 
 class StructuredSVMMetIdent(_StructuredSVM):
     def __init__(self, C=1.0, max_n_epochs=100, label_loss="hamming", rs=None, batch_size=1, stepsize="linesearch",
-                 conv_criteria="max_epochs", conv_threshold=1e-2):
+                 conv_criteria="max_epochs", conv_threshold=1e-2, maintain_aggregated_model=False):
         self.batch_size = batch_size
 
         # States defining a fitted SSVM Model
@@ -579,10 +587,12 @@ class StructuredSVMMetIdent(_StructuredSVM):
         self.fps_active = None
         self.alphas = None  # type: DualVariables
         self.N = None
+        self.maintain_aggregated_model = maintain_aggregated_model
 
         super(StructuredSVMMetIdent, self).__init__(C=C, max_n_epochs=max_n_epochs, label_loss=label_loss, rs=rs,
                                                     stepsize=stepsize, conv_criteria=conv_criteria,
-                                                    conv_threshold=conv_threshold)
+                                                    conv_threshold=conv_threshold,
+                                                    maintain_aggregated_model=maintain_aggregated_model)
 
     @staticmethod
     def _sanitize_fit_args(idict, keys, bool_default):
@@ -660,7 +670,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
         if debug_args["track_topk_acc"]:
             # Split full training dataset into training' (90%) and validation (10%)
-            train_set, val_set = next(GroupKFold(n_splits=10).split(X, groups=y))
+            self.train_set, val_set = next(GroupKFold(n_splits=10).split(X, groups=y))
 
             # Here:
             #   n_train  ... original size of full training set
@@ -669,14 +679,11 @@ class StructuredSVMMetIdent(_StructuredSVM):
             data_for_topk_acc = {
                 "X_val": X[val_set],                    # shape = (n_val, n_train)
                 "y_val": y[val_set],                    # shape = (n_val, )
-                "X_orig_train": np.array(X[train_set])  # shape = (n_train', n_train) FIXME: this is nasty
             }
 
             # New data for training: training'
-            X = X[np.ix_(train_set, train_set)]  # shape = (n_train', n_train')
-            y = y[train_set]                     # shape = (n_train', )
-
-            self.train_set = train_set
+            X = X[np.ix_(self.train_set, self.train_set)]  # shape = (n_train', n_train')
+            y = y[self.train_set]                          # shape = (n_train', )
         else:
             data_for_topk_acc = {}
             self.train_set = None
@@ -796,14 +803,14 @@ class StructuredSVMMetIdent(_StructuredSVM):
                     # Update the 'fps_active' and 'label_losses_active'
                     _old_nrow = self.fps_active.shape[0]
                     self.fps_active.resize((self.fps_active.shape[0] + _n_added, self.fps_active.shape[1]),
-                                           refcheck=False)
+                                           refcheck=True)
                     self.fps_active[_old_nrow:] = _new_fps[:_n_added]
                     assert not np.any(np.isnan(self.fps_active))
 
                     # Add the label loss belonging to the newly added active dual variable
                     assert _old_nrow == pre_calc_data["label_losses_active"].shape[0]
                     pre_calc_data["label_losses_active"].resize(
-                        (pre_calc_data["label_losses_active"].shape[0] + _n_added, ), refcheck=False)
+                        (pre_calc_data["label_losses_active"].shape[0] + _n_added, ), refcheck=True)
                     pre_calc_data["label_losses_active"][_old_nrow:] = _new_losses[:_n_added]
                     assert not np.any(np.isnan(pre_calc_data["label_losses_active"]))
 
@@ -837,7 +844,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
                 # L_S: Old shape (|S|, N) --> new shape (|S| + n_added, N)
                 pre_calc_data["L_S"].resize(
                     (pre_calc_data["L_S"].shape[0] + _n_missing, pre_calc_data["L_S"].shape[1]),
-                    refcheck=False)
+                    refcheck=True)
                 pre_calc_data["L_S"][-_n_missing:] = candidates.get_kernel(
                     self.fps_active[-_n_missing:], candidates.get_gt_fp(self.y_train))
 
@@ -869,8 +876,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
                 pre_calc_data["mol_kernel_L_S_Ci"][y_i].resize(
                     (pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[0] + _n_missing,
-                     pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[1]),
-                    refcheck=False)
+                     pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[1]))
                 pre_calc_data["mol_kernel_L_S_Ci"][y_i][-_n_missing:] = candidates.get_kernel(
                     self.fps_active[-_n_missing:], candidates.get_candidate_fps(y_i, for_training=True))
                 assert not np.any(np.isnan(pre_calc_data["mol_kernel_L_S_Ci"][y_i]))
@@ -947,8 +953,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
                         tf.summary.scalar("Step-size", stepsize, step_total)
 
         if debug_args["track_topk_acc"]:
-            acc_k_train = self.score(data_for_topk_acc["X_orig_train"], self.y_train, candidates,
-                                     pre_calc_data=pre_calc_data)
+            acc_k_train = self._score_on_training_data(self.K_train, self.y_train, candidates, pre_calc_data)
             print("\tTop-1=%2.2f; Top-5=%2.2f; Top-10=%2.2f\tTraining" % (
                 acc_k_train[0], acc_k_train[4], acc_k_train[9]))
 
@@ -966,7 +971,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
         return convergence_value
 
-    def _get_active_fingerprints_and_losses(self, alphas: DualVariables, y: np.ndarray,
+    def _get_active_fingerprints_and_losses(self, alphas: DualVariables, y: Union[np.ndarray, None],
                                             candidates: CandidateSetMetIdent, verbose=False):
         """
         Load the molecular fingerprints corresponding to the molecules of active dual variables. Furthermore, calculate
@@ -988,7 +993,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
                 ground truth fingerprints
         """
         fps_active = np.zeros((alphas.n_active(), candidates.n_fps()))
-        label_losses_active = np.zeros((alphas.n_active(), ))
+        label_losses_active = np.full((alphas.n_active(), ), fill_value=np.nan)
 
         itr = range(alphas.n_active())
         if verbose:
@@ -998,8 +1003,10 @@ class StructuredSVMMetIdent(_StructuredSVM):
             j, ybar = alphas.get_iy_for_col(c)
             # Get the fingerprints of the active candidates for example j
             fps_active[c] = candidates.get_candidate_fps(y[j], ybar, for_training=True)
-            # Get label loss between the active fingerprint candidate and its corresponding gt fingerprint
-            label_losses_active[c] = self.label_loss_fun(candidates.get_gt_fp(y[j]), fps_active[c])
+
+            if y is not None:
+                # Get label loss between the active fingerprint candidate and its corresponding gt fingerprint
+                label_losses_active[c] = self.label_loss_fun(candidates.get_gt_fp(y[j]), fps_active[c])
 
         return fps_active, label_losses_active
 
@@ -1113,9 +1120,13 @@ class StructuredSVMMetIdent(_StructuredSVM):
     def _evaluate_primal_and_dual_objective(self, candidates: CandidateSetMetIdent, pre_calc_data: Dict) \
             -> Tuple[float, float, float, float]:
         """
-        Function to calculate the dual and primal objective values.
+        Function to calculating the:
+            (1) Primal objective value: f_k = f(w(alpha_k), xi(alpha_k))
+            (2) Dual objective value:   g_k = g(alpha_k)
+            (3) normalized duality gap: (f_k - g_k) / (f_k + 1)
+            (4) linear duality gap:     h_k = f_k - g_k
 
-        :return:
+        TODO: Make function compatible with 'maintain_aggregated_model'. Re-build active fps set, if needed!
         """
         # Pre-calculate some matrices
         if "L" in pre_calc_data:
@@ -1153,7 +1164,51 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
         return prim_obj, dual_obj, rel_duality_gap, lin_duality_gap
 
-    def predict(self, X: np.ndarray, y: np.ndarray, candidates: CandidateSetMetIdent, pre_calc_data=None) \
+    def predict(self, X: np.ndarray, y: np.ndarray, candidates: CandidateSetMetIdent) -> Dict[int, np.ndarray]:
+        """
+        Prediction function for the model application to new data.
+
+        :return:
+        """
+        if self.maintain_aggregated_model:
+            B_S = self.alphas_avg.get_dual_variable_matrix("dense")
+            fps_active, _ = self._get_active_fingerprints_and_losses(self.alphas_avg, None, candidates)
+        else:
+            B_S = self.alphas.get_dual_variable_matrix("dense")
+            fps_active = self.fps_active
+
+        _pre_calc_data = {"mol_kernel_L_Ci": {}, "mol_kernel_L_S_Ci": {}, "B_S": B_S, "fps_active": fps_active}
+
+        return self._predict(X, y, candidates, pre_calc_data=_pre_calc_data, for_training=False)
+
+    def _predict_on_training_data(self, X: np.ndarray, y: np.ndarray, candidates: CandidateSetMetIdent,
+                                  pre_calc_data: Dict[str, Dict[str, np.ndarray]]) -> Dict[int, np.ndarray]:
+        """
+        Prediction function used during the optimization, e.g. to access the training and validation set accuracies.
+
+
+        :return:
+        """
+        if self.maintain_aggregated_model:
+            B_S = self.alphas_avg.get_dual_variable_matrix("dense")
+            fps_active, _ = self._get_active_fingerprints_and_losses(self.alphas_avg, None, candidates)
+
+            _pre_calc_data = {"mol_kernel_L_Ci": pre_calc_data["mol_kernel_L_Ci"],
+                              "mol_kernel_L_S_Ci": {},  # forces local re-calculation
+                              "B_S": B_S, "fps_active": fps_active}
+        else:
+            B_S = self.alphas.get_dual_variable_matrix("dense")
+            fps_active = self.fps_active
+
+            _pre_calc_data = {"mol_kernel_L_Ci": pre_calc_data["mol_kernel_L_Ci"],
+                              "mol_kernel_L_S_Ci": pre_calc_data["mol_kernel_L_S_Ci"],
+                              "B_S": B_S, "fps_active": fps_active}
+
+        return self._predict(X, y, candidates, pre_calc_data=_pre_calc_data, for_training=True)
+
+        pass
+
+    def _predict(self, X: np.ndarray, y: np.ndarray, candidates: CandidateSetMetIdent, pre_calc_data, for_training) \
             -> Dict[int, np.ndarray]:
         """
         Predict the scores for each candidate corresponding to the individual spectra.
@@ -1166,51 +1221,54 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
         :param candidates: CandidateSetMetIdent, all needed information about the candidate sets
 
+        :param pre_calc_data: TODO
+
+        :param for_training: boolean, indicating whether prediction are done for the training process, or the model is
+            applied to a new set of data (test scenario).
+
         :return: dict:
             keys are integer indices of each spectrum;
             values are array-like with shape = (|Sigma_i|,) containing predicted candidate scores
         """
-        if pre_calc_data is None:
-            pre_calc_data = {"mol_kernel_L_Ci": {}, "mol_kernel_L_S_Ci": {}}
-            for_training = False
-        else:
-            for_training = True
-
-        if self.train_set is not None:
+        if not for_training and self.train_set is not None:
             # Remove those training examples, that where part of the validation set and therefore not used for fitting
             # the model.
             X = X[:, self.train_set]
         assert X.shape[1] == self.K_train.shape[0]
 
-        B_S = self.alphas.get_dual_variable_matrix(type="dense")
+        # Active fingerprints and active dual variable matrix
+        fps_active, B_S = pre_calc_data["fps_active"], pre_calc_data["B_S"]
+
+        # Number of training examples
         N = B_S.shape[0]
+
+        # Output candidate scores
         score = {}
 
         for i in range(X.shape[0]):
-            # Calculate the kernels between the training examples and candidates
+            # Load candidates of example i if kernel calculation is needed
+            if (y[i] in pre_calc_data["mol_kernel_L_Ci"]) and (y[i] in pre_calc_data["mol_kernel_L_S_Ci"]):
+                fps_Ci = None
+            else:
+                fps_Ci = candidates.get_candidate_fps(y[i], for_training=for_training)
+
+            # Kernel between the training examples and candidates of example i
             if y[i] in pre_calc_data["mol_kernel_L_Ci"]:
                 L_Ci = pre_calc_data["mol_kernel_L_Ci"][y[i]].T
             else:
-                L_Ci = candidates.getMolKernel_ExpVsCand(self.y_train, y[i], for_training=for_training)
+                L_Ci = candidates.get_kernel(self.y_train, fps_Ci)
 
-            # ...
+            # Kernel between the active fingerprints and the candidates of example i
             if y[i] in pre_calc_data["mol_kernel_L_S_Ci"]:
                 L_S_Ci = pre_calc_data["mol_kernel_L_S_Ci"][y[i]]
             else:
-                L_S_Ci = candidates.get_kernel(
-                    self.fps_active, candidates.get_candidate_fps(y[i], for_training=for_training))
+                L_S_Ci = candidates.get_kernel(fps_active, fps_Ci)
 
-            s_ybar_y = X[i] @ B_S @ L_S_Ci
-
-            # molecule kernel between all candidates of example i and all other training examples
-            s_j_y = (self.C / N) * X[i] @ L_Ci  # shape = (|Sigma_i|, )
-
-            score[i] = np.array(s_j_y - s_ybar_y).flatten()
+            score[i] = (self.C * X[i] @ L_Ci) / N - (X[i] @ B_S @ L_S_Ci)  # B.4 Eq. (19)
 
         return score
 
-    def score(self, X: np.ndarray, y: np.ndarray, candidates: CandidateSetMetIdent, score_type="predicted",
-              pre_calc_data=None):
+    def score(self, X: np.ndarray, y: np.ndarray, candidates: CandidateSetMetIdent, score_type="predicted"):
         """
         Calculate the top-k accuracy scores for a given test spectrum set.
 
@@ -1233,7 +1291,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
             d_cand[i] = {"n_cand": len(sigma_i), "index_of_correct_structure": sigma_i.index(y[i])}
 
         if score_type == "predicted":
-            scores = self.predict(X, y, candidates, pre_calc_data=pre_calc_data)
+            scores = self.predict(X, y, candidates)
             tp_k, acc_k = get_topk_performance_csifingerid(d_cand, scores)
 
         elif score_type == "random":
@@ -1256,6 +1314,24 @@ class StructuredSVMMetIdent(_StructuredSVM):
         else:
             raise ValueError("Invalid score type: '%s'. Choices are 'predicted', 'random' and 'first_candidate'"
                              % score_type)
+
+        return acc_k
+
+    def _score_on_training_data(self, X: np.ndarray, y: np.ndarray, candidates: CandidateSetMetIdent,
+                                pre_calc_data: Dict[str, Dict[str, np.ndarray]]) -> np.ndarray:
+        """
+        Calculate the top-k accuracy scores on the training set. This function is meant to be used during the model
+        training.
+
+        The function makes
+        """
+        d_cand = {}
+        for i in range(X.shape[0]):
+            sigma_i = candidates.get_labelspace(y[i], for_training=True)
+            d_cand[i] = {"n_cand": len(sigma_i), "index_of_correct_structure": sigma_i.index(y[i])}
+
+        scores = self._predict_on_training_data(X, y, candidates, pre_calc_data)
+        _, acc_k = get_topk_performance_csifingerid(d_cand, scores)
 
         return acc_k
 
