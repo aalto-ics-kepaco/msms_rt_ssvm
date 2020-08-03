@@ -1173,6 +1173,8 @@ class StructuredSVMMetIdent(_StructuredSVM):
         if pre_calc_data is None:
             pre_calc_data = {"mol_kernel_L_Ci": {}, "mol_kernel_L_S_Ci": {}}
             for_training = False
+        else:
+            for_training = True
 
         if self.train_set is not None:
             # Remove those training examples, that where part of the validation set and therefore not used for fitting
@@ -1187,22 +1189,21 @@ class StructuredSVMMetIdent(_StructuredSVM):
         for i in range(X.shape[0]):
             # Calculate the kernels between the training examples and candidates
             if y[i] in pre_calc_data["mol_kernel_L_Ci"]:
-                mol_kernel_l_y_i = pre_calc_data["mol_kernel_L_Ci"][y[i]].T
+                L_Ci = pre_calc_data["mol_kernel_L_Ci"][y[i]].T
             else:
-                mol_kernel_l_y_i = candidates.getMolKernel_ExpVsCand(self.y_train, y[i],
-                                                                     for_training=for_training)
+                L_Ci = candidates.getMolKernel_ExpVsCand(self.y_train, y[i], for_training=for_training)
 
             # ...
             if y[i] in pre_calc_data["mol_kernel_L_S_Ci"]:
-                L_Ci_S = pre_calc_data["mol_kernel_L_S_Ci"][y[i]]
+                L_S_Ci = pre_calc_data["mol_kernel_L_S_Ci"][y[i]]
             else:
-                L_Ci_S = candidates.get_kernel(self.fps_active, candidates.get_candidate_fps(y[i],
-                                                                                             for_training=for_training))
+                L_S_Ci = candidates.get_kernel(
+                    self.fps_active, candidates.get_candidate_fps(y[i], for_training=for_training))
 
-            s_ybar_y = X[i] @ B_S @ L_Ci_S
+            s_ybar_y = X[i] @ B_S @ L_S_Ci
 
             # molecule kernel between all candidates of example i and all other training examples
-            s_j_y = (self.C / N) * X[i] @ mol_kernel_l_y_i  # shape = (|Sigma_i|, )
+            s_j_y = (self.C / N) * X[i] @ L_Ci  # shape = (|Sigma_i|, )
 
             score[i] = np.array(s_j_y - s_ybar_y).flatten()
 
