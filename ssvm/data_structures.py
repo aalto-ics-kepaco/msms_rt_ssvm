@@ -78,15 +78,18 @@ class CandidateSetMetIdent(object):
             raise KeyError("Cannot find correct molecular structure '%s' in candidate set '%s'." % (
                 mol, self.mols2cand[mol]))
 
-        # Sample a sub-set for the training
-        subset = np.random.RandomState(cand["n_cand"]).choice(
-            cand["n_cand"], int(np.minimum(self.max_n_train_candidates, cand["n_cand"])), replace=False)
+        if not np.isinf(self.max_n_train_candidates):
+            # Sample a sub-set for the training
+            subset = np.random.RandomState(cand["n_cand"]).choice(
+                cand["n_cand"], int(np.minimum(self.max_n_train_candidates, cand["n_cand"])), replace=False)
 
-        # Ensure that the current candidate is in the sub-set
-        if cand["index_of_correct_structure"] not in subset:
-            subset[0] = cand["index_of_correct_structure"]
+            # Ensure that the current candidate is in the sub-set
+            if cand["index_of_correct_structure"] not in subset:
+                subset[0] = cand["index_of_correct_structure"]
 
-        cand["training_subset"] = subset
+            cand["training_subset"] = subset
+        else:
+            cand["training_subset"] = np.arange(cand["n_cand"])
 
         return cand
 
