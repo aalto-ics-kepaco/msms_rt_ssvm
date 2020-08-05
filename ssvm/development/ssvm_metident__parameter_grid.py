@@ -38,9 +38,9 @@ from ssvm.data_structures import CandidateSetMetIdent
 from ssvm.development.utils import get_git_revision_short_hash
 
 
-HP_C = hp.HParam("C", hp.Discrete([1, 8, 64, 512, 1024]))
-HP_BATCH_SIZE = hp.HParam("batch_size", hp.Discrete([1, 4, 8, 16]))
-HP_NUM_INIT_ACT_VAR = hp.HParam("num_init_act_var", hp.Discrete([1, 6, 12]))
+HP_C = hp.HParam("C", hp.Discrete([100, 500, 1000, 4000, 16000]))
+HP_BATCH_SIZE = hp.HParam("batch_size", hp.Discrete([8]))
+HP_NUM_INIT_ACT_VAR = hp.HParam("num_init_act_var", hp.Discrete([6]))
 HP_GRID = list(product(HP_C.domain.values, HP_BATCH_SIZE.domain.values, HP_NUM_INIT_ACT_VAR.domain.values))
 N_TOTAL_PAR_TUP = len(HP_GRID)
 
@@ -63,15 +63,20 @@ def get_argument_parser() -> argparse.ArgumentParser:
                             help="Directory to store the random-subset and training and test set indices used for the"
                                  "hyper parameter evaluation.",
                             default="./reproducible")
-    arg_parser.add_argument("--n_samples", type=float, default=np.inf,
+    arg_parser.add_argument("--n_samples", type=float, default=1000,
                             help="Number of training examples to use for the evaluation")
-    arg_parser.add_argument("--n_epochs", type=int, default=1500)
+    arg_parser.add_argument("--n_epochs", type=int, default=20)
+    arg_parser.add_argument("--max_n_train_candidates", type=int, default=100)
+    arg_parser.add_argument("--stepsize", type=str, default="linesearch")
+    arg_parser.add_argument("--conv_criteria", type=str, default="rel_duality_gap_decay")
 
     return arg_parser
 
 
-def train_test_model(hparams, n_epochs, train_summary_writer):
-    ssvm = StructuredSVMMetIdent(C=hparams[HP_C], rs=928, max_n_epochs=n_epochs, batch_size=hparams[HP_BATCH_SIZE]) \
+def train_test_model(hparams, args, train_summary_writer):
+    ssvm = StructuredSVMMetIdent(C=hparams[HP_C], rs=928, max_n_epochs=args.n_epochs,
+                                 batch_size=hparams[HP_BATCH_SIZE], conv_criteria=args.conv_criteria,
+                                 stepsize=args.stepsize) \
         .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=hparams[HP_NUM_INIT_ACT_VAR],
              debug_args={"track_objectives": True,
                          "track_topk_acc": True,
@@ -122,7 +127,7 @@ if __name__ == "__main__":
 
     # Wrap the candidate sets for easier access
     cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(args.input_data_dir, "candidates"),
-                                preload_data=True)
+                                preload_data=True, max_n_train_candidates=args.max_n_train_candidates)
 
     # Tensorflow training summary log-file
     git_hash = get_git_revision_short_hash()
@@ -156,7 +161,7 @@ if __name__ == "__main__":
                                                          (HP_GRID[args.param_tuple_index][0],
                                                           HP_GRID[args.param_tuple_index][1],
                                                           HP_GRID[args.param_tuple_index][2])))
-    acc = train_test_model(hparams, n_epochs=args.n_epochs, train_summary_writer=sum_wrt)
+    acc = train_test_model(hparams, args, train_summary_writer=sum_wrt)
 
     with sum_wrt.as_default():
         hp.hparams(hparams)

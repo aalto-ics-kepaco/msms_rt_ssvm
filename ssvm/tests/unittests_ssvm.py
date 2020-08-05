@@ -77,7 +77,7 @@ class TestStructuredSVMMetIdent(unittest.TestCase):
         if not os.path.exists("small_metabolite_data.pkl.gz"):
             # Create a small example containing metabolite identification data from the ISMB 2016 paper
             from sklearn.model_selection import ShuffleSplit
-            from ssvm.examples.metabolite_identification import read_data
+            from ssvm.development.ssvm_metident__conv_params import read_data
             from ssvm.data_structures import CandidateSetMetIdent
 
             idir = "/home/bach/Documents/doctoral/data/metindent_ismb2016"
@@ -120,8 +120,11 @@ class TestStructuredSVMMetIdent(unittest.TestCase):
 
         self.ssvm.fps_active, lab_losses_active = self.ssvm._get_active_fingerprints_and_losses(
             self.ssvm.alphas, self.ssvm.y_train, self.cand, verbose=True)
-        scores = self.ssvm._get_candidate_scores(i, self.cand, {
-            "lab_losses_active": lab_losses_active, "mol_kernel_L_S_Ci": {}, "mol_kernel_L_Ci": {}})
+        scores = self.ssvm._get_candidate_scores(
+            self.ssvm.K_train[i], self.ssvm.y_train[i], self.cand,
+            {"lab_losses_active": lab_losses_active, "mol_kernel_L_S_Ci": {}, "mol_kernel_L_Ci": {},
+             "fps_active": self.ssvm.fps_active, "B_S": self.ssvm.alphas.get_dual_variable_matrix("dense")},
+            for_training=True)
 
         fps_gt_i = self.cand.get_gt_fp(self.ssvm.y_train[i])[np.newaxis, :]
         fps_gt = self.cand.get_gt_fp(self.ssvm.y_train)

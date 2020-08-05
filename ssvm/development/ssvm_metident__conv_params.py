@@ -70,9 +70,6 @@ if __name__ == "__main__":
 
         for conv_criteria, stepsize, max_n_train_candidates in it.product(
                 ["rel_duality_gap_decay", "max_epochs"], ["diminishing", "linesearch"], [np.inf, 1, 10, 100]):
-        # for conv_criteria, stepsize, max_n_train_candidates in it.product(
-        #         ["rel_duality_gap_decay"], ["diminishing"], [10]):
-
             print(conv_criteria, stepsize, max_n_train_candidates)
 
             cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(idir, "candidates"), preload_data=True,
