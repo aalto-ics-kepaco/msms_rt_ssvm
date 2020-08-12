@@ -231,14 +231,14 @@ class TestVectorization(unittest.TestCase):
 
         C = 2
         N = 5000
-        nE = 50
+        nE = 30
         nSs = 200
         nSt = 200
-        L_jbss = np.random.rand(N, nE, nSs)
-        L_jbtt = np.random.rand(N, nE, nSt)
-        L_jbst = np.random.rand(N, nE, nSt)
-        L_jbts = np.random.rand(N, nE, nSs)
-        sign_Delta_tj = np.sign(np.random.randn(N, nE))
+        L_jbss = np.random.RandomState(1).rand(N, nE, nSs)
+        L_jbtt = np.random.RandomState(2).rand(N, nE, nSt)
+        L_jbst = np.random.RandomState(3).rand(N, nE, nSt)
+        L_jbts = np.random.RandomState(4).rand(N, nE, nSs)
+        sign_Delta_tj = np.sign(np.random.RandomState(5).randn(N, nE))
 
         # Eq. (37)
         start = time.time()
@@ -266,11 +266,13 @@ class TestVectorization(unittest.TestCase):
 
         # Eq. (37)
         start = time.time()
-        A = oe.contract("ij,ijk,ijl", sign_Delta_tj, L_jbss, L_jbtt)
-        B = oe.contract("ij,ijk,ijl", sign_Delta_tj, L_jbts, L_jbst)
+        expr = oe.contract_expression("ij,ijk,ijl", sign_Delta_tj, L_jbss.shape, L_jbtt.shape, constants=[0])
+        A = expr(L_jbss, L_jbtt)
+        B = expr(L_jbts, L_jbst)
         res_37e = C / N * (A - B)
         print("Eq. (37e):\t%.5fs" % (time.time() - start))
         self.assertEqual((nSs, nSt), res_37e.shape)
+        print(expr)
 
         # Eq. (37)
         start = time.time()
@@ -280,3 +282,186 @@ class TestVectorization(unittest.TestCase):
         res_37f = C / N * (np.sum(res_A, axis=0) - np.sum(res_B, axis=0))
         print("Eq. (37f):\t%.5fs" % (time.time() - start))
         self.assertEqual((nSs, nSt), res_37f.shape)
+
+    def test_4(self):
+        N = 50
+        nE = 23
+        nSs = 35
+        nSt = 36
+        nSj_min, nSj_max = 10, 52
+
+        L_jbss = []
+        L_jbtt = []
+        L_jbst = []
+        L_jbts = []
+        alpha_j = []
+        n_active = []
+        for j in range(N):
+            nSj = np.random.RandomState(j * 6 + 1).randint(nSj_min, nSj_max)
+            L_jbss.append(np.random.RandomState(j * 6 + 2).rand(nE, nSj, nSs))
+            L_jbtt.append(np.random.RandomState(j * 6 + 3).rand(nE, nSj, nSt))
+            L_jbst.append(np.random.RandomState(j * 6 + 4).rand(nE, nSj, nSt))
+            L_jbts.append(np.random.RandomState(j * 6 + 5).rand(nE, nSj, nSs))
+
+            _alpha = np.random.RandomState(j * 6 + 6).randn(nSj)
+            _alpha[_alpha < 0] = 0.0
+            alpha_j.append(_alpha)
+            n_active.append(np.sum(_alpha > 0).item())
+            # print("j = %d:\t#a>0 = %d (of %d)" % (j, n_active[-1], len(_alpha)))
+
+        sign_Delta_tj = np.sign(np.random.RandomState(10).randn(N, nE))
+
+        start = time.time()
+        res = np.zeros((nSs, nSt))
+        for s in range(nSs):
+            for t in range(nSt):
+                for j in range(N):
+                    res[s, t] += sign_Delta_tj[j] @ (L_jbss[j][:, :, s] * L_jbtt[j][:, :, t] -
+                                                     L_jbst[j][:, :, t] * L_jbts[j][:, :, s]) @ alpha_j[j]
+        print("Baseline:\t%.5fs" % (time.time() - start))
+
+        # --- Using active set ---
+        L_jbss_active = [L_jbss[j][:, alpha_j[j] > 0, :] for j in range(N)]
+        L_jbtt_active = [L_jbtt[j][:, alpha_j[j] > 0, :] for j in range(N)]
+        L_jbst_active = [L_jbst[j][:, alpha_j[j] > 0, :] for j in range(N)]
+        L_jbts_active = [L_jbts[j][:, alpha_j[j] > 0, :] for j in range(N)]
+        alpha_j_active = [alpha_j[j][alpha_j[j] > 0] for j in range(N)]
+
+        start = time.time()
+        res_a = np.zeros((nSs, nSt))
+        for s in range(nSs):
+            for t in range(nSt):
+                for j in range(N):
+                    res_a[s, t] += sign_Delta_tj[j] @ (L_jbss_active[j][:, :, s] * L_jbtt_active[j][:, :, t] -
+                                                       L_jbst_active[j][:, :, t] * L_jbts_active[j][:, :, s]) \
+                                   @ alpha_j_active[j]
+        print("A:\t%.5fs" % (time.time() - start))
+        np.testing.assert_allclose(res, res_a)
+
+        start = time.time()
+        res_b = np.zeros((nSs, nSt))
+        for j in range(N):
+            A = oe.contract("i,ijk,ijl,j", sign_Delta_tj[j], L_jbss_active[j], L_jbtt_active[j], alpha_j_active[j])
+            B = oe.contract("i,ijk,ijl,j", sign_Delta_tj[j], L_jbts_active[j], L_jbst_active[j], alpha_j_active[j])
+            res_b += (A - B)
+        print("B:\t%.5fs" % (time.time() - start))
+        self.assertEqual((nSs, nSt), res_b.shape)
+        np.testing.assert_allclose(res, res_b)
+
+        S = np.repeat(np.column_stack(sign_Delta_tj), repeats=n_active, axis=1)
+        M_jbss = np.concatenate(L_jbss_active, axis=1)
+        M_jbtt = np.concatenate(L_jbtt_active, axis=1)
+        M_jbst = np.concatenate(L_jbst_active, axis=1)
+        M_jbts = np.concatenate(L_jbts_active, axis=1)
+        Alphas = np.concatenate(alpha_j_active)
+
+        start = time.time()
+        expr = oe.contract_expression("ij,ijk,ijl,j", S.shape, M_jbss.shape, M_jbtt.shape, Alphas.shape)
+        A = expr(S, M_jbss, M_jbtt, Alphas)
+        B = expr(S, M_jbts, M_jbst, Alphas)
+        res_c = A - B
+        print("C:\t%.5fs" % (time.time() - start))
+        self.assertEqual((nSs, nSt), res_c.shape)
+        np.testing.assert_allclose(res, res_c)
+
+        start = time.time()
+        res_d = np.zeros((nSs, nSt))
+        for j in range(N):
+            expr = oe.contract_expression("i,j,ijk,ijl",
+                                          sign_Delta_tj[j], alpha_j_active[j],
+                                          L_jbss_active[j].shape, L_jbtt_active[j].shape,
+                                          constants=[0, 1])
+            A = expr(L_jbss_active[j], L_jbtt_active[j])
+            B = expr(L_jbts_active[j], L_jbst_active[j])
+            res_d += (A - B)
+        print("D:\t%.5fs" % (time.time() - start))
+        self.assertEqual((nSs, nSt), res_d.shape)
+        np.testing.assert_allclose(res, res_d)
+        print(expr)
+
+        # start = time.time()
+        # expr = oe.contract_expression("ij,ijk,ijl,j", S, M_jbss.shape, M_jbtt.shape, Alphas, constants=[0, 3])
+        # A = expr(M_jbss, M_jbtt)
+        # B = expr(M_jbts, M_jbst)
+        # res_d = A - B
+        # print("D:\t%.5fs" % (time.time() - start))
+        # self.assertEqual((nSs, nSt), res_d.shape)
+        # np.testing.assert_allclose(res, res_d)
+
+    def test_4_speed_on_large_data(self):
+        N = 3000
+        nE = 30
+        nSs = 200
+        nSt = 200
+        nSj_min, nSj_max = 5, 20
+
+        L_jbss = []
+        L_jbtt = []
+        L_jbst = []
+        L_jbts = []
+        alpha_j = []
+        n_active = []
+        for j in range(N):
+            nSj = np.random.RandomState(j * 6 + 1).randint(nSj_min, nSj_max)
+            L_jbss.append(np.random.RandomState(j * 6 + 2).rand(nE, nSj, nSs))
+            L_jbtt.append(np.random.RandomState(j * 6 + 3).rand(nE, nSj, nSt))
+            L_jbst.append(np.random.RandomState(j * 6 + 4).rand(nE, nSj, nSt))
+            L_jbts.append(np.random.RandomState(j * 6 + 5).rand(nE, nSj, nSs))
+
+            _alpha = np.random.RandomState(j * 6 + 6).randn(nSj)
+            _alpha[_alpha < 0] = 0.0
+            alpha_j.append(_alpha)
+            n_active.append(np.sum(_alpha > 0).item())
+            # print("j = %d:\t#a>0 = %d (of %d)" % (j, n_active[-1], len(_alpha)))
+        print("Active dual variables: %d" % np.sum(n_active))
+
+        sign_Delta_tj = np.sign(np.random.RandomState(10).randn(N, nE))
+
+        # --- Using active set ---
+        L_jbss_active = [L_jbss[j][:, alpha_j[j] > 0, :] for j in range(N)]
+        L_jbtt_active = [L_jbtt[j][:, alpha_j[j] > 0, :] for j in range(N)]
+        L_jbst_active = [L_jbst[j][:, alpha_j[j] > 0, :] for j in range(N)]
+        L_jbts_active = [L_jbts[j][:, alpha_j[j] > 0, :] for j in range(N)]
+        alpha_j_active = [alpha_j[j][alpha_j[j] > 0] for j in range(N)]
+
+        S = np.repeat(np.column_stack(sign_Delta_tj), repeats=n_active, axis=1)
+        M_jbss = np.concatenate(L_jbss_active, axis=1)
+        M_jbtt = np.concatenate(L_jbtt_active, axis=1)
+        M_jbst = np.concatenate(L_jbst_active, axis=1)
+        M_jbts = np.concatenate(L_jbts_active, axis=1)
+        Alphas = np.concatenate(alpha_j_active)
+
+        start = time.time()
+        expr = oe.contract_expression("ij,ijk,ijl,j", S, M_jbss.shape, M_jbtt.shape, Alphas, constants=[0, 3])
+        A = expr(M_jbss, M_jbtt)
+        B = expr(M_jbts, M_jbst)
+        res_c = A - B
+        print("C:\t%.5fs" % (time.time() - start))
+        self.assertEqual((nSs, nSt), res_c.shape)
+        print(expr)
+
+        start = time.time()
+        res_d = np.zeros((nSs, nSt))
+        for j in range(N):
+            expr = oe.contract_expression("i,ijk,ijl,j",
+                                          sign_Delta_tj[j],
+                                          L_jbss_active[j].shape, L_jbtt_active[j].shape,
+                                          alpha_j_active[j],
+                                          constants=[0, 3])
+            A = expr(L_jbss_active[j], L_jbtt_active[j])
+            B = expr(L_jbts_active[j], L_jbst_active[j])
+            res_d += (A - B)
+        print("D:\t%.5fs" % (time.time() - start))
+        self.assertEqual((nSs, nSt), res_d.shape)
+        print(expr)
+
+        start = time.time()
+        res_b = np.zeros((nSs, nSt))
+        for j in range(N):
+            A = oe.contract("i,ijk,ijl,j", sign_Delta_tj[j], L_jbss_active[j], L_jbtt_active[j], alpha_j_active[j])
+            B = oe.contract("i,ijk,ijl,j", sign_Delta_tj[j], L_jbts_active[j], L_jbst_active[j], alpha_j_active[j])
+            res_b += (A - B)
+        print("B:\t%.5fs" % (time.time() - start))
+        self.assertEqual((nSs, nSt), res_b.shape)
+
+
