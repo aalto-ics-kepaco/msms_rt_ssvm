@@ -27,7 +27,9 @@
 import unittest
 import numpy as np
 import itertools as it
+import time
 
+from joblib import Parallel, delayed
 from scipy.sparse import csr_matrix
 
 from ssvm.kernel_utils import minmax_kernel, tanimoto_kernel, check_input, generalized_tanimoto_kernel
@@ -348,6 +350,13 @@ class TestTanimotoKernel(unittest.TestCase):
 
 
 class TestGeneralizedTanimotoKernel(unittest.TestCase):
+    @staticmethod
+    def _gentan(x, y):
+        xl1 = np.sum(np.abs(x))
+        yl1 = np.sum(np.abs(y))
+        xmyl1 = np.sum(np.abs(x - y))
+        return (xl1 + yl1 - xmyl1) / (xl1 + yl1 + xmyl1)
+
     def test_on_small_data(self):
         X = np.array([[0, 1.75, -3.25, 0, 1], [2.35, 1, 0, 0, 2], [0, 7.45, 0, 3, 0]])
         # |X|_1 = (6, 5.35, 10.45)
@@ -385,33 +394,45 @@ class TestGeneralizedTanimotoKernel(unittest.TestCase):
             KXY[1, 2], (5.35 + 1 - np.sum(np.abs(X[1] - Y[2]))) / (5.35 + 1 + np.sum(np.abs(X[1] - Y[2]))))
 
     def test_on_large_random_data(self):
-        def _gentan(x, y):
-            xl1 = np.sum(np.abs(x))
-            yl1 = np.sum(np.abs(y))
-            xmyl1 = np.sum(np.abs(x - y))
-            return (xl1 + yl1 - xmyl1) / (xl1 + yl1 + xmyl1)
+        for n_jobs in [1, 4]:
+            for _ in range(50):
+                X = np.random.RandomState(33).randn(10, 302)
+                Y = np.random.RandomState(331).randn(8, 302)
 
-        for _ in range(50):
-            X = np.random.RandomState(33).randn(10, 302)
-            Y = np.random.RandomState(331).randn(8, 302)
+                # Non-square kernel matrix
+                K = generalized_tanimoto_kernel(X, n_jobs=n_jobs)
+                np.testing.assert_equal(K.shape, (10, 10))
+                self.assertTrue((np.all(K) >= 0) & (np.all(K) <= 1))
+                np.testing.assert_equal(K, K.T)
+                np.testing.assert_equal(np.diag(K), np.ones((10,)))
 
-            # Non-square kernel matrix
-            K = generalized_tanimoto_kernel(X)
-            np.testing.assert_equal(K.shape, (10, 10))
-            self.assertTrue((np.all(K) >= 0) & (np.all(K) <= 1))
-            np.testing.assert_equal(K, K.T)
-            np.testing.assert_equal(np.diag(K), np.ones((10,)))
+                for (i, j) in it.combinations(range(10), 2):
+                    np.testing.assert_allclose(K[i, j], self._gentan(X[i], X[j]))
 
-            for (i, j) in it.combinations(range(10), 2):
-                np.testing.assert_allclose(K[i, j], _gentan(X[i], X[j]))
+                # Non-square kernel matrix
+                K = generalized_tanimoto_kernel(X, Y, n_jobs=n_jobs)
+                np.testing.assert_equal(K.shape, (10, 8))
+                self.assertTrue((np.all(K) >= 0) & (np.all(K) <= 1))
 
-            # Non-square kernel matrix
-            K = generalized_tanimoto_kernel(X, Y)
-            np.testing.assert_equal(K.shape, (10, 8))
-            self.assertTrue((np.all(K) >= 0) & (np.all(K) <= 1))
+                for (i, j) in it.product(range(10), range(8)):
+                    np.testing.assert_allclose(K[i, j], self._gentan(X[i], Y[j]))
 
-            for (i, j) in it.product(range(10), range(8)):
-                np.testing.assert_allclose(K[i, j], _gentan(X[i], Y[j]))
+    def test_vector_vs_parallel_performance(self):
+        d = 301
+        n1 = 10000
+        n2 = 10000
+        S1 = np.random.RandomState(1).randn(n1, d)
+        S2 = np.random.RandomState(2).randn(n2, d)
+
+        start = time.time()
+        _ = generalized_tanimoto_kernel(S1, S2, shallow_input_check=True, n_jobs=1)
+        print("njobs=1: %.5fs" % (time.time() - start))
+
+        S1 = np.random.RandomState(3).randn(n1, d)
+        S2 = np.random.RandomState(4).randn(n2, d)
+        start = time.time()
+        _ = generalized_tanimoto_kernel(S1, S2, shallow_input_check=True, n_jobs=4)
+        print("njobs=4: %.5fs" % (time.time() - start))
 
 
 if __name__ == '__main__':
