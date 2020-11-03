@@ -34,9 +34,10 @@ from scipy.io import loadmat
 from typing import List, Tuple, Union, Dict, Optional
 
 from sklearn.model_selection import GroupKFold
-from sklearn.utils.validation import check_random_state, check_is_fitted
+from sklearn.utils.validation import check_random_state
+from sklearn.cluster import MiniBatchKMeans
 
-from ssvm.kernel_utils import tanimoto_kernel
+from ssvm.kernel_utils import tanimoto_kernel, generalized_tanimoto_kernel
 
 from matchms.Spectrum import Spectrum
 
@@ -311,6 +312,18 @@ class CandidateSQLiteDB(object):
         """
         return None
 
+    def _get_feature_dimension(self, feature: str) -> int:
+        """
+
+        :param feature:
+        :return:
+        """
+        return self.db.execute("SELECT length FROM fingerprints_meta WHERE name IS '%s'" % (feature,)).fetchall()[0][0]
+
+    def _ensure_feature_is_available(self, feature: str) -> None:
+        if feature not in pd.read_sql_query("SELECT name FROM fingerprints_meta", self.db)["name"].to_list():
+            raise ValueError("Requested feature is not in the database: '%s'." % feature)
+
     def get_n_cand(self, spectrum: Spectrum) -> int:
         """
         Return the number of available candidates for the given spectrum.
@@ -324,8 +337,7 @@ class CandidateSQLiteDB(object):
 
         return n_cand
 
-    def get_molecule_features(self, spectrum: Spectrum, feature: str) \
-            -> np.ndarray:
+    def get_molecule_features(self, spectrum: Spectrum, feature: str) -> np.ndarray:
         """
         :param spectrum: matchms.Spectrum, of the sequence element to get the number of candidates.
 
@@ -333,28 +345,15 @@ class CandidateSQLiteDB(object):
 
         :return: array-like, shape = (n_cand, feature_dimension), feature matrix
         """
-        if feature not in pd.read_sql_query("SELECT name FROM fingerprints_meta", self.db)["name"].to_list():
-            raise ValueError("Requested feature is not in the database: '%s'." % feature)
+        self._ensure_feature_is_available(feature)
 
         rows = self.db.execute(
             self._get_molecule_feature_query(spectrum, feature, self._get_candidate_subset(spectrum)))
 
-        # Get the length of the features
-        d = self.db.execute("SELECT length FROM fingerprints_meta WHERE name IS '%s'" % (feature,)).fetchall()[0][0]
+        n_cand = self.get_n_cand(spectrum)
+        d = self._get_feature_dimension(feature)
 
-        # Set up an output array
-        X = np.zeros((self.get_n_cand(spectrum), d))
-
-        if feature == "substructure_count":
-            for i, row in enumerate(rows):
-                _fp = eval("{" + row[1] + "}")
-                X[i, list(_fp.keys())] = list(_fp.values())
-        else:
-            for i, row in enumerate(rows):
-                _ids = list(map(int, row[1].split(",")))
-                X[i, _ids] = 1
-
-        return X
+        return self._get_molecule_feature_matrix(rows, (n_cand, d), feature)
 
     def get_labelspace(self, spectrum: Spectrum) -> List[str]:
         """
@@ -384,6 +383,29 @@ class CandidateSQLiteDB(object):
         :return: SQLite ready string for 'in' statement
         """
         return "(" + ",".join(["'%s'" % li for li in np.atleast_1d(li)]) + ")"
+
+    @staticmethod
+    def _get_molecule_feature_matrix(rows: Union[sqlite3.Cursor, List[Tuple]], shape: Tuple[int, int], feature: str) \
+            -> np.ndarray:
+        """
+
+        :param rows:
+        :param shape:
+        :return:
+        """
+        # Set up an output array
+        X = np.zeros(shape)
+
+        if feature == "substructure_count":
+            for i, row in enumerate(rows):
+                _fp = eval("{" + row[1] + "}")
+                X[i, list(_fp.keys())] = list(_fp.values())
+        else:
+            for i, row in enumerate(rows):
+                _ids = list(map(int, row[1].split(",")))
+                X[i, _ids] = 1
+
+        return X
 
 
 class RandomSubsetCandidateSQLiteDB(CandidateSQLiteDB):
@@ -433,6 +455,81 @@ class RandomSubsetCandidateSQLiteDB(CandidateSQLiteDB):
             self.candidate_subset[spectrum_id] = candidates
 
         return candidates
+
+    def get_n_cand(self, spectrum: Spectrum) -> int:
+        """
+
+        :param spectrum:
+        :return:
+        """
+        return len(self.candidate_subset[spectrum.get("spectrum_id")])
+
+
+class CentroidCandidateSQLiteDB(CandidateSQLiteDB):
+    def __init__(self, feature: str, number_of_candidates: Union[int, float], random_state=None, *args, **kwargs):
+        self.feature = feature
+        self.number_of_candidates = number_of_candidates
+        self.random_state = random_state
+
+        self.candidate_subset = {}
+
+        if isinstance(self.number_of_candidates, float):
+            if (self.number_of_candidates <= 0) or (self.number_of_candidates >= 1.0):
+                raise ValueError("If the number of candidates is given as fraction it must lay in the range (0, 1).")
+
+        super().__init__(*args, **kwargs)
+
+        self._ensure_feature_is_available(self.feature)
+
+    def _get_candidate_subset(self, spectrum: Spectrum) -> List[str]:
+        """
+        :param spectrum: matchms.Spectrum, of the sequence element to get the number of candidates.
+
+        :return: list of strings, molecule identifier for the candidate subset of the given spectrum.
+        """
+        spectrum_id = spectrum.get("spectrum_id")
+
+        try:
+            candidates = self.candidate_subset[spectrum_id]
+        except KeyError:
+            # Load all candidate identifiers
+            candidates = [row[0] for row in self.db.execute(self._get_labelspace_query(spectrum))]
+
+            if isinstance(self.number_of_candidates, float):
+                n_cand_out = np.round(len(candidates) * self.number_of_candidates)
+            else:
+                n_cand_out = np.minimum(len(candidates), self.number_of_candidates)
+
+            # Load candidate features
+            rows = self.db.execute(self._get_molecule_feature_query(spectrum, self.feature))
+            n_cand_all = super().get_n_cand(spectrum)
+            d = self._get_feature_dimension(self.feature)
+            KX = generalized_tanimoto_kernel(
+                CandidateSQLiteDB._get_molecule_feature_matrix(rows, (n_cand_all, d), self.feature))
+
+            # Cluster the candidates
+            cls = MiniBatchKMeans(
+                n_clusters=n_cand_out.astype(int), n_init=10, random_state=self.random_state, init='k-means++') \
+                .fit_predict(KX)
+
+            centroids = []
+            idc = np.arange(len(cls))
+            for c in np.unique(cls):
+                centroids.append(idc[cls == c][np.argsort(np.median(KX[np.ix_(cls == c, cls == c)], axis=0))[0]])
+            candidates = [candidates[i] for i in centroids]
+
+            # Store the subset for later use
+            self.candidate_subset[spectrum_id] = candidates
+
+        return candidates
+
+    def get_n_cand(self, spectrum: Spectrum) -> int:
+        """
+
+        :param spectrum:
+        :return:
+        """
+        return len(self.candidate_subset[spectrum.get("spectrum_id")])
 
 
 class Sequence(object):
