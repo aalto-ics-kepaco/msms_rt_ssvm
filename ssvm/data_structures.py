@@ -199,17 +199,68 @@ class CandidateSetMetIdent(object):
         return K
 
 
+class Molecule(object):
+    def __init__(self, inchi: str, inchikey: str, smiles_iso: str, smiles_can: str,
+                 metadata: Optional[dict] = None, features: Optional[dict] = None, identifier="inchikey"):
+        """
+
+        :param inchi: string, InChI identifier of the molecule.
+
+        :param inchikey: string, InChIKey identifier
+
+        :param smiles_iso: string, Isomeric SMILES representation
+
+        :param smiles_can: string, Canonical SMILES
+
+        :param metadata: dictionary, any meta data provided with the molecule, e.g. PubChem ID etc.
+
+        :param features: dictionary, feature calculated from the molecular representation. The keys should indicate the
+            feature name and the values should be np.ndarray.
+        """
+        self.inchi = inchi
+        self.inchikey = inchikey
+        self.smiles_iso = smiles_iso
+        self.smiles_can = smiles_can
+        self.metadata = metadata
+        self.features = features
+        self.identifier = identifier
+
+        self.inchikey1, self.inchikey2, self.inchikey3 = inchikey.split("-")
+
+        if self.identifier not in ['inchi', 'inchikey', 'inchikey1']:
+            raise ValueError("Invalid molecule identifier: '%s'. Choices are 'inchi', 'inchikey' and 'inchikey1'.")
+
+    def get_identifier(self):
+        """
+        Return identifier string of the molecule.
+        """
+        return self.__getattribute__(self.identifier)
+
+
 class CandidateSQLiteDB(object):
-    def __init__(self, db_fn: str, cand_def="fixed"):
+    def __init__(self, db_fn: str, cand_def="fixed", molecule_identifier="inchikey1"):
         """
 
         :param db_fn:
+
         :param cand_def:
+
+        :param molecule_identifier:
         """
-        self.db = sqlite3.connect("file:" + db_fn + "?mode=ro", uri=True)
+        self.db_fn = db_fn
         self.cand_def = cand_def
+        self.molecule_identifier = molecule_identifier
+
+        # Open read-only database connection
+        self.db = sqlite3.connect("file:" + self.db_fn + "?mode=ro", uri=True)
+
+        if self.cand_def != "fixed":
+            raise NotImplementedError("Currently only fixed candidate set definition supported.")
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        """
+        Exit function for the context manager. Closes the connection to the candidate database.
+        """
         self.db.close()
 
     def get_n_cand(self, spectrum: Spectrum):
@@ -219,13 +270,41 @@ class CandidateSQLiteDB(object):
 
         :return: scalar, number of candidates
         """
-        if self.cand_def == "fixed":
-            n_cand = self.db.execute("SELECT COUNT(*) FROM candidates_spectra WHERE spectrum is ?",
-                                     (spectrum.get("spectrum_id"), )).fetchall()[0][0]
-        else:
-            raise NotImplementedError("Currently only fixed candidate set definition supported.")
+        n_cand = self.db.execute("SELECT COUNT(*) FROM candidates_spectra WHERE spectrum is ?",
+                                 (spectrum.get("spectrum_id"), )).fetchall()[0][0]
 
         return n_cand
+
+    def get_candidates(self, spectrum: Spectrum, features: Optional[str] = None):
+        """
+
+        :param spectrum: matchms.Spectrum, of the sequence element to get the number of candidates.
+
+        :param features: string, feature
+
+        :return:
+        """
+        if features is None:
+            rows = self.db.execute("SELECT molecule FROM candidate_spectra WHERE spectrum IS ?",
+                                   (spectrum.get("spectrum_id"), ))
+            cands = [row[0] for row in rows]
+        else:
+            raise NotImplementedError("Cannot return features.")
+
+        return cands
+
+    def get_labelspace(self, spectrum: Spectrum):
+        """
+        :param spectrum: matchms.Spectrum, of the sequence element to get the number of candidates.
+
+        :return: list of strings, molecule identifiers for the given spectrum.
+        """
+        rows = self.db.execute("SELECT inchi, inchikey FROM candidate_spectra "
+                               "   INNER JOIN molecules m ON m.inchi = candidates_spectra.candidate"
+                               "   WHERE spectrum IS ?", (spectrum.get("spectrum_id"),))
+
+        return [Molecule(row[0], row[1], None, None, identifier=self.molecule_identifier).get_identifier()
+                for row in rows]
 
 
 class Sequence(object):
@@ -243,19 +322,17 @@ class Sequence(object):
         """
         return self.L
 
-    def get_n_cand(self, spectrum=None) -> Union[int, List[int]]:
+    def get_n_cand(self) -> List[int]:
         """
-        :param spectrum: matchms.Spectrum, of the sequence element to get the number of candidates. If None, a list
-            with the number of candidates for all spectra is returned
-
-        :return: scalar or list of scalars, number of candidates
+        Get the number of candidates for each spectrum in the sequence as list.
         """
-        if spectrum is None:
-            n_cand = [self.get_n_cand(spectrum) for spectrum in self.spectra]
-        else:
-            n_cand = self.candidates.get_n_cand(spectrum)
+        return [self.candidates.get_n_cand(spectrum) for spectrum in self.spectra]
 
-        return n_cand
+    def get_labelspace(self) -> List[List[str]]:
+        """
+        Get the label space, i.e. candidate molecule identifiers, for each spectrum as nested list.
+        """
+        return [self.candidates.get_labelspace(spectrum) for spectrum in self.spectra]
 
 
 class LabeledSequence(Sequence):
@@ -286,14 +363,14 @@ class SequenceSample(object):
     """
     Class representing a sequence sample.
     """
-    def __init__(self, spectra: List[Spectrum], labels: List[str], cand_db: CandidateSQLiteDB, N: int, L_min: int,
+    def __init__(self, spectra: List[Spectrum], labels: List[str], candidates: CandidateSQLiteDB, N: int, L_min: int,
                  L_max: Optional[int] = None, random_state: Optional[int] = None, sort_sequence_by_rt=False):
         """
         :param data: list of matchms.Spectrum, spectra to sample sequences from
 
         :param labels: list of strings, labels of each spectrum identifying the ground truth molecule.
 
-        :param cand_db:
+        :param candidates:
 
         :param N: scalar, number of sequences to sample.
 
@@ -305,7 +382,7 @@ class SequenceSample(object):
         """
         self.spectra = spectra
         self.labels = labels
-        self.cand_db = cand_db
+        self.candidates = candidates
         self.N = N
         self.L_min = L_min
         self.L_max = L_max
@@ -371,19 +448,19 @@ class SequenceSample(object):
 
         spl_seqs = []
         for i, ds in enumerate(rs.choice(self._datasets, self.N)):
-            seq = [(self.spectra[sig], self.labels[sig])
-                   for sig in rs.choice(self._dataset2idx[ds], self._L[i], replace=False)]
+            seq_idc = rs.choice(self._dataset2idx[ds], self._L[i], replace=False)
+            seq_spectra = [self.spectra[sig] for sig in seq_idc]
+            seq_labels = [self.labels[sig] for sig in seq_idc]
 
             # FIXME: Here we can have multiple times the same molecule in the sample, e.g. due to different adducts.
-            assert pd.Series(s[1] for s in seq).is_unique, \
-                "Each molecule should appear only ones in the set of molecules."
+            assert pd.Series(seq_labels).is_unique, "Each molecule should appear only ones in the set of molecules."
 
             # Sort the sequence elements by their retention time
             if self.sort_sequence_by_rt:
-                seq = sorted(seq, key=lambda s: s[0].get("retention_time"))
+                seq_spectra, seq_labels = zip(*sorted(zip(seq_spectra, seq_labels),
+                                                      key=lambda s: s[0].get("retention_time")))
 
-            # TODO: Return here list where each object is of type LabelSequence
-            spl_seqs.append(seq)
+            spl_seqs.append(LabeledSequence(seq_spectra, seq_labels, candidates=self.candidates))
 
         return spl_seqs
 
@@ -417,10 +494,12 @@ class SequenceSample(object):
             # Get training and test subsets of the spectra ids. Spectra belonging to the same molecular structure are
             # either in the training or the test set.
             yield (
-                SequenceSample([self.spectra[i] for i in train], [self.labels[i] for i in train], cand_db=self.cand_db,
-                               N=N_train, L_min=self.L_min, L_max=self.L_max, random_state=self.random_state),
-                SequenceSample([self.spectra[i] for i in test], [self.labels[i] for i in test], cand_db=self.cand_db,
-                               N=N_test, L_min=self.L_min, L_max=self.L_max, random_state=self.random_state)
+                SequenceSample([self.spectra[i] for i in train], [self.labels[i] for i in train],
+                               candidates=self.candidates, N=N_train, L_min=self.L_min, L_max=self.L_max,
+                               random_state=self.random_state),
+                SequenceSample([self.spectra[i] for i in test], [self.labels[i] for i in test],
+                               candidates=self.candidates, N=N_test, L_min=self.L_min, L_max=self.L_max,
+                               random_state=self.random_state)
             )
 
     def get_n_samples(self):

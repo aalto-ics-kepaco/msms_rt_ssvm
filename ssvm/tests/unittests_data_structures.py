@@ -29,6 +29,8 @@ import unittest
 import pickle
 import pandas as pd
 import numpy as np
+import itertools as it
+
 
 from matchms.Spectrum import Spectrum
 
@@ -68,16 +70,17 @@ class TestSequenceSample(unittest.TestCase):
     def test_train_test_splitting(self):
         # Generate sequence sample
         N = 31
-        L_min = 10
-        seq_sample = SequenceSample(self.spectra, self.labels, None, N=N, L_min=L_min, random_state=201)
+        L_min = 20
+        seq_sample = SequenceSample(self.spectra, self.labels, None, N=N, L_min=L_min, random_state=789)
 
         train_seq, test_seq = seq_sample.get_train_test_split()
 
         self.assertEqual(7, len(test_seq))
         self.assertEqual(24, len(train_seq))
-        for i in test_seq:
-            for j in train_seq:
-                self.assertTrue(len(set(i.labels) & set(j.labels)) == 0)
+
+        # No intersection of molecules between training and test sequences
+        for i, j in it.product(test_seq, train_seq):
+            self.assertTrue(len(set(i.labels) & set(j.labels)) == 0)
 
 
 class TestCandidateSetMetIdent(unittest.TestCase):
