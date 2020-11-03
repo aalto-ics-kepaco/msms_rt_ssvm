@@ -257,13 +257,61 @@ class CandidateSQLiteDB(object):
         if self.cand_def != "fixed":
             raise NotImplementedError("Currently only fixed candidate set definition supported.")
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         """
         Exit function for the context manager. Closes the connection to the candidate database.
         """
         self.db.close()
 
-    def get_n_cand(self, spectrum: Spectrum):
+    def _get_labelspace_query(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> str:
+        """
+
+        :param spectrum:
+        :param candidates:
+        :return:
+        """
+        query = "SELECT candidate, inchikey FROM candidates_spectra " \
+                "   INNER JOIN molecules m ON m.inchi = candidates_spectra.candidate" \
+                "   WHERE spectrum IS '%s'" % spectrum.get("spectrum_id")
+
+        # Restrict candidate subset if needed
+        if candidate_subset is not None:
+            query += " AND candidate IN %s" % self._in_sql(candidate_subset)
+
+        # Order the output by candidates
+        query += " ORDER BY candidate"
+
+        return query
+
+    def _get_molecule_feature_query(self, spectrum: Spectrum, feature: str, candidate_subset: Optional[List] = None) \
+            -> str:
+        """
+
+        :param spectrum:
+        :param feature:
+        :param candidate_subset:
+        :return:
+        """
+        query = "SELECT candidate, %s FROM candidates_spectra" \
+                "   INNER JOIN fingerprints_data ON candidates_spectra.candidate = fingerprints_data.molecule" \
+                "   WHERE spectrum IS '%s'" % (feature, spectrum.get("spectrum_id"))
+
+        # Restrict candidate subset if needed
+        if candidate_subset is not None:
+            query += " AND candidate IN %s" % self._in_sql(candidate_subset)
+
+        # Order the output by candidates
+        query += " ORDER BY candidate"
+
+        return query
+
+    def _get_candidate_subset(self, spectrum: Spectrum) -> None:
+        """
+        The baseclass does not restrict the candidate set.
+        """
+        return None
+
+    def get_n_cand(self, spectrum: Spectrum) -> int:
         """
         Return the number of available candidates for the given spectrum.
 
@@ -276,39 +324,53 @@ class CandidateSQLiteDB(object):
 
         return n_cand
 
-    def get_candidates(self, spectrum: Spectrum, features: Optional[str] = None):
+    def get_molecule_features(self, spectrum: Spectrum, feature: str) \
+            -> np.ndarray:
         """
-
         :param spectrum: matchms.Spectrum, of the sequence element to get the number of candidates.
 
-        :param features: string, feature
+        :param feature: string, identifier of the feature to load from the database.
 
-        :return:
+        :return: array-like, shape = (n_cand, feature_dimension), feature matrix
         """
-        if features is None:
-            rows = self.db.execute("SELECT molecule FROM candidates_spectra WHERE spectrum IS ?",
-                                   (spectrum.get("spectrum_id"), ))
-            cands = [row[0] for row in rows]
+        if feature not in pd.read_sql_query("SELECT name FROM fingerprints_meta", self.db)["name"].to_list():
+            raise ValueError("Requested feature is not in the database: '%s'." % feature)
+
+        rows = self.db.execute(
+            self._get_molecule_feature_query(spectrum, feature, self._get_candidate_subset(spectrum)))
+
+        # Get the length of the features
+        d = self.db.execute("SELECT length FROM fingerprints_meta WHERE name IS '%s'" % (feature,)).fetchall()[0][0]
+
+        # Set up an output array
+        X = np.zeros((self.get_n_cand(spectrum), d))
+
+        if feature == "substructure_count":
+            for i, row in enumerate(rows):
+                _fp = eval("{" + row[1] + "}")
+                X[i, list(_fp.keys())] = list(_fp.values())
         else:
-            raise NotImplementedError("Cannot return features.")
+            for i, row in enumerate(rows):
+                _ids = list(map(int, row[1].split(",")))
+                X[i, _ids] = 1
 
-        return cands
+        return X
 
-    def get_labelspace(self, spectrum: Spectrum):
+    def get_labelspace(self, spectrum: Spectrum) -> List[str]:
         """
+        Returns the label-space for the given spectrum.
+
         :param spectrum: matchms.Spectrum, of the sequence element to get the number of candidates.
 
         :return: list of strings, molecule identifiers for the given spectrum.
         """
-        rows = self.db.execute("SELECT inchi, inchikey FROM candidates_spectra "
-                               "   INNER JOIN molecules m ON m.inchi = candidates_spectra.candidate"
-                               "   WHERE spectrum IS ?", (spectrum.get("spectrum_id"),))
+        rows = self.db.execute(self._get_labelspace_query(spectrum, self._get_candidate_subset(spectrum)))
 
         return [Molecule(row[0], row[1], None, None, identifier=self.molecule_identifier).get_identifier()
                 for row in rows]
 
     @staticmethod
-    def _in_sql(li):
+    def _in_sql(li) -> str:
         """
         Concatenates a list of strings to a SQLite ready string that can be used in combination
         with the 'in' statement.
@@ -325,56 +387,52 @@ class CandidateSQLiteDB(object):
 
 
 class RandomSubsetCandidateSQLiteDB(CandidateSQLiteDB):
-    def __init__(self, min_number_of_candidates: int, random_state=None, **kwargs):
+    def __init__(self, number_of_candidates: Union[int, float], random_state=None, *args, **kwargs):
         """
-        :param min_number_of_candidates: scalar, minimum number of candidates per spectrum.
+        :param number_of_candidates: scalar, If integer: minimum number of candidates per spectrum. If float, the
+            scalar represents the fraction of candidates per spectrum.
 
         :param random_state:
 
         :param kwargs: dict, arguments passed to CandidateSQLiteDB
         """
-        self.min_number_of_candidates = min_number_of_candidates
-        self.random_state = random_state  # type: np.random.RandomState
+        self.number_of_candidates = number_of_candidates
+        self.random_state = random_state
 
         self.candidate_subset = {}
 
-        super(RandomSubsetCandidateSQLiteDB, self).__init__(**kwargs)
+        if isinstance(self.number_of_candidates, float):
+            if (self.number_of_candidates <= 0) or (self.number_of_candidates >= 1.0):
+                raise ValueError("If the number of candidates is given as fraction it must lay in the range (0, 1).")
 
-    def _get_candidate_subset(self, spectrum: Spectrum):
+        super().__init__(*args, **kwargs)
+
+    def _get_candidate_subset(self, spectrum: Spectrum) -> List[str]:
         """
         :param spectrum: matchms.Spectrum, of the sequence element to get the number of candidates.
 
         :return: list of strings, molecule identifier for the candidate subset of the given spectrum.
         """
+        spectrum_id = spectrum.get("spectrum_id")
+
         try:
-            candidates = self.candidate_subset[spectrum.get("spectrum_id")]
+            candidates = self.candidate_subset[spectrum_id]
         except KeyError:
             # Load all candidate identifiers
-            candidates = super(RandomSubsetCandidateSQLiteDB, self).get_labelspace(spectrum)
+            candidates = [row[0] for row in self.db.execute(self._get_labelspace_query(spectrum))]
+
+            if isinstance(self.number_of_candidates, float):
+                n_cand = np.round(len(candidates) * self.number_of_candidates)
+            else:
+                n_cand = np.minimum(len(candidates), self.number_of_candidates)
 
             # Get a random subset
-            candidates = self.random_state.choice(
-                candidates, np.minimum(len(candidates), self.min_number_of_candidates), replace=False)
+            candidates = check_random_state(self.random_state).choice(candidates, n_cand.astype(int), replace=False)
 
             # Store the subset for later use
-            self.candidate_subset[spectrum.get("spectrum_id")] = candidates
+            self.candidate_subset[spectrum_id] = candidates
 
         return candidates
-
-    def get_labelspace(self, spectrum: Spectrum):
-        """
-        :param spectrum: matchms.Spectrum, of the sequence element to get the number of candidates.
-
-        :return: list of strings, molecule identifiers for the given spectrum.
-        """
-        rows = self.db.execute("SELECT inchi, inchikey FROM candidates_spectra "
-                               "   INNER JOIN molecules m ON m.inchi = candidates_spectra.candidate"
-                               "   WHERE spectrum IS ?"
-                               "     AND molecule IN '%s'" % self._in_sql(self._get_candidate_subset(spectrum)),
-                               (spectrum.get("spectrum_id"),))
-
-        return [Molecule(row[0], row[1], None, None, identifier=self.molecule_identifier).get_identifier()
-                for row in rows]
 
 
 class Sequence(object):
