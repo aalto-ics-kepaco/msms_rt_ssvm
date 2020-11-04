@@ -105,9 +105,9 @@ class TestStructuredSVMMetIdent(unittest.TestCase):
         self.cand = data["cand"]  # type: CandidateSetMetIdent
         self.N = self.ssvm.K_train.shape[0]
         self.rs = np.random.RandomState(18221)
-        self.ssvm.alphas = DualVariables(C=self.ssvm.C, rs=self.rs, num_init_active_vars=2,
-                                         cand_ids=[[self.cand.get_labelspace(self.ssvm.y_train[i])]
-                                                   for i in range(self.N)])
+        self.ssvm.alphas = DualVariables(C=self.ssvm.C, random_state=self.rs, num_init_active_vars=2,
+                                         label_space=[[self.cand.get_labelspace(self.ssvm.y_train[i])]
+                                                      for i in range(self.N)])
 
     def test_get_candidate_scores(self):
         """
@@ -214,8 +214,8 @@ class TestDualVariables(unittest.TestCase):
 
         for C in [0.5, 1.0, 2.0]:
             for num_init_active_vars in range(1, 202, 20):
-                alphas = DualVariables(C=C, cand_ids=cand_ids, num_init_active_vars=num_init_active_vars,
-                                       rs=num_init_active_vars)
+                alphas = DualVariables(C=C, label_space=cand_ids, num_init_active_vars=num_init_active_vars,
+                                       random_state=num_init_active_vars)
 
                 _n_max_possible_vars = [np.minimum(num_init_active_vars, len(list(it.product(*cand_ids[i]))))
                                         for i in range(N)]
@@ -260,7 +260,7 @@ class TestDualVariables(unittest.TestCase):
 
         for C in [0.5, 1.0, 2.0]:
             for num_init_active_vars in range(1, 5):  # 1, 2, 3, 4
-                alphas = DualVariables(C=C, cand_ids=cand_ids, num_init_active_vars=num_init_active_vars, rs=10910)
+                alphas = DualVariables(C=C, label_space=cand_ids, num_init_active_vars=num_init_active_vars, random_state=10910)
 
                 _n_max_possible_vars = [np.minimum(num_init_active_vars, len(cand_ids[i][0])) for i in range(N)]
                 n_active = np.sum(_n_max_possible_vars)
@@ -305,7 +305,7 @@ class TestDualVariables(unittest.TestCase):
         C = 2.0
         gamma = 0.46
 
-        alphas = DualVariables(C=C, cand_ids=cand_ids, num_init_active_vars=2, rs=10910)
+        alphas = DualVariables(C=C, label_space=cand_ids, num_init_active_vars=2, random_state=10910)
         # print(alphas._iy)
         # Active variables
         # [(0, ('M2',)),  (0, ('M1',)),
@@ -448,10 +448,10 @@ class TestDualVariables(unittest.TestCase):
             ]
         ]
 
-        alpha_1a = DualVariables(C=2, cand_ids=cand_ids_1a, initialize=False, rs=120)
-        alpha_1b = DualVariables(C=2, cand_ids=cand_ids_1b, initialize=False, rs=120)
-        alpha_2a = DualVariables(C=2, cand_ids=cand_ids_2a, initialize=False, rs=120)
-        alpha_2b = DualVariables(C=2, cand_ids=cand_ids_2b, initialize=False, rs=120)
+        alpha_1a = DualVariables(C=2, label_space=cand_ids_1a, initialize=False, random_state=120)
+        alpha_1b = DualVariables(C=2, label_space=cand_ids_1b, initialize=False, random_state=120)
+        alpha_2a = DualVariables(C=2, label_space=cand_ids_2a, initialize=False, random_state=120)
+        alpha_2b = DualVariables(C=2, label_space=cand_ids_2b, initialize=False, random_state=120)
         self.assertTrue(DualVariables._eq_dual_domain(alpha_1a, alpha_1a))
         self.assertTrue(DualVariables._eq_dual_domain(alpha_1a, alpha_1b))
         self.assertFalse(DualVariables._eq_dual_domain(alpha_1a, alpha_2a))
@@ -568,7 +568,7 @@ class TestDualVariables(unittest.TestCase):
             ]
         ]
 
-        alphas = DualVariables(C=1.5, cand_ids=cand_ids, rs=1)
+        alphas = DualVariables(C=1.5, label_space=cand_ids, random_state=1)
 
         # Test subtracting a dual variable class from itself ==> empty dual variable set
         sub_alphas = alphas - alphas
@@ -586,7 +586,7 @@ class TestDualVariables(unittest.TestCase):
             self.assertEqual(alphas.get_dual_variable(i, y_seq), sub_alphas.get_dual_variable(i, y_seq))
 
         # Test subtracting two non-empty dual variable sets
-        alphas_2 = DualVariables(C=1.5, cand_ids=cand_ids, rs=2)
+        alphas_2 = DualVariables(C=1.5, label_space=cand_ids, random_state=2)
         sub_alphas = alphas - alphas_2
         # print(alphas._iy)
         # [(0, ('M10',)), (1, ('M7',)), (2, ('M72',)), (3, ('M3',))]

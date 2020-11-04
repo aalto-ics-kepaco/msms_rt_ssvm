@@ -15,7 +15,8 @@ setup(
         "joblib",
         "tensorflow",
         "tqdm",
-        "more-itertools"
+        "more-itertools",
+        "networkx"
     ],
 
     # Metadata

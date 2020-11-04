@@ -25,9 +25,10 @@
 ####
 import os
 import numpy as np
-import time
+import datetime
+import tensorflow.summary as tf_summary
 
-from sklearn.model_selection import GroupKFold
+from sklearn.model_selection import GroupKFold, ShuffleSplit
 
 from ssvm.data_structures import CandidateSetMetIdent
 from ssvm.ssvm import StructuredSVMMetIdent
@@ -35,44 +36,54 @@ from ssvm.examples.utils import read_data
 
 
 if __name__ == "__main__":
-    N_SAMPLES = 400
+    from timeit import default_timer as timer
 
     # Read in training spectra, fingerprints and candidate set information
-    idir = "/home/bach/Documents/doctoral/data/metindent_ismb2016"
+    idir = "/home/bach/Documents/doctoral/data/metindent_ismb2016"  # "/run/media/bach/EVO500GB/data/metident_ismb2016"
     X, fps, mols, mols2cand = read_data(idir)
 
-    # Extract a subset of the full training data
-    subset = np.sort(
-        np.random.RandomState(1332).choice(len(X), size=np.minimum(len(X), N_SAMPLES).astype(int), replace=True)
-    )
+    # Get a smaller subset
+    _, subset = next(ShuffleSplit(n_splits=1, test_size=0.05, random_state=1989).split(X))
     X = X[np.ix_(subset, subset)]
     fps = fps[subset]
     mols = mols[subset]
-    print("Number of examples:", len(X))
+    print("Total number of examples:", len(mols))
 
-    # Separate a training and test set: 75% / 25%. If a molecular structure appears multiple times, we add them
-    # to the same fold.
-    train, test = next(GroupKFold(n_splits=3).split(X, groups=mols))
+    # Wrap the candidate sets for easier access
+    cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(idir, "candidates"), preload_data=True)
+
+    # Get train test split
+    train, test = next(GroupKFold(n_splits=4).split(X, groups=mols))
+    # train, test = next(ShuffleSplit(n_splits=1, test_size=0.25, random_state=20201).split(X))
+    # np.savetxt(os.path.join(idir, "train_set.txt"), train)
+    # np.savetxt(os.path.join(idir, "test_set.txt"), test)
+
     X_train = X[np.ix_(train, train)]
     X_test = X[np.ix_(test, train)]
     mols_train = mols[train]
     mols_test = mols[test]
     assert not np.any(np.isin(mols_test, mols_train))
 
-    cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(idir, "candidates"), preload_data=True,
-                                max_n_train_candidates=100)
+    # Tensorflow training summary log-file
+    current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    train_log_dir = 'logs/' + current_time + '/train'
+    train_summary_writer = None  # tf_summary.create_file_writer(train_log_dir)
 
-    start = time.time()
-    svm = StructuredSVMMetIdent(C=64, rs=928, max_n_epochs=20, batch_size=8, stepsize="linesearch",
-                                conv_criteria="rel_duality_gap_decay", conv_threshold=0.025,
-                                use_aggregated_model=False) \
-        .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=4,
+    start = timer()
+
+    svm = StructuredSVMMetIdent(C=128, random_state=928, n_epochs=10, batch_size=8, step_size="linesearch") \
+        .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=1,
              pre_calc_args={"pre_calc_label_losses": True,
                             "pre_calc_L_Ci_S_matrices": True,
                             "pre_calc_L_Ci_matrices": True,
-                            "pre_calc_L_matrices": False},
-             debug_args={"track_topk_acc": True, "track_objectives": True})
-    end = time.time()
+                            "pre_calc_L_matrices": True})
 
-    topk_acc = svm.score(X_test, mols_test, candidates=cand)
-    print("Top-1=%.2f, Top-5=%.2f, Top-10=%.2f, Top-20=%.2f" % tuple(topk_acc[[0, 4, 9, 19]]))
+    end = timer()
+    print("version 03: %fs" % (end - start))
+
+    for score_type in ["predicted", "random", "first_candidate"]:
+        print(score_type)
+        print("Top-1=%.2f, Top-5=%.2f, Top-10=%.2f, Top-20=%.2f" %
+              tuple(svm.score(X_test, mols_test, candidates=cand, score_type=score_type)[[0, 4, 9, 19]]))
+
+

@@ -239,16 +239,18 @@ class Molecule(object):
 
 
 class CandidateSQLiteDB(object):
-    def __init__(self, db_fn: str, cand_def="fixed", molecule_identifier="inchikey"):
+    def __init__(self, db_fn: str, ms2_scorer: str, cand_def: str = "fixed", molecule_identifier: str = "inchikey"):
         """
-
         :param db_fn:
+
+        :param ms2_scorer: string, identifier, of the MS2 scoring method for which the MS2 scores should be returned.
 
         :param cand_def:
 
         :param molecule_identifier:
         """
         self.db_fn = db_fn
+        self.ms2_scorer = ms2_scorer
         self.cand_def = cand_def
         self.molecule_identifier = molecule_identifier
 
@@ -306,6 +308,26 @@ class CandidateSQLiteDB(object):
 
         return query
 
+    def _get_ms2_score_query(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> str:
+        """
+
+        :param spectrum:
+        :param candidate_subset:
+        :return:
+        """
+        query = "SELECT candidate, score FROM spectra_candidate_scores" \
+                "   WHERE participant is '%s'" \
+                "     AND spectrum is '%s'" % (self.ms2_scorer, spectrum.get("spectrum_id"))
+
+        # Restrict candidate subset if needed
+        if candidate_subset is not None:
+            query += " AND candidate IN %s" % self._in_sql(candidate_subset)
+
+        # Order the output by candidates
+        query += " ORDER BY candidate"
+
+        return query
+
     def _get_candidate_subset(self, spectrum: Spectrum) -> None:
         """
         The baseclass does not restrict the candidate set.
@@ -339,7 +361,7 @@ class CandidateSQLiteDB(object):
 
     def get_molecule_features(self, spectrum: Spectrum, feature: str) -> np.ndarray:
         """
-        :param spectrum: matchms.Spectrum, of the sequence element to get the number of candidates.
+        :param spectrum: matchms.Spectrum, of the sequence element to get the molecular features.
 
         :param feature: string, identifier of the feature to load from the database.
 
@@ -359,7 +381,7 @@ class CandidateSQLiteDB(object):
         """
         Returns the label-space for the given spectrum.
 
-        :param spectrum: matchms.Spectrum, of the sequence element to get the number of candidates.
+        :param spectrum: matchms.Spectrum, of the sequence element to get the label space.
 
         :return: list of strings, molecule identifiers for the given spectrum.
         """
@@ -367,6 +389,28 @@ class CandidateSQLiteDB(object):
 
         return [Molecule(row[0], row[1], None, None, identifier=self.molecule_identifier).get_identifier()
                 for row in rows]
+
+    def get_ms2_scores(self, spectrum: Spectrum) -> List[float]:
+        """
+
+        :param spectrum: matchms.Spectrum, of the sequence element to get the MS2 scores.
+
+        :return:
+        """
+        # Load the MS2 scores
+        scores = pd.read_sql_query(
+            self._get_ms2_score_query(spectrum, ms2_scorer, self._get_candidate_subset(spectrum)), self.db)
+
+        # Load the label space for the given spectrum. There should be an MS2 score for each label.
+        label_space = pd.read_sql_query(self._get_labelspace_query(spectrum, self._get_candidate_subset(spectrum)),
+                                        self.db)
+
+        # Ensure that we have a score for each candidate. If a candidate was not scored, that we insert a very low value
+        # for it.
+        c = scores["score"].min() / 10
+        scores = pd.merge(label_space, scores, on="candidate", how="left").fillna(value=c)
+
+        return scores["score"].to_list()
 
     @staticmethod
     def _in_sql(li) -> str:
@@ -547,17 +591,43 @@ class Sequence(object):
         """
         return self.L
 
-    def get_n_cand(self) -> List[int]:
+    def get_n_cand(self, s: Optional[int] = None) -> Union[int, List[int]]:
         """
         Get the number of candidates for each spectrum in the sequence as list.
         """
-        return [self.candidates.get_n_cand(spectrum) for spectrum in self.spectra]
+        if s is None:
+            n_cand = [self.get_n_cand(s) for s in range(self.__len__())]
+        else:
+            n_cand = self.candidates.get_n_cand(self.spectra[s])
 
-    def get_labelspace(self) -> List[List[str]]:
+        return n_cand
+
+    def get_labelspace(self, s: Optional[int] = None) -> Union[List[List[str]], List[str]]:
         """
         Get the label space, i.e. candidate molecule identifiers, for each spectrum as nested list.
         """
-        return [self.candidates.get_labelspace(spectrum) for spectrum in self.spectra]
+        if s is None:
+            labelspace = [self.get_labelspace(s) for s in range(self.__len__())]
+        else:
+            labelspace = self.candidates.get_labelspace(self.spectra[s])
+
+        return labelspace
+
+    def get_ms2_scores(self, s: Optional[int] = None) -> Union[List[List[float]], List[float]]:
+        """
+        Get the MS2 scores for the given index
+
+        :param s: scalar, sequence index for which the MS2 scores should be returned. If None, scores are returned for
+            all spectra in the sequence.
+
+        :return:
+        """
+        if s is None:
+            ms2_scores = [self.get_ms2_scores(s) for s in range(self.__len__())]
+        else:
+            ms2_scores = self.candidates.get_ms2_scores(self.spectra[s])
+
+        return ms2_scores
 
 
 class LabeledSequence(Sequence):

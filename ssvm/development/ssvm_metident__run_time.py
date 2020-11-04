@@ -71,23 +71,11 @@ if __name__ == "__main__":
     cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(idir, "candidates"), preload_data=True)
 
     ts = []
-    for i, (label_losses, L_Ci_S_matrices, L_Ci_matrices, L_matrices) in enumerate(it.product([True, False], repeat=4)):
-        print("Config: %d/%d" % (i + 1, 2**4))
-        print(label_losses, L_Ci_S_matrices, L_Ci_matrices, L_matrices)
-
-        for r in range(N_REPS):
-            start = timer()
-            ssvm = StructuredSVMMetIdent(C=128, rs=928, max_n_epochs=5, batch_size=BATCH_SIZE, stepsize=STEPSIZE) \
-                .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=1,
-                     pre_calc_args={"pre_calc_label_losses": label_losses,
-                                    "pre_calc_L_Ci_S_matrices": L_Ci_S_matrices,
-                                    "pre_calc_L_Ci_matrices": L_Ci_matrices,
-                                    "pre_calc_L_matrices": L_matrices},
-                     debug_args={"track_objectives": True, "track_topk_acc": True})
-            topkacc = ssvm.score(X_test, mols_test, candidates=cand)
-            ts.append([label_losses, L_Ci_S_matrices, L_Ci_matrices, L_matrices, timer() - start])
-
-            print(ts[-1])
+    for r in range(N_REPS):
+        start = timer()
+        StructuredSVMMetIdent(C=128, rs=928, n_epochs=40, batch_size=BATCH_SIZE, stepsize=STEPSIZE) \
+            .fit(X, mols, candidates=cand, num_init_active_vars_per_seq=1)
+        ts.append([timer() - start])
 
     ts = pd.DataFrame(ts, columns=["pre_calc_label_losses", "pre_calc_L_Ci_S_matrices", "pre_calc_L_Ci_matrices",
                                    "pre_calc_L_matrices", "Time (s)"]) \
