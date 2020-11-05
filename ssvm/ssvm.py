@@ -1448,6 +1448,9 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             # Get the index of the correct structure
             candidates[s]["index_of_correct_structure"] = candidates[s]["structure"].index(data[i].labels[s])
 
+
+
+
         order_probs = dict()
 
 

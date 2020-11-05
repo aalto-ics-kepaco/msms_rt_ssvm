@@ -591,9 +591,21 @@ class Sequence(object):
         """
         return self.L
 
+    def get_molecule_features(self, s: int, features: str) -> np.ndarray:
+        """
+
+        :param s:
+        :param features:
+        :return:
+        """
+        return self.candidates.get_molecule_features(self.spectra[s], features)
+
     def get_n_cand(self, s: Optional[int] = None) -> Union[int, List[int]]:
         """
         Get the number of candidates for each spectrum in the sequence as list.
+
+        :param s: scalar, sequence index for which the MS2 scores should be returned. If None, scores are returned for
+            all spectra in the sequence.
         """
         if s is None:
             n_cand = [self.get_n_cand(s) for s in range(self.__len__())]
@@ -605,6 +617,9 @@ class Sequence(object):
     def get_labelspace(self, s: Optional[int] = None) -> Union[List[List[str]], List[str]]:
         """
         Get the label space, i.e. candidate molecule identifiers, for each spectrum as nested list.
+
+        :param s: scalar, sequence index for which the MS2 scores should be returned. If None, scores are returned for
+            all spectra in the sequence.
         """
         if s is None:
             labelspace = [self.get_labelspace(s) for s in range(self.__len__())]
@@ -619,8 +634,6 @@ class Sequence(object):
 
         :param s: scalar, sequence index for which the MS2 scores should be returned. If None, scores are returned for
             all spectra in the sequence.
-
-        :return:
         """
         if s is None:
             ms2_scores = [self.get_ms2_scores(s) for s in range(self.__len__())]
