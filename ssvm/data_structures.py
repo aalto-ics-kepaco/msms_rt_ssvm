@@ -24,15 +24,28 @@
 #
 ####
 import os
+import sqlite3
+import logging
 import numpy as np
 import pandas as pd
 
+from collections import OrderedDict
 from scipy.io import loadmat
 from typing import List, Tuple, Union, Dict, Optional
+
 from sklearn.model_selection import GroupKFold
 from sklearn.utils.validation import check_random_state, check_is_fitted
 
 from ssvm.kernel_utils import tanimoto_kernel
+
+from matchms.Spectrum import Spectrum
+
+# Setup the Logger
+LOGGER = logging.getLogger(__name__)
+CH = logging.StreamHandler()
+FORMATTER = logging.Formatter('[%(levelname)s] %(name)s : %(message)s')
+CH.setFormatter(FORMATTER)
+LOGGER.addHandler(CH)
 
 
 class CandidateSetMetIdent(object):
@@ -186,12 +199,41 @@ class CandidateSetMetIdent(object):
         return K
 
 
-class Sequence(object):
-    def __init__(self, spec_ids: List[str]):
-        self.spec_ids = spec_ids
-        self.L = len(self.spec_ids)
+class CandidateSQLiteDB(object):
+    def __init__(self, db_fn: str, cand_def="fixed"):
+        """
 
-        self.cand = None  # stores a reference to the candidates of each sequence element
+        :param db_fn:
+        :param cand_def:
+        """
+        self.db = sqlite3.connect("file:" + db_fn + "?mode=ro", uri=True)
+        self.cand_def = cand_def
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.db.close()
+
+    def get_n_cand(self, spectrum: Spectrum):
+        """
+
+        :param spectrum: matchms.Spectrum, of the sequence element to get the number of candidates.
+
+        :return: scalar, number of candidates
+        """
+        if self.cand_def == "fixed":
+            n_cand = self.db.execute("SELECT COUNT(*) FROM candidates_spectra WHERE spectrum is ?",
+                                     (spectrum.get("spectrum_id"), )).fetchall()[0][0]
+        else:
+            raise NotImplementedError("Currently only fixed candidate set definition supported.")
+
+        return n_cand
+
+
+class Sequence(object):
+    def __init__(self, spectra: List[Spectrum], candidates: CandidateSQLiteDB):
+        self.spectra = spectra
+        self.candidates = candidates
+
+        self.L = len(self.spectra)
 
     def __len__(self) -> int:
         """
@@ -201,34 +243,35 @@ class Sequence(object):
         """
         return self.L
 
-    def get_n_cand_sig(self, sig) -> int:
+    def get_n_cand(self, spectrum=None) -> Union[int, List[int]]:
         """
-        :param sig: scalar, index of the sequence element to get the number of candidates.
-        :return: scalar, number of candidates
+        :param spectrum: matchms.Spectrum, of the sequence element to get the number of candidates. If None, a list
+            with the number of candidates for all spectra is returned
+
+        :return: scalar or list of scalars, number of candidates
         """
-        return len(self.cand[sig])
+        if spectrum is None:
+            n_cand = [self.get_n_cand(spectrum) for spectrum in self.spectra]
+        else:
+            n_cand = self.candidates.get_n_cand(spectrum)
 
-    def get_n_cand(self) -> List[int]:
-        return [self.get_n_cand_sig(sig) for sig in range(len(self))]
-
-    def initalize_kernels(self):
-        pass
+        return n_cand
 
 
 class LabeledSequence(Sequence):
     """
     Class representing the a _labeled_ (MS, RT)-sequence (x, t, y) with associated molecular candidate set C.
     """
-    def __init__(self, spec_ids: List[str], labels: List[str]):
+    def __init__(self, spectra: List[Spectrum], labels: List[str], candidates: CandidateSQLiteDB):
         """
-        :param spec_ids: list of strings, spectrum-ids belonging sequence
+        :param spectra: list of strings, spectrum-ids belonging sequence
         :param labels: list of strings, ground truth molecule identifiers belonging to the spectra of the sequence
         """
         self.labels = labels
 
-        super(LabeledSequence, self).__init__(spec_ids=spec_ids)
+        super(LabeledSequence, self).__init__(spectra=spectra, candidates=candidates)
 
-    def as_Xy_input(self) -> Tuple[List[Sequence], List[str]]:
+    def as_Xy_input(self) -> Tuple[List[Spectrum], List[str]]:
         """
         Return the (MS, RT)-sequence and ground truth label separately as input for the sklearn interface.
 
@@ -236,48 +279,119 @@ class LabeledSequence(Sequence):
 
         :return:
         """
-        return self.spec_ids, self.labels
+        return self.spectra, self.labels
 
 
 class SequenceSample(object):
     """
     Class representing a sequence sample.
     """
-    def __init__(self, spec_ids: List[str], kappa_ms: np.ndarray, spec_db: Union[str, pd.DataFrame],
-                 cand_db: Union[str, pd.DataFrame], cand_def="mass"):
+    def __init__(self, spectra: List[Spectrum], labels: List[str], cand_db: CandidateSQLiteDB, N: int, L_min: int,
+                 L_max: Optional[int] = None, random_state: Optional[int] = None, sort_sequence_by_rt=False):
         """
-        :param data: list of strings, of length N, spectra ids that should be used for the sampling the sequences
-        :param kappa_ms: array-like, shape=(N, N), kernel matrix encoding the similarity of the spectra. The order of the
-            rows must correspond to the spectra ids, i.e. the i'th row K[i] corresponds to the spec_id[i].
-        :param spec_db: string or pandas.DataFrame, Database storing information about the spectra (x_sigma), such as
-            its retention time (t_sigma), its ground-truth label (y_sigma) and chromatographic configuration.
-            string: filename of an SQLite DB storing the information
-            DataFrame: pandas table storing the information
-        :param cand_db: string or pandas.DataFrame, Database storing molecular candidates and their feature
-            representation. The candidates are queried for each spectrum according to "cand_def".
-        :param cand_def: string, which method should be used to define the candidate set for each sequence spectrum.
-            "mass", by mass-window
-            "mf", by molecular formula
-            "fixed", loaded a pre-defined set
+        :param data: list of matchms.Spectrum, spectra to sample sequences from
+
+        :param labels: list of strings, labels of each spectrum identifying the ground truth molecule.
+
+        :param cand_db:
+
+        :param N: scalar, number of sequences to sample.
+
+        :param L_min: scalar, minimum length of the individual sequences
+
+        :param L_max: scalar, maximum length of the individual sequences
+
+        :param random_state:
         """
-        self.spec_ids = spec_ids
-        assert pd.Series(self.spec_ids).is_unique, "Spectra IDs must be unique."
-        self.specid_2_ind = {}
-        for s, id in enumerate(self.spec_ids):
-            self.specid_2_ind[s] = id
-
-        self.kappa_ms = kappa_ms
-        self.cand_def = cand_def
-        assert self.cand_def in ["mass", "mf", "fixed"]
-
-        self.spec_db = spec_db
+        self.spectra = spectra
+        self.labels = labels
         self.cand_db = cand_db
+        self.N = N
+        self.L_min = L_min
+        self.L_max = L_max
+        self.random_state = random_state
+        self.sort_sequence_by_rt = sort_sequence_by_rt
 
-    def get_train_test_split(self):
+        assert pd.Series([spectrum.get("spectrum_id") for spectrum in self.spectra]).is_unique, \
+            "Spectra IDs must be unique."
+        assert self.L_min > 0
+
+        if self.L_max is None:
+            self._L = np.full(self.N, fill_value=self.L_min)
+        else:
+            assert self.L_min < self.L_max
+            self._L = check_random_state(self.random_state).randint(self.L_min, self.L_max + 1, self.N)
+
+        # Extract information from the spectra to which dataset they each belong
+        self._datasets = []
+        self._dataset2idx = OrderedDict()
+        for idx, spectrum in enumerate(self.spectra):
+            self._datasets.append(spectrum.get("dataset"))
+            try:
+                self._dataset2idx[self._datasets[-1]].append(idx)
+            except KeyError:
+                self._dataset2idx[self._datasets[-1]] = [idx]
+        self._n_spec_per_dataset = {ds: len(self._dataset2idx[ds]) for ds in self._dataset2idx}
+
+        LOGGER.info("Number of datasets: %d" % len(self._dataset2idx))
+        for k, v in self._n_spec_per_dataset.items():
+            LOGGER.info("Dataset '%s' contains '%d' spectra." % (k, v))
+
+        # Generate (MS, RT)-sequences
+        self._sampled_sequences = self._sample_sequences()
+
+    def __len__(self):
+        """
+        :return: scalar, number of sample sequences
+        """
+        return len(self._sampled_sequences)
+
+    def __iter__(self):
+        return iter(self._sampled_sequences)
+
+    def __getitem__(self, item):
+        return self._sampled_sequences[item]
+
+    def _sample_sequences(self):
+        """
+        Generate (spectra, rts, labels) sequences to train the StructuredSVM. In the main document we refer to this
+        samples as:
+
+            (x_i, t_i, y_i),
+
+        with:
+
+            x_i = (x_i1, ..., x_iL) ... being a list of spectra
+            t_i = (t_i1, ..., t_iL) ... being the list of corresponding retention times
+            y_i = (y_i1, ..., y_iL) ... being the list of corresponding ground-truth labels
+
+        :return:
+        """
+        rs = check_random_state(self.random_state)  # type: np.random.RandomState
+
+        spl_seqs = []
+        for i, ds in enumerate(rs.choice(self._datasets, self.N)):
+            seq = [(self.spectra[sig], self.labels[sig])
+                   for sig in rs.choice(self._dataset2idx[ds], self._L[i], replace=False)]
+
+            # FIXME: Here we can have multiple times the same molecule in the sample, e.g. due to different adducts.
+            assert pd.Series(s[1] for s in seq).is_unique, \
+                "Each molecule should appear only ones in the set of molecules."
+
+            # Sort the sequence elements by their retention time
+            if self.sort_sequence_by_rt:
+                seq = sorted(seq, key=lambda s: s[0].get("retention_time"))
+
+            # TODO: Return here list where each object is of type LabelSequence
+            spl_seqs.append(seq)
+
+        return spl_seqs
+
+    def get_train_test_split(self, n_splits=4):
         """
         75% training and 25% test split.
         """
-        return next(self.get_train_test_generator(n_splits=4))
+        return next(self.get_train_test_generator(n_splits=n_splits))
 
     def get_train_test_generator(self, n_splits=4):
         """
@@ -296,18 +410,17 @@ class SequenceSample(object):
             test : ndarray
                 The testing set indices for that split.
         """
+        for train, test in GroupKFold(n_splits=n_splits).split(self.spectra, groups=self.labels):
+            N_test = self.N // n_splits
+            N_train = self.N - N_test
 
-        for train, test in GroupKFold(n_splits=n_splits).split(self.spec_ids, groups=self._load_mol_identifier()):
             # Get training and test subsets of the spectra ids. Spectra belonging to the same molecular structure are
             # either in the training or the test set.
-            spec_ids_train = [self.spec_ids[i] for i in train]
-            spec_ids_test = [self.spec_ids[i] for i in test]
-
             yield (
-                SequenceSample(spec_ids_train, kappa_ms=self.kappa_ms[np.ix_(train, train)],
-                               spec_db=self.spec_db, cand_db=self.cand_db, cand_def=self.cand_def),
-                SequenceSample(spec_ids_test, kappa_ms=self.kappa_ms[np.ix_(test, train)],
-                               spec_db=self.spec_db, cand_db=self.cand_db, cand_def=self.cand_def)
+                SequenceSample([self.spectra[i] for i in train], [self.labels[i] for i in train], cand_db=self.cand_db,
+                               N=N_train, L_min=self.L_min, L_max=self.L_max, random_state=self.random_state),
+                SequenceSample([self.spectra[i] for i in test], [self.labels[i] for i in test], cand_db=self.cand_db,
+                               N=N_test, L_min=self.L_min, L_max=self.L_max, random_state=self.random_state)
             )
 
     def get_n_samples(self):
@@ -316,66 +429,10 @@ class SequenceSample(object):
 
         :return: scalar, Number of (spectrum, rt) examples.
         """
-        return len(self.spec_ids)
-
-    def generate_sequences(self, N, L, rs=None, sort_sequence_by_rt=True):
-        """
-        Generate (spectra, rts, labels) sequences to train the StructuredSVM. In the main document we refer to this
-        samples as:
-
-            (x_i, t_i, y_i),
-
-        with:
-
-            x_i = (x_i1, ..., x_iL) ... being a list of spectra
-            t_i = (t_i1, ..., t_iL) ... being the list of corresponding retention times
-            y_i = (y_i1, ..., y_iL) ... being the list of corresponding ground-truth labels
-
-        :param N: scalar, number of sequences
-        :param L: scalar, length of the individual sequences
-        :param rs:
-        :param sort_sequence_by_rt: boolean, indicating, whether the sequence elements, i.e. x_i1, ..., should be
-            sorted by their retention time.
-        :return:
-        """
-        if hasattr(self, "spl_seqs"):
-            # FIXME: Could we call the sample generation straight in the constructor?
-            raise AssertionError("Sample sequences have already been generated and should be generated again.")
-
-        # TODO: How to include the candidates here?
-        data = pd.DataFrame({"spec_id": self.spec_ids,
-                             "rt": self._load_retention_times(),
-                             "mol_id": self._load_mol_identifiers(),
-                             "mb_ds": self._load_dataset()})
-
-        spl_seqs = []
-        rs = check_random_state(rs)  # Type: np.random.RandomState
-        for mb_ds in rs.choice(data["mb_ds"], N):
-            seq = data[data["mb_ds"] == mb_ds].sample(L, random_state=rs)
-
-            # Sort the sequence elements by their retention time
-            if sort_sequence_by_rt:
-                seq.sort_values(by="rt", inplace=True, ascending=True)
-
-            spl_seqs.append([seq["spec_id"].to_list(), seq["rt"].to_list(), seq["mol_id"].to_list()])
-            # FIXME: Here we can have multiple times the same molecule in the sample, e.g. due to different adducts.
-
-            assert seq["mol_id"].is_unique, "Each molecule should appear only ones in the set of molecules."
-
-        self.N = N
-        self.L = L
-        self.spl_seqs = spl_seqs
-
-    def __len__(self):
-        """
-        :return: scalar, number of sample sequences
-        """
-        check_is_fitted(self, "spl_seqs")
-        return len(self.spl_seqs)
+        return len(self.spectra)
 
     def as_Xy_input(self):
-        check_is_fitted(self, "spl_seqs")
-        x, rt, y = zip(*self.spl_seqs)
+        x, rt, y = zip(*self._sampled_sequences)
         return x, y
 
     def get_labelspace(self, i: int) -> List[List[str]]:
@@ -445,17 +502,7 @@ class SequenceSample(object):
         return K_ms @ (L_ms__j_tau - L_ms__j_ybar)
 
 
-    # def __getitem__(self, item):
-    #     """
-    #
-    #     :param item:
-    #     :return:
-    #     """
-    #     check_is_fitted(self, "spl_seqs")
-    #     return self.spec_ids[item]
-
-
 if __name__ == "__main__":
     ss = SequenceSample(["A", "B", "C"], np.random.rand(3, 3), "", "")
     ss_train, ss_test = ss.get_train_test_split()
-    ss_train.generate_sequences(100, 20)
+    ss_train._sample_sequences(100, 20)

@@ -23,13 +23,61 @@
 # SOFTWARE.
 #
 ####
-
+import sqlite3
 import os
 import unittest
 import pickle
+import pandas as pd
+import numpy as np
 
-from ssvm.data_structures import CandidateSetMetIdent
+from matchms.Spectrum import Spectrum
+
+from ssvm.data_structures import CandidateSetMetIdent, SequenceSample
 from ssvm.development.ssvm_metident__conv_params import read_data
+
+
+class TestSequenceSample(unittest.TestCase):
+    def setUp(self) -> None:
+        db_fn = "/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_LATEST.db"
+        self.db = self.db = sqlite3.connect("file:" + db_fn + "?mode=ro", uri=True)
+
+        # Read in spectra and labels
+        res = pd.read_sql_query("SELECT spectrum, molecule, rt, challenge FROM challenges_spectra "
+                                "   INNER JOIN spectra s ON s.name = challenges_spectra.spectrum", con=self.db)
+        self.spectra = [Spectrum(np.array([]), np.array([]),
+                                 {"spectrum_id": spec_id, "retention_time": rt, "dataset": chlg})
+                        for (spec_id, rt, chlg) in zip(res["spectrum"], res["rt"], res["challenge"])]
+        self.labels = res["molecule"].to_list()
+
+    def tearDown(self) -> None:
+        self.db.close()
+
+    def test_sequence_generation(self):
+        # Generate sequence sample
+        N = 100
+        L_min = 10
+        seq_sample = SequenceSample(self.spectra, self.labels, None, N=N, L_min=L_min, random_state=201)
+        self.assertEqual(N, len(seq_sample))
+        self.assertTrue(all([len(ss) == L_min for ss in seq_sample]))
+
+        # for i, (spectrum, label) in enumerate(seq_sample[11]):
+        #     print(spectrum.get("spectrum_id"), spectrum.get("retention_time"), label)
+        #     if i > 9:
+        #         break
+
+    def test_train_test_splitting(self):
+        # Generate sequence sample
+        N = 31
+        L_min = 10
+        seq_sample = SequenceSample(self.spectra, self.labels, None, N=N, L_min=L_min, random_state=201)
+
+        train_seq, test_seq = seq_sample.get_train_test_split()
+
+        self.assertEqual(7, len(test_seq))
+        self.assertEqual(24, len(train_seq))
+        for i in test_seq:
+            for j in train_seq:
+                self.assertTrue(len(set(i.labels) & set(j.labels)) == 0)
 
 
 class TestCandidateSetMetIdent(unittest.TestCase):
