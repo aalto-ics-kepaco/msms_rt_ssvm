@@ -29,7 +29,7 @@ import unittest
 import pickle
 
 from ssvm.data_structures import CandidateSetMetIdent
-from ssvm.examples.metabolite_identification import read_data
+from ssvm.development.ssvm_metident__conv_params import read_data
 
 
 class TestCandidateSetMetIdent(unittest.TestCase):

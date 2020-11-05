@@ -28,7 +28,6 @@ import numpy as np
 import pandas as pd
 
 from scipy.io import loadmat
-from scipy.sparse import csr_matrix
 from typing import List, Tuple, Union, Dict, Optional
 from sklearn.model_selection import GroupKFold
 from sklearn.utils.validation import check_random_state, check_is_fitted
@@ -37,13 +36,15 @@ from ssvm.kernel_utils import tanimoto_kernel
 
 
 class CandidateSetMetIdent(object):
-    def __init__(self, mols: np.ndarray, fps: np.ndarray, mols2cand: Dict, idir: str, preload_data=False):
+    def __init__(self, mols: np.ndarray, fps: np.ndarray, mols2cand: Dict, idir: str, preload_data=False,
+                 max_n_train_candidates=np.inf):
         self.mols = mols
         self.fps = fps
         self.mols2cand = mols2cand
         self.idir = idir
         self.mol2idx = {mol: i for i, mol in enumerate(self.mols)}
         self.preload_data = preload_data
+        self.max_n_train_candidates = max_n_train_candidates
 
         if self.preload_data:
             self._cand_sets = self._preload_candidate_sets()
@@ -77,27 +78,42 @@ class CandidateSetMetIdent(object):
             raise KeyError("Cannot find correct molecular structure '%s' in candidate set '%s'." % (
                 mol, self.mols2cand[mol]))
 
-        return cand
+        if not np.isinf(self.max_n_train_candidates):
+            # Sample a sub-set for the training
+            subset = np.random.RandomState(cand["n_cand"]).choice(
+                cand["n_cand"], int(np.minimum(self.max_n_train_candidates, cand["n_cand"])), replace=False)
 
-    def get_index_of_correct_structure(self, mol: str) -> int:
-        return self.get_labelspace(mol).index(mol)
+            # Ensure that the current candidate is in the sub-set
+            if cand["index_of_correct_structure"] not in subset:
+                subset[0] = cand["index_of_correct_structure"]
+
+            cand["training_subset"] = subset
+        else:
+            cand["training_subset"] = np.arange(cand["n_cand"])
+
+        return cand
 
     def n_fps(self) -> int:
         return self.fps.shape[1]
 
-    def get_labelspace(self, mol: str) -> List[str]:
+    def get_labelspace(self, mol: str, for_training=False) -> List[str]:
         # TODO: We do not really need to load all candidates just to get the label space.
         if self.preload_data:
             cand = self._cand_sets[mol]
         else:
             cand = self._load_candidate_set(mol)
 
-        return cand["inchi"]
+        labspace = cand["inchi"]
+
+        if for_training:
+            labspace = [labspace[idx] for idx in cand["training_subset"]]
+
+        return labspace
 
     def get_gt_fp(self, exp_mols: Optional[Union[str, np.ndarray]] = None) -> np.ndarray:
         if exp_mols is not None:
             exp_mols = np.atleast_1d(exp_mols)
-            idc = [self.mol2idx[mol] for mol in exp_mols]
+            idc = [self.mol2idx[_mol] for _mol in exp_mols]
 
             if len(idc) == 1:
                 idc = idc[0]
@@ -108,54 +124,57 @@ class CandidateSetMetIdent(object):
 
         return fps
 
-    def get_candidates_fp(self, mol: str, mol_sel=None) -> np.ndarray:
+    def get_candidate_fps(self, mol: str, mol_sel=None, for_training=False) -> np.ndarray:
         if self.preload_data:
             cand = self._cand_sets[mol]
         else:
             cand = self._load_candidate_set(mol)
 
-        if mol_sel is None:
-            fps = cand["fp"]
+        fps = cand["fp"]
+
+        if for_training:
+            if mol_sel is not None:
+                mol_sel = np.atleast_1d(mol_sel)
+                assert len(mol_sel) == 1
+                idc = cand["mol2idx"][mol_sel[0]]
+                assert idc in cand["training_subset"]
+                fps = fps[[idc]]
+            else:
+                fps = fps[cand["training_subset"]]
         else:
-            np.atleast_1d(mol_sel)
-            idc = [cand["mol2idx"][mol] for mol in mol_sel]
-            fps = cand["fp"][idc]
+            if mol_sel is not None:
+                mol_sel = np.atleast_1d(mol_sel)
+                idc = [cand["mol2idx"][_mol] for _mol in mol_sel]
+                fps = fps[idc]
 
         return fps
 
-    def getMolKernel_ExpVsCand(self, exp_mols: np.ndarray, mol: str, kernel="tanimoto") -> np.ndarray:
+    def getMolKernel_ExpVsCand(self, exp_mols: np.ndarray, mol: str, kernel="tanimoto", for_training=False) -> \
+            np.ndarray:
         if self.preload_data:
             cand = self._cand_sets[mol]
         else:
             cand = self._load_candidate_set(mol)
 
-        idc = [self.mol2idx[mol] for mol in exp_mols]
-        K = self.get_kernel(self.fps[idc], cand["fp"], kernel)
-        assert K.shape == (len(exp_mols), cand["n_cand"])
+        cand_fps = cand["fp"]
+
+        if for_training:
+            cand_fps = cand_fps[cand["training_subset"]]
+
+        idc = [self.mol2idx[_mol] for _mol in exp_mols]
+        K = self.get_kernel(self.fps[idc], cand_fps, kernel)
+
+        if for_training:
+            assert K.shape == (len(exp_mols), len(cand["training_subset"]))
+        else:
+            assert K.shape == (len(exp_mols), cand["n_cand"])
 
         return K
 
     def getMolKernel_ExpVsExp(self, exp_mols: np.ndarray, kernel="tanimoto"):
-        idc = [self.mol2idx[mol] for mol in exp_mols]
+        idc = [self.mol2idx[_mol] for _mol in exp_mols]
         K = self.get_kernel(self.fps[idc], self.fps[idc], kernel)
         assert K.shape == (len(exp_mols), len(exp_mols))
-
-        return K
-
-    def getMolKernel_CandVsCand(self, mol_A: str, mol_B: str, mol_sel_A=None, kernel="tanimoto") -> np.ndarray:
-        if self.preload_data:
-            cand_A = self._cand_sets[mol_A]
-            cand_B = self._cand_sets[mol_B]
-        else:
-            cand_A = self._load_candidate_set(mol_A)
-            cand_B = self._load_candidate_set(mol_B)
-
-        if mol_sel_A is None:
-            K = self.get_kernel(cand_A["fp"], cand_B["fp"], kernel)
-        else:
-            idc = [cand_A["mol2idx"][mol] for mol in mol_sel_A]
-            K = self.get_kernel(cand_A["fp"][idc, :], cand_B["fp"], kernel)
-            assert K.shape == (len(mol_sel_A), cand_B["n_cand"])
 
         return K
 

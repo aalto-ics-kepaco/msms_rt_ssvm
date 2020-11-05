@@ -26,7 +26,9 @@
 import os
 import numpy as np
 import pandas as pd
+import itertools as it
 
+from sklearn.model_selection import GroupKFold
 from timeit import default_timer as timer
 
 from ssvm.data_structures import CandidateSetMetIdent
@@ -34,9 +36,9 @@ from ssvm.ssvm import StructuredSVMMetIdent
 from ssvm.examples.utils import read_data
 from ssvm.development.utils import get_git_revision_short_hash
 
-N_SAMPLES = 100
+N_SAMPLES = 200
 N_REPS = 3
-BATCH_SIZE = 4
+BATCH_SIZE = 8
 STEPSIZE = "linesearch"
 
 ODIR = "./profiling/"
@@ -56,18 +58,44 @@ if __name__ == "__main__":
     mols = mols[subset]
     print("Number of examples:", len(X))
 
+    # Separate a training and test set: 75% / 25%. If a molecular structure appears multiple times, we add them to the
+    # same fold.
+    train, test = next(GroupKFold(n_splits=4).split(X, groups=mols))
+    X_train = X[np.ix_(train, train)]
+    X_test = X[np.ix_(test, train)]
+    mols_train = mols[train]
+    mols_test = mols[test]
+    assert not np.any(np.isin(mols_test, mols_train))
+
     # Wrap the candidate sets for easier access
     cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(idir, "candidates"), preload_data=True)
 
     ts = []
-    for r in range(N_REPS):
-        start = timer()
-        StructuredSVMMetIdent(C=128, rs=928, n_epochs=40, batch_size=BATCH_SIZE, stepsize=STEPSIZE) \
-            .fit(X, mols, candidates=cand, num_init_active_vars_per_seq=1)
-        ts.append([timer() - start])
+    for i, (label_losses, L_Ci_S_matrices, L_Ci_matrices, L_matrices) in enumerate(it.product([True, False], repeat=4)):
+        print("Config: %d/%d" % (i + 1, 2**4))
+        print(label_losses, L_Ci_S_matrices, L_Ci_matrices, L_matrices)
 
-    ts = pd.DataFrame(ts, columns=["Time (s)"]).aggregate(func=[np.mean, np.median, np.min])  # type: pd.DataFrame
+        for r in range(N_REPS):
+            start = timer()
+            ssvm = StructuredSVMMetIdent(C=128, rs=928, max_n_epochs=5, batch_size=BATCH_SIZE, stepsize=STEPSIZE) \
+                .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=1,
+                     pre_calc_args={"pre_calc_label_losses": label_losses,
+                                    "pre_calc_L_Ci_S_matrices": L_Ci_S_matrices,
+                                    "pre_calc_L_Ci_matrices": L_Ci_matrices,
+                                    "pre_calc_L_matrices": L_matrices},
+                     debug_args={"track_objectives": True, "track_topk_acc": True})
+            topkacc = ssvm.score(X_test, mols_test, candidates=cand)
+            ts.append([label_losses, L_Ci_S_matrices, L_Ci_matrices, L_matrices, timer() - start])
+
+            print(ts[-1])
+
+    ts = pd.DataFrame(ts, columns=["pre_calc_label_losses", "pre_calc_L_Ci_S_matrices", "pre_calc_L_Ci_matrices",
+                                   "pre_calc_L_matrices", "Time (s)"]) \
+        .groupby(["pre_calc_label_losses", "pre_calc_L_Ci_S_matrices", "pre_calc_L_Ci_matrices", "pre_calc_L_matrices"]) \
+        .aggregate(func=[np.median, np.min]) \
+        .round(2) \
+        .reset_index()  # type: pd.DataFrame
     print(ts)
 
     ts.to_csv(os.path.join(ODIR, "run_time__%s__n_samples=%d__n_rep=%d__batch_size=%d__stepsize=%s.csv" % (
-        get_git_revision_short_hash(), N_SAMPLES, N_REPS, BATCH_SIZE, STEPSIZE)), index=False)
+        get_git_revision_short_hash(), N_SAMPLES, N_REPS, BATCH_SIZE, STEPSIZE)), index=False, sep="|")

@@ -25,10 +25,9 @@
 ####
 import os
 import numpy as np
-import datetime
-import tensorflow.summary as tf_summary
+import time
 
-from sklearn.model_selection import GroupKFold, ShuffleSplit
+from sklearn.model_selection import GroupKFold
 
 from ssvm.data_structures import CandidateSetMetIdent
 from ssvm.ssvm import StructuredSVMMetIdent
@@ -36,54 +35,44 @@ from ssvm.examples.utils import read_data
 
 
 if __name__ == "__main__":
-    from timeit import default_timer as timer
+    N_SAMPLES = 400
 
     # Read in training spectra, fingerprints and candidate set information
-    idir = "/home/bach/Documents/doctoral/data/metindent_ismb2016"  # "/run/media/bach/EVO500GB/data/metident_ismb2016"
+    idir = "/home/bach/Documents/doctoral/data/metindent_ismb2016"
     X, fps, mols, mols2cand = read_data(idir)
 
-    # Get a smaller subset
-    _, subset = next(ShuffleSplit(n_splits=1, test_size=0.05, random_state=1989).split(X))
+    # Extract a subset of the full training data
+    subset = np.sort(
+        np.random.RandomState(1332).choice(len(X), size=np.minimum(len(X), N_SAMPLES).astype(int), replace=True)
+    )
     X = X[np.ix_(subset, subset)]
     fps = fps[subset]
     mols = mols[subset]
-    print("Total number of examples:", len(mols))
+    print("Number of examples:", len(X))
 
-    # Wrap the candidate sets for easier access
-    cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(idir, "candidates"), preload_data=True)
-
-    # Get train test split
-    train, test = next(GroupKFold(n_splits=4).split(X, groups=mols))
-    # train, test = next(ShuffleSplit(n_splits=1, test_size=0.25, random_state=20201).split(X))
-    # np.savetxt(os.path.join(idir, "train_set.txt"), train)
-    # np.savetxt(os.path.join(idir, "test_set.txt"), test)
-
+    # Separate a training and test set: 75% / 25%. If a molecular structure appears multiple times, we add them
+    # to the same fold.
+    train, test = next(GroupKFold(n_splits=3).split(X, groups=mols))
     X_train = X[np.ix_(train, train)]
     X_test = X[np.ix_(test, train)]
     mols_train = mols[train]
     mols_test = mols[test]
     assert not np.any(np.isin(mols_test, mols_train))
 
-    # Tensorflow training summary log-file
-    current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    train_log_dir = 'logs/' + current_time + '/train'
-    train_summary_writer = None  # tf_summary.create_file_writer(train_log_dir)
+    cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(idir, "candidates"), preload_data=True,
+                                max_n_train_candidates=100)
 
-    start = timer()
-
-    svm = StructuredSVMMetIdent(C=128, rs=928, n_epochs=10, batch_size=8, stepsize="linesearch") \
-        .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=1,
+    start = time.time()
+    svm = StructuredSVMMetIdent(C=64, rs=928, max_n_epochs=20, batch_size=8, stepsize="linesearch",
+                                conv_criteria="rel_duality_gap_decay", conv_threshold=0.025,
+                                use_aggregated_model=False) \
+        .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=4,
              pre_calc_args={"pre_calc_label_losses": True,
                             "pre_calc_L_Ci_S_matrices": True,
                             "pre_calc_L_Ci_matrices": True,
-                            "pre_calc_L_matrices": True})
+                            "pre_calc_L_matrices": False},
+             debug_args={"track_topk_acc": True, "track_objectives": True})
+    end = time.time()
 
-    end = timer()
-    print("version 03: %fs" % (end - start))
-
-    for score_type in ["predicted", "random", "first_candidate"]:
-        print(score_type)
-        print("Top-1=%.2f, Top-5=%.2f, Top-10=%.2f, Top-20=%.2f" %
-              tuple(svm.score(X_test, mols_test, candidates=cand, score_type=score_type)[[0, 4, 9, 19]]))
-
-
+    topk_acc = svm.score(X_test, mols_test, candidates=cand)
+    print("Top-1=%.2f, Top-5=%.2f, Top-10=%.2f, Top-20=%.2f" % tuple(topk_acc[[0, 4, 9, 19]]))
