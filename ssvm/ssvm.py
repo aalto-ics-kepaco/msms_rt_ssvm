@@ -537,7 +537,7 @@ class _StructuredSVM(object):
     Structured Support Vector Machine (SSVM) meta-class
     """
     def __init__(self, C: Union[int, float] = 1, n_epochs: int = 100, batch_size: int = 1, label_loss: str = "hamming",
-                 step_size: str = "diminishing", random_state: Optional[int, np.random.RandomState] = None):
+                 step_size: str = "diminishing", random_state: Optional[Union[int, np.random.RandomState]] = None):
         """
         Structured Support Vector Machine (SSVM)
 
@@ -608,7 +608,8 @@ class _StructuredSVM(object):
 
 
 class StructuredSVMMetIdent(_StructuredSVM):
-    def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming", random_state=None, batch_size=1, step_size="diminishing"):
+    def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming", random_state=None, batch_size=1,
+                 step_size="diminishing"):
         self.batch_size = batch_size
 
         # States defining a fitted SSVM Model
@@ -618,10 +619,9 @@ class StructuredSVMMetIdent(_StructuredSVM):
         self.alphas = None  # type: DualVariables
         self.N = None
 
-==== BASE ====
-        super(StructuredSVMMetIdent, self).__init__(C=C, n_epochs=n_epochs, label_loss=label_loss, rs=rs,
-                                                    stepsize=stepsize)
-==== BASE ====
+        super(StructuredSVMMetIdent, self).__init__(C=C, n_epochs=n_epochs, label_loss=label_loss,
+                                                    random_state=random_state, step_size=step_size)
+
 
     @staticmethod
     def _sanitize_fit_args(idict, keys, bool_default):
@@ -1069,16 +1069,16 @@ class StructuredSVMMetIdent(_StructuredSVM):
             L_Ci_S_available = True
 
         if "mol_kernel_l_y" not in pre_calc_data or self.y_train[i] not in pre_calc_data["mol_kernel_l_y"]:
-            L_Ci_available = False
+            L_Ci_S_available = False
         else:
             L_Ci_S_available = False
 
-        if y_i in pre_calc_data["mol_kernel_L_Ci"]:
+        if self.y_train[i] in pre_calc_data["mol_kernel_L_Ci"]:
             L_Ci_available = True
         else:
             L_Ci_available = False
 
-        if  L_Ci_available and L_Ci_S_available:
+        if L_Ci_available and L_Ci_S_available:
             fps_Ci = None
         else:
             fps_Ci = candidates.get_candidates_fp(self.y_train[i])
@@ -1371,11 +1371,16 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
         return np.clip(nom / (den + 1e-8), 0, 1).item()
 
+
 class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     """
     Structured Support Vector Machine (SSVM) for (MS, RT)-sequence classification.
     """
-    def __init__(self, *args, **kwargs):
+    def __init__(self, mol_feat_label_loss: str, mol_feat_retention_order: str, *args, **kwargs):
+
+        self.mol_feat_label_loss = mol_feat_label_loss
+        self.mol_feat_retention_order = mol_feat_retention_order
+
         super().__init__(*args, **kwargs)
 
     def fit(self, data: SequenceSample, n_init_per_example: int = 1):
@@ -1410,7 +1415,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 y_I_hat = [self._solve_sub_problem(alphas, data, i) for i in batch]
 
                 # Get step-width
-                gamma = self._get_diminishing_stepwidth(n_iterations_total, N)
+                gamma = self._get_step_size_diminishing(n_iterations_total, N)
 
                 # Update the dual variables
                 is_new = [alphas.update(i, y_i_hat, gamma) for i, y_i_hat in zip(batch, y_I_hat)]
@@ -1439,15 +1444,28 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         for s in range(L_i):
             candidates[s] = {}
 
-            # MS2 scores are fixed and assumed to be pre-computed
-            candidates[s]["ms2_score"] = data[i].get_ms2_scores(s)
-
             # Get the candidate identifiers
             candidates[s]["structure"] = data[i].get_labelspace(s)
 
             # Get the index of the correct structure
             candidates[s]["index_of_correct_structure"] = candidates[s]["structure"].index(data[i].labels[s])
 
+            # MS2 scores are fixed and assumed to be pre-computed
+            candidates[s]["ms2_score"] = data[i].get_ms2_scores(s)
+            candidates[s]["ms2_score_of_correct_structure"] = \
+                candidates[s]["ms2_score"][candidates[s]["index_of_correct_structure"]]
+
+            # Calculate the label loss for the current
+            candidates[s]["mol_feat_label_loss"] = data[i].get_molecule_features(s, self.mol_feat_label_loss)
+            candidates[s]["label_loss"] = self.label_loss_fun(
+                candidates[s]["mol_feat_label_loss"][candidates[s]["index_of_correct_structure"]],
+                candidates[s]["mol_feat_label_loss"])
+
+            # Calculate the node-score for 'msmsrt_scorer'
+            # (1 / L) * Loss(y_i, y_is) - (S(x_i, y_i) - S(x_i, y_is))
+            candidates[s]["log_score"] = candidates[s]["label_loss"]
+            candidates[s]["log_score"] -= (candidates[s]["ms2_score_of_correct_structure"] - candidates[s]["ms2_score"])
+            candidates[s]["log_score"] /= L_i
 
 
 
