@@ -124,6 +124,24 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         self.assertEqual((5103, 307), fps.shape)
         self.assertTrue(np.all(fps >= 0))
 
+    def test_all_outputs_are_sorted_equally(self):
+        # ----------
+        # SPECTRUM 1
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "Challenge-016",
+                                                         "molecule_id": "FGXWKSZFVQUSTL-UHFFFAOYSA-N"})
+
+        # Do not enforce the ground truth structure to be in the candidate set
+        candidates = CandidateSQLiteDB(db_fn=DB_FN, molecule_identifier="inchikey")
+
+        scores = candidates.get_ms2_scores(spectrum, "MetFrag_2.4.5__8afe4a14", return_dataframe=True)
+        fps = candidates.get_molecule_features(spectrum, "iokr_fps__positive", return_dataframe=True)
+        labspace = candidates.get_labelspace(spectrum)
+
+        self.assertEqual(sorted(labspace), labspace)
+        self.assertEqual(labspace, scores["identifier"].to_list())
+        self.assertEqual(labspace, fps["identifier"].to_list())
+
 
 class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
     def test_get_labelspace(self):
@@ -164,6 +182,25 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
         self.assertEqual(102, len(candidates.get_labelspace(spectrum)))
         self.assertEqual(candidates.get_n_cand(spectrum), len(np.unique(candidates.get_labelspace(spectrum))))
         self.assertIn(spectrum.metadata["molecule_id"], candidates.get_labelspace(spectrum))
+
+    def test_all_outputs_are_sorted_equally(self):
+        # ----------
+        # SPECTRUM 1
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "Challenge-016",
+                                                         "molecule_id": "FGXWKSZFVQUSTL-UHFFFAOYSA-N"})
+
+        # Do not enforce the ground truth structure to be in the candidate set
+        candidates = RandomSubsetCandidateSQLiteDB(
+            number_of_candidates=102, db_fn=DB_FN, molecule_identifier="inchikey", include_correct_candidate=True)
+
+        scores = candidates.get_ms2_scores(spectrum, "MetFrag_2.4.5__8afe4a14", return_dataframe=True)
+        fps = candidates.get_molecule_features(spectrum, "iokr_fps__positive", return_dataframe=True)
+        labspace = candidates.get_labelspace(spectrum)
+
+        self.assertEqual(sorted(labspace), labspace)
+        self.assertEqual(labspace, scores["identifier"].to_list())
+        self.assertEqual(labspace, fps["identifier"].to_list())
 
     def test_get_number_of_candidates(self):
         # ----------

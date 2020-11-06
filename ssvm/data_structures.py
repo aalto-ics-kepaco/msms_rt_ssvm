@@ -267,7 +267,7 @@ class CandidateSQLiteDB(object):
         """
         self.close()
 
-    def _get_labelspace_query(self, spectrum: Spectrum) -> str:
+    def _get_labelspace_query(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> str:
         """
 
         :param spectrum:
@@ -275,9 +275,13 @@ class CandidateSQLiteDB(object):
         """
         query = "SELECT m.%s as identifier FROM candidates_spectra " \
                 "   INNER JOIN molecules m ON m.inchi = candidates_spectra.candidate" \
-                "   WHERE spectrum IS '%s'" \
-                "   GROUP BY identifier" \
-                "   ORDER BY identifier" % (self.molecule_identifier, spectrum.get("spectrum_id"))
+                "   WHERE spectrum IS '%s'" % (self.molecule_identifier, spectrum.get("spectrum_id"))
+
+        if candidate_subset is not None:
+            query += " AND identifier IN %s" % self._in_sql(candidate_subset)
+
+        query += "  GROUP BY identifier" \
+                 "  ORDER BY identifier"
 
         return query
 
@@ -296,7 +300,7 @@ class CandidateSQLiteDB(object):
                 "   WHERE spectrum IS '%s'" % (self.molecule_identifier, feature, spectrum.get("spectrum_id"))
 
         if candidate_subset is not None:
-            query += " AND candidate IN %s" % self._in_sql(candidate_subset)
+            query += " AND identifier IN %s" % self._in_sql(candidate_subset)
 
         query += "  GROUP BY identifier" \
                  "  ORDER BY identifier"
@@ -404,11 +408,15 @@ class CandidateSQLiteDB(object):
         """
         return len(self.get_labelspace(spectrum))
 
-    def get_molecule_features(self, spectrum: Spectrum, feature: str) -> np.ndarray:
+    def get_molecule_features(self, spectrum: Spectrum, feature: str, return_dataframe: bool = False) \
+            -> Union[np.ndarray, pd.DataFrame]:
         """
         :param spectrum: matchms.Spectrum, of the sequence element to get the molecular features.
 
         :param feature: string, identifier of the feature to load from the database.
+
+        :param return_dataframe: boolean, indicating whether the score should be returned in a pandas.DataFrame storing
+            the molecule ids and molecule features (shape = (n_samples, d_features + 1)).
 
         :return: array-like, shape = (n_cand, feature_dimension), feature matrix
         """
@@ -417,9 +425,16 @@ class CandidateSQLiteDB(object):
         df_features = pd.read_sql_query(
             self._get_molecule_feature_query(spectrum, feature, self._get_candidate_subset(spectrum)), self.db)
 
-        return self._get_molecule_feature_matrix(df_features, feature)
+        feature_matrix = self._get_molecule_feature_matrix(df_features, feature)
 
-    def get_labelspace(self, spectrum: Spectrum) -> List[str]:
+        if return_dataframe:
+            df_features = pd.concat((df_features["identifier"], pd.DataFrame(feature_matrix)), axis=1)
+        else:
+            df_features = feature_matrix
+
+        return df_features
+
+    def get_labelspace(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> List[str]:
         """
         Returns the label-space for the given spectrum.
 
@@ -427,10 +442,10 @@ class CandidateSQLiteDB(object):
 
         :return: list of strings, molecule identifiers for the given spectrum.
         """
-        return [row[0] for row in self.db.execute(self._get_labelspace_query(spectrum))]
+        return [row[0] for row in self.db.execute(self._get_labelspace_query(spectrum, candidate_subset))]
 
     def get_ms2_scores(self, spectrum: Spectrum, ms2scorer: str, min_score_value: float = 0.0,
-                       return_dataframe: bool = False) \
+                       max_score_value: float = 1.0, return_dataframe: bool = False) \
             -> Union[pd.DataFrame, List[float]]:
         """
 
@@ -455,7 +470,7 @@ class CandidateSQLiteDB(object):
         df_scores["ms2_score"] = df_scores["ms2_score"].fillna(value=min_score)
 
         # Scale scores to [min_score_value, 1]
-        df_scores["ms2_score"] = MinMaxScaler(feature_range=(min_score_value, 1)) \
+        df_scores["ms2_score"] = MinMaxScaler(feature_range=(min_score_value, max_score_value)) \
             .fit_transform(df_scores["ms2_score"][:, np.newaxis])
 
         if not return_dataframe:
@@ -498,7 +513,7 @@ class RandomSubsetCandidateSQLiteDB(CandidateSQLiteDB):
         self.include_correct_candidate = include_correct_candidate
         self.random_state = random_state
 
-        self.labelspace_subset = {}
+        self._labelspace_subset = {}
 
         if isinstance(self.number_of_candidates, float):
             if (self.number_of_candidates <= 0) or (self.number_of_candidates >= 1.0):
@@ -510,48 +525,56 @@ class RandomSubsetCandidateSQLiteDB(CandidateSQLiteDB):
         """
         :param spectrum: matchms.Spectrum, of the sequence element to get the number of candidates.
 
-        :return: list of strings, molecule identifier for the candidate subset of the given spectrum.
+        :return: list of strings, molecule identifier for the candidate subset of the given spectrum (not sorted !).
         """
         spectrum_id = spectrum.get("spectrum_id")
 
         try:
-            candidates = self.labelspace_subset[spectrum_id]
+            candidates_sub = self._labelspace_subset[spectrum_id]
         except KeyError:
             # Load all candidate identifiers
-            candidates = super().get_labelspace(spectrum)
+            candidates_all = super().get_labelspace(spectrum, candidate_subset=None)
 
             if isinstance(self.number_of_candidates, float):
-                n_cand = np.round(self.number_of_candidates * len(candidates))
+                n_cand = np.round(self.number_of_candidates * len(candidates_all))
             else:
-                n_cand = np.minimum(len(candidates), self.number_of_candidates)
+                n_cand = np.minimum(len(candidates_all), self.number_of_candidates)
 
             # Get a random subset
-            candidates = check_random_state(self.random_state).choice(candidates, n_cand.astype(int), replace=False)
+            candidates_sub = check_random_state(self.random_state).choice(candidates_all, n_cand.astype(int), replace=False)
 
             if self.include_correct_candidate:
-                if spectrum.get("molecule_id") is None:
+                molecule_id = spectrum.get("molecule_id")
+
+                if molecule_id is None:
                     raise ValueError("Cannot ensure that the ground truth structure is included in the candidate set, "
                                      "as no 'molecule_id' is specified in the Spectrum object.")
 
-                if spectrum.get("molecule_id") not in candidates:
-                    candidates[0] = spectrum.get("molecule_id")
+                if molecule_id not in candidates_all:
+                    raise ValueError("The molecule id '%s' is not in the candidate set." % molecule_id)
+
+                if molecule_id not in candidates_sub:
+                    candidates_sub[0] = molecule_id
 
             # Store the subset for later use
-            self.labelspace_subset[spectrum_id] = candidates.tolist()
+            self._labelspace_subset[spectrum_id] = candidates_sub.tolist()
 
-        return candidates
+        return candidates_sub
 
     def get_n_cand(self, spectrum: Spectrum) -> int:
         """
         Return the number of candidates in the random label space subset for the given spectrum.
         """
-        return len(self._get_candidate_subset(spectrum))
+        return len(self.get_labelspace(spectrum))
 
-    def get_labelspace(self, spectrum: Spectrum) -> List[str]:
+    def get_labelspace(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> List[str]:
         """
         Return the label space of the random subset.
         """
-        return self._get_candidate_subset(spectrum)
+        if candidate_subset is not None:
+            raise RuntimeError("Candidate subset cannot be requested in any sub-class of 'CandidateSQLiteDB'.")
+
+        return super().get_labelspace(spectrum, self._get_candidate_subset(spectrum))
 
 
 # class CentroidCandidateSQLiteDB(CandidateSQLiteDB):
