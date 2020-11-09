@@ -32,6 +32,7 @@ import pandas as pd
 from collections import OrderedDict
 from scipy.io import loadmat
 from typing import List, Tuple, Union, Dict, Optional, Callable
+from networkx.classes.graph import EdgeView
 
 from sklearn.model_selection import GroupKFold
 from sklearn.utils.validation import check_random_state
@@ -364,29 +365,29 @@ class CandidateSQLiteDB(object):
         if molecule_identifier not in pd.read_sql_query("SELECT * FROM molecules LIMIT 1", self.db).columns:
             raise ValueError("Molecule identifier '%s' is not available." % molecule_identifier)
 
-    def _get_molecule_feature_matrix(self, feature_df: pd.DataFrame, feature: str) -> np.ndarray:
+    def _get_molecule_feature_matrix(self, df_features: pd.DataFrame, features: str) -> np.ndarray:
         """
         Function to parse the molecular features stored as strings in the candidate database and load them into a numpy
         array.
 
-        :param feature_df: pandas.DataFrame, table with two columns (identifier, molecular_feature).
+        :param df_features: pandas.DataFrame, table with two columns (identifier, molecular_feature).
 
-        :param feature: string, identifier of the molecular feature. This information is needed to properly parse the
+        :param features: string, identifier of the molecular feature. This information is needed to properly parse the
             feature string representation and store it in a numpy array.
 
         :return:
         """
         # Set up an output array
-        n = len(feature_df)
-        d = self._get_feature_dimension(feature)
+        n = len(df_features)
+        d = self._get_feature_dimension(features)
         X = np.zeros((n, d))
 
-        if feature == "substructure_count":
-            for i, row in enumerate(feature_df["molecular_feature"]):
+        if features == "substructure_count":
+            for i, row in enumerate(df_features["molecular_feature"]):
                 _fp = eval("{" + row + "}")
                 X[i, list(_fp.keys())] = list(_fp.values())
         else:
-            for i, row in enumerate(feature_df["molecular_feature"]):
+            for i, row in enumerate(df_features["molecular_feature"]):
                 _ids = list(map(int, row.split(",")))
                 X[i, _ids] = 1
 
@@ -433,6 +434,21 @@ class CandidateSQLiteDB(object):
             df_features = feature_matrix
 
         return df_features
+
+    def get_molecule_features_for_labels(self, molecule_ids: List[str], features: str) -> np.ndarray:
+        """
+
+        :param molecule_ids:
+        :param features:
+        :return:
+        """
+        df_features = pd.read_sql_query(
+            "SELECT %s AS identifier, %s AS molecular_feature FROM molecules"
+            "   INNER JOIN fingerprints_data fd ON fd.molecule = molecules.inchi"
+            "   WHERE identifier IN %s" % (self.molecule_identifier, features, self._in_sql(molecule_ids)),
+            self.db)
+
+        return self._get_molecule_feature_matrix(df_features, features)
 
     def get_labelspace(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> List[str]:
         """
@@ -652,6 +668,11 @@ class Sequence(object):
 
         self.L = len(self.spectra)
 
+        # Extract retention time (RT) information from spectra and pre-calculate RT differences and signs
+        self._rts = np.array([spectrum.get("retention_time") for spectrum in self.spectra])
+        self._rt_differences = self._rts[:, np.newaxis] - self._rts[np.newaxis, :]
+        self._rt_diff_signs = np.sign(self._rt_differences)
+
     def __len__(self) -> int:
         """
         Return the length of the sequence.
@@ -660,14 +681,17 @@ class Sequence(object):
         """
         return self.L
 
-    def get_molecule_features(self, s: int, features: str) -> np.ndarray:
+    def get_molecule_features(self, features: str, s: Optional[int] = None) -> Union[List[np.ndarray], np.ndarray]:
         """
 
         :param s:
         :param features:
         :return:
         """
-        return self.candidates.get_molecule_features(self.spectra[s], features)
+        if s is None:
+            return [self.get_molecule_features(features, s) for s in range(self.__len__())]
+        else:
+            return self.candidates.get_molecule_features(self.spectra[s], features)
 
     def get_n_cand(self, s: Optional[int] = None) -> Union[int, List[int]]:
         """
@@ -713,6 +737,17 @@ class Sequence(object):
             ms2_scores = self.candidates.get_ms2_scores(self.spectra[s], self.ms2scorer)
 
         return ms2_scores
+
+    def get_sign_delta_t(self, edges: Union[EdgeView, List[Tuple[int, int]]]) -> np.ndarray:
+        """
+
+        :param edges:
+        :return:
+        """
+        if isinstance(edges, EdgeView):
+            edges = list(edges)
+
+        return self._rt_diff_signs[edges]
 
 
 class LabeledSequence(Sequence):
@@ -775,6 +810,34 @@ class LabeledSequence(Sequence):
         else:
             Y = self.get_molecule_features(s, features)
             return label_loss_fun(Y[self.get_index_of_correct_structure(s)], Y)
+
+    def get_lambda_delta(self, edges: Union[EdgeView, List[Tuple[int, int]]], Y_candidates: np.ndarray, features: str,
+                         mol_kernel: Callable[[np.ndarray, np.ndarray], np.ndarray]) -> np.ndarray:
+        """
+
+        :param edges:
+        :param Y_candidates:
+        :param features:
+        :param mol_kernel:
+        :return:
+        """
+        Y_gt_sequence = self.get_molecule_features_for_labels(features)
+
+        # Extract sequence indices corresponding to the edges (\bar{s}, \bar{t})
+        if isinstance(edges, EdgeView):
+            edges = list(edges)
+
+        bS, bT = zip(*edges)
+
+        return mol_kernel(Y_gt_sequence[bS], Y_candidates) - mol_kernel(Y_gt_sequence[bT], Y_candidates)
+
+    def get_molecule_features_for_labels(self, features: str) -> np.ndarray:
+        """
+
+        :param features:
+        :return:
+        """
+        return self.candidates.get_molecule_features_for_labels(self.labels, features)
 
 
 class SequenceSample(object):

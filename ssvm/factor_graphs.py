@@ -29,6 +29,8 @@ from collections import OrderedDict
 from typing import Union, Dict, Callable, Optional
 from msmsrt_scorer.lib.exact_solvers import TreeFactorGraph
 
+from ssvm.data_structures import Sequence
+
 
 def identity(x):
     """
@@ -56,7 +58,7 @@ class ChainFactorGraph(TreeFactorGraph):
                          var_conn_graph=self._get_chain_connectivity(candidates))
 
     @staticmethod
-    def _get_chain_connectivity(candidates: Dict) -> nx.Graph:
+    def _get_chain_connectivity(candidates: Union[OrderedDict, Dict, Sequence]) -> nx.Graph:
         """
 
         :param candidates:
@@ -66,17 +68,17 @@ class ChainFactorGraph(TreeFactorGraph):
         var_conn_graph = nx.Graph()
 
         # Add variable nodes
-        var = list(candidates.keys())
+        if isinstance(candidates, dict) or isinstance(candidates, OrderedDict):
+            var = list(candidates.keys())
+        elif isinstance(candidates, Sequence):
+            var = list(range(len(candidates)))
+        else:
+            raise ValueError("Invalid input type.")
         for i in var:
-            var_conn_graph.add_node(i, retention_time=candidates[i]["retention_time"])
+            var_conn_graph.add_node(i)
 
         # Add edges connecting the variable nodes, i.e. pairs considered for the score integration
         for idx in range(len(var) - 1):
-            i, j = var[idx], var[idx + 1]
-
-            rt_diff_ij = var_conn_graph.nodes[j]["retention_time"] - var_conn_graph.nodes[i]["retention_time"]
-            assert (rt_diff_ij >= 0)
-
-            var_conn_graph.add_edge(i, j, weight=rt_diff_ij, rt_diff=rt_diff_ij)
+            var_conn_graph.add_edge(var[idx], var[idx + 1])
 
         return var_conn_graph

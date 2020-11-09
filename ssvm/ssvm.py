@@ -27,10 +27,11 @@ import numpy as np
 import itertools as it
 import more_itertools as mit
 import tensorflow as tf
+import networkx as nx
 
 from collections import OrderedDict
 from copy import deepcopy
-from typing import List, ItemsView, Tuple, ValuesView, KeysView, Iterator, Dict, Union, Optional, TypeVar
+from typing import List, ItemsView, Tuple, ValuesView, KeysView, Iterator, Dict, Union, Optional, TypeVar, Callable
 from sklearn.utils.validation import check_random_state
 from sklearn.model_selection import GroupKFold
 from scipy.sparse import csc_matrix, lil_matrix, csr_matrix
@@ -40,6 +41,7 @@ from ssvm.data_structures import SequenceSample, CandidateSetMetIdent
 from ssvm.loss_functions import hamming_loss, tanimoto_loss
 from ssvm.evaluation_tools import get_topk_performance_csifingerid
 from ssvm.factor_graphs import ChainFactorGraph, identity
+from ssvm.kernel_utils import generalized_tanimoto_kernel, tanimoto_kernel
 
 
 DUALVARIABLES_T = TypeVar('DUALVARIABLES_T', bound='DualVariables')
@@ -537,8 +539,7 @@ class _StructuredSVM(object):
     Structured Support Vector Machine (SSVM) meta-class
     """
     def __init__(self, C: Union[int, float] = 1, n_epochs: int = 100, batch_size: int = 1, label_loss: str = "hamming",
-                 step_size: str = "diminishing", random_state: Optional[Union[int, np.random.RandomState]] = None,
-                 label_loss_features: str = "iokr_fps__positive"):
+                 step_size: str = "diminishing", random_state: Optional[Union[int, np.random.RandomState]] = None):
         """
         Structured Support Vector Machine (SSVM)
 
@@ -557,9 +558,6 @@ class _StructuredSVM(object):
             If seed is an int, return a new RandomState instance seeded with seed.
             If seed is already a RandomState instance, return it.
             Otherwise raise ValueError.
-
-        :param label_loss_features: string, identifier of the molecular feature to be used for the label loss calculation.
-
         """
         self.C = C
         self.n_epochs = n_epochs
@@ -567,7 +565,6 @@ class _StructuredSVM(object):
         self.label_loss = label_loss
         self.random_state = random_state
         self.step_size = step_size
-        self.label_loss_features = label_loss_features
 
         if self.label_loss == "hamming":
             self.label_loss_fun = hamming_loss
@@ -1383,14 +1380,34 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     """
     Structured Support Vector Machine (SSVM) for (MS, RT)-sequence classification.
     """
-    def __init__(self, mol_feat_label_loss: str, mol_feat_retention_order: str, *args, **kwargs):
+    def __init__(self, mol_feat_label_loss: str, mol_feat_retention_order: str,
+                 mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]],
+                 *args, **kwargs):
 
         self.mol_feat_label_loss = mol_feat_label_loss
         self.mol_feat_retention_order = mol_feat_retention_order
+        self.mol_kernel = self.get_mol_kernel(mol_kernel)
 
         super().__init__(*args, **kwargs)
 
-    def fit(self, data: SequenceSample, n_init_per_example: int = 1):
+    @staticmethod
+    def get_mol_kernel(mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]]) \
+            -> Callable[[np.ndarray, np.ndarray], np.ndarray]:
+        """
+
+        :param mol_kernel:
+        :return:
+        """
+        if callable(mol_kernel):
+            return mol_kernel
+        elif mol_kernel == "tanimoto":
+            return tanimoto_kernel
+        elif mol_kernel == "minmax":
+            return generalized_tanimoto_kernel
+        else:
+            raise ValueError("Invalid molecule kernel")
+
+    def fit(self, data: SequenceSample, n_init_per_example: int = 1, n_trees_per_sequence: int = 1):
         """
         Train the SSVM given a dataset.
 
@@ -1399,6 +1416,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         :param n_init_per_example: scalar, number of initially active dual variables per example. That is, the number of
             active (potential) label sequences.
+
+        :param n_trees_per_sequence: scalar, number of spanning trees per sequence.
 
         :return: reference to it self.
         """
@@ -1412,6 +1431,9 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                                random_state=self.random_state)
         assert self._is_feasible_matrix(alphas, self.C), "Initial dual variables must be feasible."
 
+        # Initialize the graphs for each sequence
+        graph_set = self._get_graph_set(data, n_trees_per_sequence)
+
         # Run over the data
         # - each epoch is a cycle through the full data
         # - each batch contains a subset of the full data
@@ -1419,7 +1441,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         for epoch in range(self.n_epochs):
             for step, batch in enumerate(mit.chunked(random_state.permutation(np.arange(N)), self.batch_size)):
                 # Find the most violating examples for the current batch
-                y_I_hat = [self._solve_sub_problem(alphas, data, i) for i in batch]
+                y_I_hat = [self._solve_sub_problem(alphas, data, graph_set, i) for i in batch]
 
                 # Get step-width
                 gamma = self._get_step_size_diminishing(n_iterations_total, N)
@@ -1431,7 +1453,24 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         return self
 
-    def _solve_sub_problem(self, alphas: DualVariables, data: SequenceSample, i: int) -> Tuple:
+    @staticmethod
+    def _get_graph_set(data: SequenceSample, n_trees_per_sequence: int = 1) -> List[List[nx.Graph]]:
+        """
+
+        :param data:
+        :param n_trees_per_sequence:
+        :return:
+        """
+        if n_trees_per_sequence < 1:
+            raise ValueError("Number of trees per sequence must >= 1.")
+
+        if n_trees_per_sequence > 1:
+            raise NotImplementedError("Currently only one tree per sequence allowed.")
+
+        return [[ChainFactorGraph._get_chain_connectivity(data_i)] for data_i in data]
+
+    def _solve_sub_problem(self, alphas: DualVariables, data: SequenceSample, graph_set: List[List[nx.Graph]], i: int) \
+            -> Tuple:
         """
         Find the most violating example by solving the MAP problem. Forward-pass using max marginals.
 
@@ -1444,6 +1483,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         
         :return:
         """
+        N = len(data)  # Number of training examples
         L_i = len(data[i])  # Length of the i'th sequence
 
         # Set up the candidate dictionary as needed for the 'msmsrt_scorer' package
@@ -1461,22 +1501,52 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             candidates[s]["ms2_score"] = data[i].get_ms2_scores(s)
             candidates[s]["ms2_score_of_correct_structure"] = \
                 candidates[s]["ms2_score"][candidates[s]["index_of_correct_structure"]]
+            candidates[s]["ms2_score_loss"] = \
+                candidates[s]["ms2_score_of_correct_structure"] - candidates[s]["ms2_score"]
 
             # Calculate the label loss for the current sequence
-            candidates[s]["label_loss"] = data[i].get_label_loss(self.label_loss_fun, self.label_loss_features, s)
+            candidates[s]["label_loss"] = data[i].get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s)
 
             # Calculate the node-score for 'msmsrt_scorer'
             # (1 / L) * (Loss(y_i, y_is) - (S(x_i, y_i) - S(x_i, y_is)))
-            candidates[s]["log_score"] = candidates[s]["label_loss"]
-            candidates[s]["log_score"] -= (candidates[s]["ms2_score_of_correct_structure"] - candidates[s]["ms2_score"])
-            candidates[s]["log_score"] /= L_i
+            candidates[s]["log_score"] = (candidates[s]["label_loss"] - candidates[s]["ms2_score_loss"]) / L_i
 
+            # Load the candidate molecule feature representations used for the retention order prediction
+            candidates[s]["mol_feat_retention_order"] = data[i].get_molecule_features(self.mol_feat_retention_order, s)
 
+        # Calculate the transition matrices encoding the SSVM's prediction on the candidate pairs.
+        sign_delta = np.concatenate((data[j].get_sign_delta_t(graph_set[j][0].edges)) for j in range(len(data)))
 
         order_probs = dict()
+        for s, t in graph_set[i][0].edges:
+            order_probs[s] = {t: dict()}
+            order_probs[s][t]["log_score"] = ...
 
+            # -----------
+            # Equation  I
+            # -----------
+            Y_candidates_s = candidates[s]["mol_feat_retention_order"]
+            lambda_delta_s = np.vstack(
+                (data[j].get_lambda_delta(
+                    graph_set[j][0].edges, Y_candidates_s, self.mol_feat_retention_order, self.mol_kernel))
+                for j in range(len(data))
+            )
 
+            Y_candidates_t = candidates[t]["mol_feat_retention_order"]
+            lambda_delta_t = np.vstack(
+                (data[j].get_lambda_delta(
+                    graph_set[j][0].edges, Y_candidates_t, self.mol_feat_retention_order, self.mol_kernel))
+                for j in range(len(data))
+            )
 
+            I = self.C * ((sign_delta @ lambda_delta_s)[:, np.newaxis] - (sign_delta @ lambda_delta_t)[np.newaxis, :]) / N
+
+            # -----------
+            # Equation II
+            # -----------
+            
+
+        # Find the most violating example
         Z_max, _ = ChainFactorGraph(candidates=candidates, make_order_probs=identity, order_probs=order_probs) \
             .MAP_only()  # type: List[int]
 
