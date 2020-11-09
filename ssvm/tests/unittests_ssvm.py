@@ -33,121 +33,10 @@ import itertools as it
 from typing import Tuple
 from scipy.sparse import csr_matrix
 
-from ssvm.ssvm import DualVariablesForExample, _StructuredSVM, StructuredSVMMetIdent, DualVariables
+from ssvm.ssvm import _StructuredSVM, StructuredSVMMetIdent, DualVariables
 
 
 class TestStructuredSVM(unittest.TestCase):
-    def test_is_feasible(self):
-        N = 3
-        C = 2
-
-        # ------------------------------------
-        # Check a feasible alpha
-        alphas = [{("M1", "M4", "M9"): C / N},
-                  {("M5", "M1", "M10"): C / (2 * N), ("M6", "M2", "M1"): C / (2 * N)},
-                  {("M2", "M1", "M3"): C / (3 * N), ("M5", "M2", "M1"): C / (3 * N), ("M10", "M1", "M7"): C / (3 * N)}]
-        assert len(alphas) == N
-
-        self.assertTrue(_StructuredSVM._is_feasible(alphas, C))
-        self.assertFalse(_StructuredSVM._is_feasible(alphas, 1.9))
-        self.assertFalse(_StructuredSVM._is_feasible(alphas, 2.1))
-
-        # ------------------------------------
-        # Check a infeasible alpha
-        alphas = [{("M1", "M4", "M9"): C / N},
-                  {("M5", "M1", "M10"): C / (2 * N), ("M6", "M2", "M1"): C / (3 * N)},
-                  {("M2", "M1", "M3"): C / (3 * N), ("M5", "M2", "M1"): C / (2 * N), ("M10", "M1", "M7"): C / (3 * N)}]
-        assert len(alphas) == N
-
-        self.assertFalse(_StructuredSVM._is_feasible(alphas, C))
-
-        alphas = [{("M1", "M4", "M9"): - 1},
-                  {("M5", "M1", "M10"): C / (2 * N), ("M6", "M2", "M1"): C / (3 * N)},
-                  {("M2", "M1", "M3"): C / (3 * N), ("M5", "M2", "M1"): C / (2 * N), ("M10", "M1", "M7"): C / (3 * N)}]
-        assert len(alphas) == N
-
-        self.assertFalse(_StructuredSVM._is_feasible(alphas, C))
-
-
-class TestStructuredSVMMetIdent(unittest.TestCase):
-    def setUp(self) -> None:
-        """
-        Set up a small example data for the metabolite identification tests.
-        """
-        if not os.path.exists("small_metabolite_data.pkl.gz"):
-            # Create a small example containing metabolite identification data from the ISMB 2016 paper
-            from sklearn.model_selection import ShuffleSplit
-            from ssvm.development.ssvm_metident__conv_params import read_data
-            from ssvm.data_structures import CandidateSetMetIdent
-
-            idir = "/home/bach/Documents/doctoral/data/metindent_ismb2016"
-            X, fps, mols, mols2cand = read_data(idir)
-
-            # Get a smaller subset
-            _, subset = next(ShuffleSplit(n_splits=1, test_size=0.025, random_state=1989).split(X))
-            X = X[np.ix_(subset, subset)]
-            fps = fps[subset]
-            mols = mols[subset]
-            print("N samples:", len(mols))
-
-            # Wrap the candidate sets for easier access
-            cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(idir, "candidates"), preload_data=False)
-
-            with gzip.open(os.path.join("small_metabolite_data.pkl.gz"), "wb") as gz_file:
-                pickle.dump({"X": X, "mols": mols, "cand": cand}, gz_file)
-
-        with gzip.open("small_metabolite_data.pkl.gz", "rb") as gz_file:
-            data = pickle.load(gz_file)
-
-        self.ssvm = StructuredSVMMetIdent(C=2)
-        self.ssvm.K_train = data["X"]
-        self.ssvm.y_train = data["mols"]
-        self.cand = data["cand"]  # type: CandidateSetMetIdent
-        self.N = self.ssvm.K_train.shape[0]
-        self.rs = np.random.RandomState(18221)
-        self.ssvm.alphas = DualVariables(C=self.ssvm.C, rs=self.rs, num_init_active_vars=2,
-                                         cand_ids=[[self.cand.get_labelspace(self.ssvm.y_train[i])]
-                                                   for i in range(self.N)])
-
-    def test_get_candidate_scores(self):
-        """
-        Test that the scores for the candidates corresponding to a particular spectrum x_i are correctly calculated
-        given an SSVM model (w or alphas). The score is calculated like:
-
-            s(x_i, y) = < w , Psi(x_i, y) >     for all y in Sigma_i
-        """
-        i = 10
-
-        self.ssvm.fps_active, lab_losses_active = self.ssvm._get_active_fingerprints_and_losses(
-            self.ssvm.alphas, self.ssvm.y_train, self.cand, verbose=True)
-        scores = self.ssvm._get_candidate_scores(
-            self.ssvm.K_train[i], self.ssvm.y_train[i], self.cand,
-            {"lab_losses_active": lab_losses_active, "mol_kernel_L_S_Ci": {}, "mol_kernel_L_Ci": {},
-             "fps_active": self.ssvm.fps_active, "B_S": self.ssvm.alphas.get_dual_variable_matrix("dense")},
-            for_training=True)
-
-        fps_gt_i = self.cand.get_gt_fp(self.ssvm.y_train[i])[np.newaxis, :]
-        fps_gt = self.cand.get_gt_fp(self.ssvm.y_train)
-        B = self.ssvm.alphas.get_dual_variable_matrix(type="csr")
-
-        # Part which is constant for all y in Sigma_i
-        s1 = self.ssvm.C / self.N * self.ssvm.K_train[i] @ self.cand.get_kernel(fps_gt_i, fps_gt).flatten()
-        self.assertTrue(np.isscalar(s1))
-
-        s2 = (self.cand.get_kernel(fps_gt_i, self.ssvm.fps_active) @ B.T @ self.ssvm.K_train[i]).item()
-        self.assertTrue(np.isscalar(s2))
-
-        # Part that is specific to each candidate y in Sigma_i
-        L_Ci = self.cand.get_kernel(self.cand.get_candidate_fps(self.ssvm.y_train[i]), fps_gt)
-        s3 = self.ssvm.C / self.N * L_Ci @ self.ssvm.K_train[i]
-        self.assertEqual((len(self.cand.get_labelspace(self.ssvm.y_train[i])),), s3.shape)
-
-        L_Ci_S = self.cand.get_kernel(self.cand.get_candidate_fps(self.ssvm.y_train[i]), self.ssvm.fps_active)
-        s4 = L_Ci_S @ (B.T @ self.ssvm.K_train[i])
-        self.assertEqual((len(self.cand.get_labelspace(self.ssvm.y_train[i])),), s4.shape)
-
-        np.testing.assert_allclose(scores, (s3 - s4))
-
     def test_is_feasible_matrix(self):
         class DummyDualVariables(object):
             def __init__(self, B):
@@ -168,8 +57,8 @@ class TestStructuredSVMMetIdent(unittest.TestCase):
                 [0, 0, 0, 0, 0, 0, 0, C / N]
             ])
         )
-        self.assertTrue(StructuredSVMMetIdent._is_feasible_matrix(alphas, C))
-        self.assertFalse(StructuredSVMMetIdent._is_feasible_matrix(alphas, C + 1))
+        self.assertTrue(_StructuredSVM._is_feasible_matrix(alphas, C))
+        self.assertFalse(_StructuredSVM._is_feasible_matrix(alphas, C + 1))
 
         # ---- Infeasible dual variables ----
         alphas = DummyDualVariables(
@@ -180,8 +69,88 @@ class TestStructuredSVMMetIdent(unittest.TestCase):
                 [0, 0, 0, 0, 0, 0, 0, C / N]
             ])
         )
-        self.assertFalse(StructuredSVMMetIdent._is_feasible_matrix(alphas, C))
-        self.assertFalse(StructuredSVMMetIdent._is_feasible_matrix(alphas, C + 1))
+        self.assertFalse(_StructuredSVM._is_feasible_matrix(alphas, C))
+        self.assertFalse(_StructuredSVM._is_feasible_matrix(alphas, C + 1))
+
+
+# class TestStructuredSVMMetIdent(unittest.TestCase):
+#     def setUp(self) -> None:
+#         """
+#         Set up a small example data for the metabolite identification tests.
+#         """
+#         if not os.path.exists("small_metabolite_data.pkl.gz"):
+#             # Create a small example containing metabolite identification data from the ISMB 2016 paper
+#             from sklearn.model_selection import ShuffleSplit
+#             from ssvm.development.ssvm_metident__conv_params import read_data
+#             from ssvm.data_structures import CandidateSetMetIdent
+#
+#             idir = "/home/bach/Documents/doctoral/data/metindent_ismb2016"
+#             X, fps, mols, mols2cand = read_data(idir)
+#
+#             # Get a smaller subset
+#             _, subset = next(ShuffleSplit(n_splits=1, test_size=0.025, random_state=1989).split(X))
+#             X = X[np.ix_(subset, subset)]
+#             fps = fps[subset]
+#             mols = mols[subset]
+#             print("N samples:", len(mols))
+#
+#             # Wrap the candidate sets for easier access
+#             cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(idir, "candidates"), preload_data=False)
+#
+#             with gzip.open(os.path.join("small_metabolite_data.pkl.gz"), "wb") as gz_file:
+#                 pickle.dump({"X": X, "mols": mols, "cand": cand}, gz_file)
+#
+#         with gzip.open("small_metabolite_data.pkl.gz", "rb") as gz_file:
+#             data = pickle.load(gz_file)
+#
+#         self.ssvm = StructuredSVMMetIdent(C=2)
+#         self.ssvm.K_train = data["X"]
+#         self.ssvm.y_train = data["mols"]
+#         self.cand = data["cand"]  # type: CandidateSetMetIdent
+#         self.N = self.ssvm.K_train.shape[0]
+#         self.rs = np.random.RandomState(18221)
+#         self.ssvm.alphas = DualVariables(C=self.ssvm.C, random_state=self.rs, num_init_active_vars=2,
+#                                          label_space=[[self.cand.get_labelspace(self.ssvm.y_train[i])]
+#                                                       for i in range(self.N)])
+#
+#     def test_get_candidate_scores(self):
+#         """
+#         Test that the scores for the candidates corresponding to a particular spectrum x_i are correctly calculated
+#         given an SSVM model (w or alphas). The score is calculated like:
+#
+#             s(x_i, y) = < w , Psi(x_i, y) >     for all y in Sigma_i
+#         """
+#         i = 10
+#
+#         self.ssvm.fps_active, lab_losses_active = self.ssvm._get_active_fingerprints_and_losses(
+#             self.ssvm.alphas, self.ssvm.y_train, self.cand, verbose=True)
+#         scores = self.ssvm._get_candidate_scores(
+#             self.ssvm.K_train[i], self.ssvm.y_train[i], self.cand,
+#             {"lab_losses_active": lab_losses_active, "mol_kernel_L_S_Ci": {}, "mol_kernel_L_Ci": {},
+#              "fps_active": self.ssvm.fps_active, "B_S": self.ssvm.alphas.get_dual_variable_matrix("dense")},
+#             for_training=True)
+#
+#         fps_gt_i = self.cand.get_gt_fp(self.ssvm.y_train[i])[np.newaxis, :]
+#         fps_gt = self.cand.get_gt_fp(self.ssvm.y_train)
+#         B = self.ssvm.alphas.get_dual_variable_matrix(type="csr")
+#
+#         # Part which is constant for all y in Sigma_i
+#         s1 = self.ssvm.C / self.N * self.ssvm.K_train[i] @ self.cand.get_kernel(fps_gt_i, fps_gt).flatten()
+#         self.assertTrue(np.isscalar(s1))
+#
+#         s2 = (self.cand.get_kernel(fps_gt_i, self.ssvm.fps_active) @ B.T @ self.ssvm.K_train[i]).item()
+#         self.assertTrue(np.isscalar(s2))
+#
+#         # Part that is specific to each candidate y in Sigma_i
+#         L_Ci = self.cand.get_kernel(self.cand.get_candidate_fps(self.ssvm.y_train[i]), fps_gt)
+#         s3 = self.ssvm.C / self.N * L_Ci @ self.ssvm.K_train[i]
+#         self.assertEqual((len(self.cand.get_labelspace(self.ssvm.y_train[i])),), s3.shape)
+#
+#         L_Ci_S = self.cand.get_kernel(self.cand.get_candidate_fps(self.ssvm.y_train[i]), self.ssvm.fps_active)
+#         s4 = L_Ci_S @ (B.T @ self.ssvm.K_train[i])
+#         self.assertEqual((len(self.cand.get_labelspace(self.ssvm.y_train[i])),), s4.shape)
+#
+#         np.testing.assert_allclose(scores, (s3 - s4))
 
 
 class TestDualVariables(unittest.TestCase):
@@ -214,8 +183,8 @@ class TestDualVariables(unittest.TestCase):
 
         for C in [0.5, 1.0, 2.0]:
             for num_init_active_vars in range(1, 202, 20):
-                alphas = DualVariables(C=C, cand_ids=cand_ids, num_init_active_vars=num_init_active_vars,
-                                       rs=num_init_active_vars)
+                alphas = DualVariables(C=C, label_space=cand_ids, num_init_active_vars=num_init_active_vars,
+                                       random_state=num_init_active_vars)
 
                 _n_max_possible_vars = [np.minimum(num_init_active_vars, len(list(it.product(*cand_ids[i]))))
                                         for i in range(N)]
@@ -260,7 +229,7 @@ class TestDualVariables(unittest.TestCase):
 
         for C in [0.5, 1.0, 2.0]:
             for num_init_active_vars in range(1, 5):  # 1, 2, 3, 4
-                alphas = DualVariables(C=C, cand_ids=cand_ids, num_init_active_vars=num_init_active_vars, rs=10910)
+                alphas = DualVariables(C=C, label_space=cand_ids, num_init_active_vars=num_init_active_vars, random_state=10910)
 
                 _n_max_possible_vars = [np.minimum(num_init_active_vars, len(cand_ids[i][0])) for i in range(N)]
                 n_active = np.sum(_n_max_possible_vars)
@@ -305,7 +274,7 @@ class TestDualVariables(unittest.TestCase):
         C = 2.0
         gamma = 0.46
 
-        alphas = DualVariables(C=C, cand_ids=cand_ids, num_init_active_vars=2, rs=10910)
+        alphas = DualVariables(C=C, label_space=cand_ids, num_init_active_vars=2, random_state=10910)
         # print(alphas._iy)
         # Active variables
         # [(0, ('M2',)),  (0, ('M1',)),
@@ -448,10 +417,10 @@ class TestDualVariables(unittest.TestCase):
             ]
         ]
 
-        alpha_1a = DualVariables(C=2, cand_ids=cand_ids_1a, initialize=False, rs=120)
-        alpha_1b = DualVariables(C=2, cand_ids=cand_ids_1b, initialize=False, rs=120)
-        alpha_2a = DualVariables(C=2, cand_ids=cand_ids_2a, initialize=False, rs=120)
-        alpha_2b = DualVariables(C=2, cand_ids=cand_ids_2b, initialize=False, rs=120)
+        alpha_1a = DualVariables(C=2, label_space=cand_ids_1a, initialize=False, random_state=120)
+        alpha_1b = DualVariables(C=2, label_space=cand_ids_1b, initialize=False, random_state=120)
+        alpha_2a = DualVariables(C=2, label_space=cand_ids_2a, initialize=False, random_state=120)
+        alpha_2b = DualVariables(C=2, label_space=cand_ids_2b, initialize=False, random_state=120)
         self.assertTrue(DualVariables._eq_dual_domain(alpha_1a, alpha_1a))
         self.assertTrue(DualVariables._eq_dual_domain(alpha_1a, alpha_1b))
         self.assertFalse(DualVariables._eq_dual_domain(alpha_1a, alpha_2a))
@@ -484,7 +453,7 @@ class TestDualVariables(unittest.TestCase):
                 ["M72", "M8"]
             ]
         ]
-        alpha = DualVariables(C=2, cand_ids=cand_ids, rs=120)
+        alpha = DualVariables(C=2, label_space=cand_ids, random_state=120)
         alpha_cp = deepcopy(alpha)
         self.assertEqual(alpha.get_dual_variable_matrix().shape,
                          alpha_cp.get_dual_variable_matrix().shape)
@@ -515,7 +484,7 @@ class TestDualVariables(unittest.TestCase):
 
         # factor != 0
         for i, fac in enumerate([-1, -0.78, 0.64, 1, 2]):
-            alphas = DualVariables(C=C, cand_ids=cand_ids, rs=i)
+            alphas = DualVariables(C=C, label_space=cand_ids, random_state=i)
 
             fac_mul_alphas = fac * alphas
             alphas_fac_mul = alphas * fac
@@ -532,7 +501,7 @@ class TestDualVariables(unittest.TestCase):
                 self.assertEqual((C / N) * fac, alphas_fac_mul.get_dual_variable(i, y_seq))
 
         # factor == 0
-        alphas = DualVariables(C=C, cand_ids=cand_ids, rs=1)
+        alphas = DualVariables(C=C, label_space=cand_ids, random_state=1)
 
         fac_mul_alphas = 0 * alphas
         alphas_fac_mul = alphas * 0
@@ -568,7 +537,7 @@ class TestDualVariables(unittest.TestCase):
             ]
         ]
 
-        alphas = DualVariables(C=1.5, cand_ids=cand_ids, rs=1)
+        alphas = DualVariables(C=1.5, label_space=cand_ids, random_state=1)
 
         # Test subtracting a dual variable class from itself ==> empty dual variable set
         sub_alphas = alphas - alphas
@@ -586,11 +555,11 @@ class TestDualVariables(unittest.TestCase):
             self.assertEqual(alphas.get_dual_variable(i, y_seq), sub_alphas.get_dual_variable(i, y_seq))
 
         # Test subtracting two non-empty dual variable sets
-        alphas_2 = DualVariables(C=1.5, cand_ids=cand_ids, rs=2)
+        alphas_2 = DualVariables(C=1.5, label_space=cand_ids, random_state=2)
         sub_alphas = alphas - alphas_2
-        # print(alphas._iy)
+        print(alphas._iy)
         # [(0, ('M10',)), (1, ('M7',)), (2, ('M72',)), (3, ('M3',))]
-        # print(alphas_2._iy)
+        print(alphas_2._iy)
         # [(0, ('M19',)), (1, ('M7',)), (2, ('M11',)), (3, ('M22',))]
         self.assertTrue(DualVariables._eq_dual_domain(alphas, sub_alphas))
         self.assertTrue(DualVariables._eq_dual_domain(alphas_2, sub_alphas))
@@ -600,88 +569,6 @@ class TestDualVariables(unittest.TestCase):
                               ((3, ("M3", )),  alphas.C / alphas.N), ((3, ("M22", )), - alphas.C / alphas.N)]:
             self.assertIn((i, y_seq), sub_alphas._iy)
             self.assertEqual(a, sub_alphas.get_dual_variable(i, y_seq))
-
-
-class TestDualVariablesForExamples(unittest.TestCase):
-    def test_initialization(self):
-        # ------------------------------------
-        cand_ids = [["M1"], ["M1", "M2", "M3", "M10", "M20"], ["M4", "M5"], ["M2", "M4"], ["M7", "M9", "M8"]]
-
-        for C, N in [(1, 10), (0.5, 2), (2, 1)]:
-            for n in range(1, 11):
-                alphas = DualVariablesForExample(C=C, N=N, cand_ids=cand_ids, rs=11, num_init_active_vars=n)
-                self.assertEqual(n, len(alphas))
-                for key, a in alphas.items():
-                    self.assertIsInstance(key, tuple)
-                    self.assertEqual(C / (N * n), a)
-
-        # ------------------------------------
-        cand_ids = [["M1", "M2", "M3", "M10", "M20"]]
-
-        for C, N in [(1, 10), (0.5, 2), (2, 1)]:
-            for n in range(1, 3):
-                alphas = DualVariablesForExample(C=C, N=N, cand_ids=cand_ids, rs=11, num_init_active_vars=n)
-                self.assertEqual(n, len(alphas))
-                for key, a in alphas.items():
-                    self.assertIsInstance(key, tuple)
-                    self.assertEqual(C / (N * n), a)
-
-        # ------------------------------------
-        cand_ids = [["M1"], ["M1", "M2", "M3", "M10", "M20"], ["M4", "M5"], ["M2", "M4"], ["M7", "M9", "M8"]]
-        alphas = [DualVariablesForExample(C=1.5, N=3, cand_ids=cand_ids, rs=12, num_init_active_vars=2),
-                  DualVariablesForExample(C=1.5, N=3, cand_ids=cand_ids, rs=12, num_init_active_vars=1),
-                  DualVariablesForExample(C=1.5, N=3, cand_ids=cand_ids, rs=12, num_init_active_vars=3)]
-        self.assertTrue(_StructuredSVM._is_feasible(alphas, 1.5))
-
-    def test_update(self):
-        cand_ids_1 = [["M1"], ["M1", "M2", "M3", "M10", "M20"], ["M4", "M5"], ["M2", "M4"], ["M7", "M9", "M8"]]
-
-        # ------------------------------------
-        gamma = 0.75
-        C = 2
-        N = 1
-        alphas = DualVariablesForExample(C=C, N=N, cand_ids=cand_ids_1, rs=123, num_init_active_vars=2)
-
-        # ('M1', 'M3', 'M4', 'M2', 'M8') and ('M1', 'M2', 'M5', 'M2', 'M9') are active.
-
-        # Update an active dual variable
-        y_seq_active = ('M1', 'M3', 'M4', 'M2', 'M8')
-        a_old = alphas[y_seq_active]
-        alphas.update(y_seq_active, gamma=gamma)
-        self.assertTrue(alphas[y_seq_active] >= 0)
-        self.assertTrue(alphas[y_seq_active] <= (C / N))
-        self.assertEqual((1 - gamma) * a_old + gamma * (C / N), alphas[y_seq_active])
-
-        # Update an inactive dual variable
-        y_seq_inactive = ('M1', 'M20', 'M5', 'M2', 'M7')
-        a_old = alphas[y_seq_inactive]
-        self.assertEqual(0, a_old)
-        alphas.update(y_seq_inactive, gamma=gamma)
-        self.assertTrue(alphas[y_seq_inactive] >= 0)
-        self.assertTrue(alphas[y_seq_inactive] <= (C / N))
-        self.assertEqual((1 - gamma) * a_old + gamma * (C / N), alphas[y_seq_inactive])
-
-        # ------------------------------------
-        cand_ids_2 = [["M1", "M2"], ["M1", "M2", "M19", "M10"], ["M20", "M4", "M5"], ["M2"], ["M3", "M56", "M8"]]
-        cand_ids_3 = [["M1", "M2", "M3"], ["M1", "M2", "M9", "M10", "M22"], ["M20", "M7"], ["M2", "M99"], ["M72", "M8"]]
-
-        C = 2
-        N = 3
-        alphas = [DualVariablesForExample(C=C, N=N, cand_ids=cand_ids_1, rs=123, num_init_active_vars=2),
-                  DualVariablesForExample(C=C, N=N, cand_ids=cand_ids_2, rs=121, num_init_active_vars=1),
-                  DualVariablesForExample(C=C, N=N, cand_ids=cand_ids_3, rs=321, num_init_active_vars=4)]
-
-        self.assertTrue(_StructuredSVM._is_feasible(alphas, C))
-        print(alphas[0].items())
-
-        # Dual variable set belonging to example 0
-        y_seq_active = ('M1', 'M3', 'M4', 'M2', 'M8')
-        y_seq_inactive = ('M1', 'M20', 'M5', 'M2', 'M7')
-        alphas[0].update(y_seq_active, gamma)
-        print(alphas[0].items())
-        self.assertTrue(_StructuredSVM._is_feasible(alphas, C))
-        alphas[0].update(y_seq_inactive, gamma)
-        self.assertTrue(_StructuredSVM._is_feasible(alphas, C))
 
 
 if __name__ == '__main__':

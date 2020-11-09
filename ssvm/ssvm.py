@@ -27,28 +27,34 @@ import numpy as np
 import itertools as it
 import more_itertools as mit
 import tensorflow as tf
+import networkx as nx
 
+from collections import OrderedDict
 from copy import deepcopy
-from typing import List, ItemsView, Tuple, ValuesView, KeysView, Iterator, Dict, Union, Optional, TypeVar
+from typing import List, ItemsView, Tuple, ValuesView, KeysView, Iterator, Dict, Union, Optional, TypeVar, Callable
 from sklearn.utils.validation import check_random_state
 from sklearn.model_selection import GroupKFold
 from scipy.sparse import csc_matrix, lil_matrix, csr_matrix
 from tqdm import tqdm
 
 from ssvm.data_structures import SequenceSample, CandidateSetMetIdent
-from ssvm.loss_functions import hamming_loss
+from ssvm.loss_functions import hamming_loss, tanimoto_loss
 from ssvm.evaluation_tools import get_topk_performance_csifingerid
+from ssvm.factor_graphs import ChainFactorGraph, identity
+from ssvm.kernel_utils import generalized_tanimoto_kernel, tanimoto_kernel
+
 
 DUALVARIABLES_T = TypeVar('DUALVARIABLES_T', bound='DualVariables')
 
 
 class DualVariables(object):
-    def __init__(self, C: float, cand_ids: List[List[List[str]]], num_init_active_vars=1, rs=None, initialize=True):
+    def __init__(self, C: Union[int, float], label_space: List[List[List[str]]], num_init_active_vars: int = 1,
+                 random_state: Optional[Union[int, np.random.RandomState]] = None, initialize: bool = True):
         """
 
         :param C: scalar, regularization parameter of the Structured SVM
 
-        :param cand_ids: list of list of lists, of candidate identifiers. Each sequence element has an associated
+        :param label_space: list of list of lists, of candidate identifiers. Each sequence element has an associated
             candidate set. The candidates are identified by a string.
 
             Example:
@@ -64,7 +70,7 @@ class DualVariables(object):
 
         :param num_init_active_vars: scalar, number of initially active dual variables per
 
-        :param rs: None | int | instance of RandomState
+        :param random_state: None | int | instance of RandomState
             If seed is None, return the RandomState singleton used by np.random.
             If seed is an int, return a new RandomState instance seeded with seed.
             If seed is already a RandomState instance, return it.
@@ -75,24 +81,21 @@ class DualVariables(object):
         """
         self.C = C
         assert self.C > 0, "The regularization parameter must be positive."
-        self.N = len(cand_ids)
-        # Store a shuffled version of the candidate sets for each example and sequence element
-        self.rs = check_random_state(rs)
+        self.N = len(label_space)
+        self.random_state = check_random_state(random_state)
 
         self.num_init_active_vars = num_init_active_vars
         assert self.num_init_active_vars > 0
 
+        # Store a shuffled version of the candidate sets for each example and sequence element
+        self.label_space = [[self.random_state.permutation(_cand_ids).tolist() for _cand_ids in label_space[i]]
+                            for i in range(self.N)]
+
         if initialize:
-            self.l_cand_ids = []
-            for i in range(self.N):
-                self.l_cand_ids.append([self.rs.permutation(_cand_ids).tolist() for _cand_ids in cand_ids[i]])
             # Initialize the dual variables
-            self.initialize_alphas()
+            self._alphas, self._y2col, self._iy = self.initialize_alphas()
         else:
-            self.l_cand_ids = cand_ids
-            self._alphas = None  # type: lil_matrix
-            self._y2col = None
-            self._iy = None
+            self._alphas, self._y2col, self._iy = None, None, None
 
     def _assert_input_iy(self, i: int, y_seq: Tuple):
         """
@@ -103,7 +106,7 @@ class DualVariables(object):
         """
         # Test: Are we trying to update a valid label sequence for the current example
         for sigma, y_sigma in enumerate(y_seq):
-            if y_sigma not in self.l_cand_ids[i][sigma]:
+            if y_sigma not in self.label_space[i][sigma]:
                 raise ValueError("For example %d at sequence element %d the label %s does not exist." %
                                  (i, sigma, y_sigma))
 
@@ -132,7 +135,7 @@ class DualVariables(object):
             n_added = 0
             # Lazy generation of sample sequences, no problem with exponential space here
             # FIXME: Produces heavily biased sequences, as last indices is increased first, then the second last ...
-            for y_seq in it.product(*self.l_cand_ids[i]):
+            for y_seq in it.product(*self.label_space[i]):
                 assert y_seq not in _y2col[i], "What, that should not happen."
 
                 _alphas[i, col + n_added] = self.C / self.N
@@ -159,9 +162,7 @@ class DualVariables(object):
         # TODO Faster verification of the label sequence correctness, we transform all candidate set lists in to sets
         # self.l_cand_ids = [for cand_ids_seq in (for cand_ids_exp in self.l_cand_ids)]
 
-        self._alphas = _alphas
-        self._y2col = _y2col
-        self._iy = _iy
+        return _alphas, _y2col, _iy
 
     def set_alphas(self, iy: List[Tuple[int, Tuple]], alphas: Union[float, List[float], np.ndarray]) -> DUALVARIABLES_T:
         """
@@ -213,8 +214,12 @@ class DualVariables(object):
         Update the value of a dual variable.
 
         :param i, scalar, sequence example index
+
         :param y_seq: tuple of strings, sequence of candidate indices identifying the dual variable
+
         :param gamma: scalar, step-width used to update the dual variable value
+
+        :return: boolean, indicating whether a new variable was added to the set of active variables.
         """
         self.assert_is_initialized()
         self._assert_input_iy(i, y_seq)
@@ -320,7 +325,7 @@ class DualVariables(object):
             raise ValueError("Can only multiply with scalar.")
 
         if fac == 0:
-            return DualVariables(self.C, self.l_cand_ids, initialize=False).set_alphas([], [])
+            return DualVariables(self.C, self.label_space, initialize=False).set_alphas([], [])
         else:
             out = deepcopy(self)
             out._alphas *= fac
@@ -385,7 +390,7 @@ class DualVariables(object):
         _iy = [(i, y_seq) for (i, y_seq), a in zip(_iy_union, _alphas_union) if a != 0]
         _alphas = [a for a in _alphas_union if a != 0]
 
-        return DualVariables(C=self.C, cand_ids=self.l_cand_ids, initialize=False).set_alphas(_iy, _alphas)
+        return DualVariables(C=self.C, label_space=self.label_space, initialize=False).set_alphas(_iy, _alphas)
 
     @staticmethod
     def _eq_dual_domain(left: DUALVARIABLES_T, right: DUALVARIABLES_T) -> bool:
@@ -405,181 +410,78 @@ class DualVariables(object):
             return False
 
         for i in range(left.N):
-            if len(left.l_cand_ids[i]) != len(right.l_cand_ids[i]):
+            if len(left.label_space[i]) != len(right.label_space[i]):
                 return False
 
-            for sigma in range(len(left.l_cand_ids[i])):
-                if set(left.l_cand_ids[i][sigma]) != set(right.l_cand_ids[i][sigma]):
+            for sigma in range(len(left.label_space[i])):
+                if set(left.label_space[i][sigma]) != set(right.label_space[i][sigma]):
                     return False
 
         return True
 
 
-class DualVariablesForExample(object):
-    def __init__(self, C: float, N: int, cand_ids: List[List[str]], num_init_active_vars=1, rs=None):
+class _StructuredSVM(object):
+    """
+    Structured Support Vector Machine (SSVM) meta-class
+    """
+    def __init__(self, C: Union[int, float] = 1, n_epochs: int = 100, batch_size: int = 1, label_loss: str = "hamming",
+                 step_size: str = "diminishing", random_state: Optional[Union[int, np.random.RandomState]] = None):
         """
+        Structured Support Vector Machine (SSVM)
 
-        :param C: scalar, regularization parameter of the Structured SVM
+        :param C: scalar, SVM regularization parameter. Must be > 0.
 
-        :param N: scalar, total number of sequences used for training
+        :param n_epochs: scalar, Number of epochs, i.e. passes over the complete dataset.
 
-        :param cand_ids: list of lists, of candidate identifiers. Each sequence element has an associated candidate set.
-            The candidates are identified by a string.
+        :param batch_size: scalar, Batch size, i.e. number of examples updated in each iteration 
 
-            Example:
+        :param label_loss: string, indicating which label-loss is used.
+        
+        :param step_size: string, indicating which strategy is used to determine the step-size. 
 
-                [
-                    [M1, M2, M3],
-                    [M6, M3, M5, M7],
-                    ...
-                ]
-
-        :param num_init_active_vars: scalar, number of initially active dual variables per
-
-        :param rs: None | int | instance of RandomState
+        :param random_state: None | int | instance of RandomState
             If seed is None, return the RandomState singleton used by np.random.
             If seed is an int, return a new RandomState instance seeded with seed.
             If seed is already a RandomState instance, return it.
             Otherwise raise ValueError.
         """
         self.C = C
-        assert self.C > 0, "The regularization parameter must be positive."
-        self.N = N
-        assert self.N > 0
-        self.l_cand_ids = cand_ids
-        self.num_init_active_vars = num_init_active_vars
-        assert self.num_init_active_vars > 0
-        self.rs = check_random_state(rs)
-
-        # Initialize the dual variables
-        self._alphas = self._get_initial_alphas()
-
-    def _get_initial_alphas(self) -> dict:
-        """
-        Return initialized dual variables.
-
-        :return: dictionary: key = label sequence, value = dual variable value
-        """
-        # Active dual variables are stored in a dictionary: key = label sequence, value = variable value
-        _alphas = {}
-
-        # Initial dual variable value ensuring feasibility
-        init_var_val = self.C / (self.N * self.num_init_active_vars)  # (C / N) / num_act = C / (N * num_act)
-
-        for i in range(self.num_init_active_vars):
-            y_seq = tuple(self.rs.choice(cand_ids) for cand_ids in self.l_cand_ids)
-            assert y_seq not in _alphas, "Oups, we sampled the same active dual variable again."
-
-            _alphas[y_seq] = init_var_val
-
-        return _alphas
-
-    def __len__(self) -> int:
-        """
-        :return: scalar, number of active dual variables
-        """
-        return len(self._alphas)
-
-    def __iter__(self) -> Iterator:
-        return self._alphas.__iter__()
-
-    def __getitem__(self, y_seq: tuple) -> float:
-        try:
-            return self._alphas[y_seq]
-        except KeyError:
-            return 0.0
-
-    def is_active(self, y_seq: tuple) -> bool:
-        return y_seq in self._alphas
-
-    def items(self) -> ItemsView[Tuple, float]:
-        return self._alphas.items()
-
-    def values(self) -> ValuesView[float]:
-        return self._alphas.values()
-
-    def keys(self) -> KeysView[Tuple]:
-        return self._alphas.keys()
-
-    def update(self, y_seq: tuple, gamma: float):
-        """
-        Update the value of a dual variable.
-
-        :param y_seq: tuple of strings, sequence of candidate indices identifying the dual variable
-        :param gamma: scalar, step-width used to update the dual variable value
-        """
-        for y_seq_active in self._alphas:
-            if y_seq == y_seq_active:
-                continue
-
-            self._alphas[y_seq_active] -= (gamma * self._alphas[y_seq_active])
-
-        try:
-            # Update an active dual variable
-            # self._alphas[y_seq] = (1 - gamma) * self._alphas[y_seq] + gamma * (self.C / self.N)
-            self._alphas[y_seq] += gamma * ((self.C / self.N) - self._alphas[y_seq])
-        except KeyError:
-            # Add a new dual active dual variable
-            self._alphas[y_seq] = gamma * (self.C / self.N)
-
-
-class _StructuredSVM(object):
-    def __init__(self, C=1.0, max_n_epochs=1000, label_loss="hamming", rs=None, stepsize="diminishing",
-                 conv_criteria="max_epochs", conv_threshold=1e-2, use_aggregated_model=False):
-        """
-        Structured Support Vector Machine (SSVM) class.
-
-        :param C: scalar, SVM regularization parameter. Must be > 0.
-        :param max_n_epochs: scalar, Number of epochs, i.e. maximum number of iterations.
-        :param label_loss: string, Which label loss should be used. Default is 'hamming' loss.
-        """
-        self.C = C
-        self.max_n_epochs = max_n_epochs
+        self.n_epochs = n_epochs
+        self.batch_size = batch_size
         self.label_loss = label_loss
+        self.random_state = random_state
+        self.step_size = step_size
 
         if self.label_loss == "hamming":
             self.label_loss_fun = hamming_loss
+        elif self.label_loss == "tanimoto_loss":
+            self.label_loss_fun = tanimoto_loss
         else:
-            raise ValueError("Invalid label loss '%s'. Choices are 'hamming'.")
+            raise ValueError("Invalid label loss '%s'. Choices are 'hamming' and 'tanimoto_loss'.")
 
-        self.stepsize = stepsize
-        if self.stepsize not in ["diminishing", "linesearch"]:
+        if self.step_size not in ["diminishing", "linesearch"]:
             raise ValueError("Invalid stepsize method '%s'. Choices are 'diminishing' and 'linesearch'." %
-                             self.stepsize)
-
-        self.conv_criteria = conv_criteria
-        if self.conv_criteria not in ["max_epochs", "rel_duality_gap_decay", "normalized_duality_gap"]:
-            raise ValueError("Invalid convergence criteria '%s'." % self.conv_criteria)
-
-        self.conv_threshold = conv_threshold
-        self.use_aggregated_model = use_aggregated_model
-
-        self.rs = check_random_state(rs)  # type: np.random.RandomState
+                             self.step_size)
 
     @staticmethod
-    def _is_feasible(alphas: List[DualVariablesForExample], C: float) -> bool:
+    def _is_feasible_matrix(alphas: DualVariables, C: Union[int, float]) -> bool:
         """
-        Check the feasibility of the dual variable.
+        Check whether the given dual variables are feasible.
 
-        :param alphas:
-        :param C:
-        :return:
+        :param alphas: DualVariables, dual variables to test.
+
+        :param C: scalar, regularization parameter of the support vector machine
+
+        :return: boolean, indicating whether the dual variables are feasible.
         """
-        val = C / len(alphas)  # C / N
-        for a_i in alphas:
-            sum_a_i = 0
-            for a_iy in a_i.values():
-                # Alphas need to be positive
-                if a_iy < 0:
-                    print("Dual variable is smaller 0: %f" % a_iy)
-                    return False
+        B = alphas.get_dual_variable_matrix()
+        N = B.shape[0]
 
-                sum_a_i += a_iy
+        if (B < 0).getnnz():
+            return False
 
-            if not np.isclose(sum_a_i, val):
-                print("Dual variable does not sum to C / N: (expected) %f - (actual) %f = %f" % (
-                    val, sum_a_i, sum_a_i - val))
-                return False
+        if not np.all(np.isclose(B.sum(axis=1), C / N)):
+            return False
 
         return True
 
@@ -596,8 +498,8 @@ class _StructuredSVM(object):
 
 
 class StructuredSVMMetIdent(_StructuredSVM):
-    def __init__(self, C=1.0, max_n_epochs=100, label_loss="hamming", rs=None, batch_size=1, stepsize="linesearch",
-                 conv_criteria="max_epochs", conv_threshold=1e-2, use_aggregated_model=False):
+    def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming", random_state=None, batch_size=1,
+                 step_size="diminishing"):
         self.batch_size = batch_size
 
         # States defining a fitted SSVM Model
@@ -607,10 +509,9 @@ class StructuredSVMMetIdent(_StructuredSVM):
         self.alphas = None  # type: DualVariables
         self.N = None
 
-        super(StructuredSVMMetIdent, self).__init__(C=C, max_n_epochs=max_n_epochs, label_loss=label_loss, rs=rs,
-                                                    stepsize=stepsize, conv_criteria=conv_criteria,
-                                                    conv_threshold=conv_threshold,
-                                                    use_aggregated_model=use_aggregated_model)
+        super(StructuredSVMMetIdent, self).__init__(C=C, n_epochs=n_epochs, label_loss=label_loss,
+                                                    random_state=random_state, step_size=step_size)
+
 
     @staticmethod
     def _sanitize_fit_args(idict, keys, bool_default):
@@ -688,20 +589,20 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
         if debug_args["track_topk_acc"]:
             # Split full training dataset into training' (90%) and validation (10%)
-            self.train_set, val_set = next(GroupKFold(n_splits=10).split(X, groups=y))
+            train_set, val_set = next(GroupKFold(n_splits=10).split(X, groups=y))
 
             # Here:
             #   n_train  ... original size of full training set
             #   n_train' ... size of 90% of the original training set
             #   n_val    ... size of 10% of the original training set, used as validation set
             data_for_topk_acc = {
-                "X_val": X[val_set],                    # shape = (n_val, n_train)
-                "y_val": y[val_set],                    # shape = (n_val, )
+                "X_val": X[np.ix_(val_set, train_set)],  # shape = (n_val, n_train')
+                "y_val": y[val_set]                      # shape = (n_val, )
             }
 
             # New data for training: training'
-            X = X[np.ix_(self.train_set, self.train_set)]  # shape = (n_train', n_train')
-            y = y[self.train_set]                          # shape = (n_train', )
+            X = X[np.ix_(train_set, train_set)]  # shape = (n_train', n_train')
+            y = y[train_set]                     # shape = (n_train', )
         else:
             data_for_topk_acc = {}
             self.train_set = None
@@ -713,9 +614,8 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
         # Initialize dual variables
         print("Initialize dual variables: ...", end="")
-        self.alphas = DualVariables(C=self.C, cand_ids=[[candidates.get_labelspace(y[i], for_training=True)]
-                                                        for i in range(self.N)],
-                                    rs=self.rs, num_init_active_vars=num_init_active_vars_per_seq)
+        self.alphas = DualVariables(C=self.C, label_space=[[candidates.get_labelspace(y[i])] for i in range(self.N)],
+                                    random_state=self.random_state, num_init_active_vars=num_init_active_vars_per_seq)
         assert self._is_feasible_matrix(self.alphas, self.C), "Initial dual variables must be feasible."
 
         if self.use_aggregated_model:
@@ -745,18 +645,15 @@ class StructuredSVMMetIdent(_StructuredSVM):
 
             if pre_calc_args["pre_calc_label_losses"] and y_i not in label_losses:
                 # Label loss: Loss of the gt fingerprint to all corresponding candidate fingerprints of i
-                label_losses[y_i] = self.label_loss_fun(candidates.get_gt_fp(y_i),
-                                                        candidates.get_candidate_fps(y_i, for_training=True))
+                label_losses[y_i] = self.label_loss_fun(candidates.get_gt_fp(y_i), candidates.get_candidates_fp(y_i))
 
             if pre_calc_args["pre_calc_L_Ci_matrices"] and y_i not in mol_kernel_L_Ci:
                 # Kernels between the training examples and candidates
-                mol_kernel_L_Ci[y_i] = candidates.getMolKernel_ExpVsCand(self.y_train, y_i,
-                                                                         for_training=True).T  # shape = (|Sigma_i|, N)
+                mol_kernel_L_Ci[y_i] = candidates.getMolKernel_ExpVsCand(self.y_train, y_i).T  # shape = (|Sigma_i|, N)
 
             if pre_calc_args["pre_calc_L_Ci_S_matrices"] and y_i not in mol_kernel_L_S_Ci:
                 # Kernels between active structures and all candidates of i
-                mol_kernel_L_S_Ci[y_i] = candidates.get_kernel(self.fps_active,
-                                                               candidates.get_candidate_fps(y_i, for_training=True))
+                mol_kernel_L_S_Ci[y_i] = candidates.get_kernel(self.fps_active, candidates.get_candidates_fp(y_i))
                 # shape = (|S|, |C_i|)
 
         pre_calc_data = {"label_losses_active": label_losses_active,
@@ -776,26 +673,44 @@ class StructuredSVMMetIdent(_StructuredSVM):
             pre_calc_data["L_SS"] = candidates.get_kernel(self.fps_active)
             # L with shape    (N, N)
             # L_S with shape  (|S|, N)                  DONE: Update only every k'th step for debugging
-            # L_SS with shape (|S|, |S|)                DONE: Update only every k'th step for debugging
+            # L_SS with sahep (|S|, |S|)                DONE: Update only every k'th step for debugging
 
         k = 0
         self._write_debug_output(debug_args, epoch=0, step_batch=0, step_total=k, stepsize=np.nan,
                                  data_for_topk_acc=data_for_topk_acc, pre_calc_data=pre_calc_data,
                                  candidates=candidates)
 
-        for epoch in range(self.max_n_epochs):  # Full pass over the data
+        for epoch in range(self.n_epochs):  # Full pass over the data
             for step, batch in enumerate(
-                    mit.chunked(np.random.RandomState(epoch).permutation(range(self.N)), self.batch_size)):
+                    mit.chunked(np.random.RandomState(epoch).permutation(np.arange(self.N)), self.batch_size)):
                 # Update mol_kernel_L_S_Ci for the current batch
                 # ----------------------------------------------
-                self._update_L_Ci_S_matrices(pre_calc_args, pre_calc_data, candidates, batch=batch)
+                if pre_calc_args["pre_calc_L_Ci_S_matrices"]:
+                    for i in batch:
+                        y_i = self.y_train[i]
+                        if pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[0] == self.fps_active.shape[0]:
+                            # Nothing to update
+                            continue
+
+                        # example i requires an update for the L_S_Ci
+                        _n_missing = self.fps_active.shape[0] - pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[0]
+                        assert _n_missing > 0
+
+                        # Change size by adding one row
+                        pre_calc_data["mol_kernel_L_S_Ci"][y_i].resize(
+                            (pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[0] + _n_missing,
+                             pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[1]),
+                            refcheck=False)
+
+                        # Fill the missing values
+                        pre_calc_data["mol_kernel_L_S_Ci"][y_i][-_n_missing:] = candidates.get_kernel(
+                            self.fps_active[-_n_missing:], candidates.get_candidates_fp(y_i))
+                        assert not np.any(np.isnan(pre_calc_data["mol_kernel_L_S_Ci"][y_i]))
 
                 # -----------------
                 # SOLVE SUB-PROBLEM
                 # -----------------
-                _pre_calc_data = {**pre_calc_data,
-                                  "fps_active": self.fps_active, "B_S": self.alphas.get_dual_variable_matrix("dense")}
-                res_batch = [self._solve_sub_problem(i, candidates, pre_calc_data=_pre_calc_data) for i in batch]
+                res_batch = [self._solve_sub_problem(i, candidates, pre_calc_data=pre_calc_data) for i in batch]
 
                 # -----------------
                 # GET THE STEP SIZE
@@ -806,7 +721,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
                     gamma = self._get_step_size_linesearch(batch, res_batch, candidates)
                 else:
                     raise ValueError(
-                        "Invalid stepsize method '%s'. Choices are 'diminishing' and 'linesearch'." % self.stepsize)
+                        "Invalid stepsize method '%s'. Choices are 'diminishing' and 'linesearch'." % self.step_size)
 
                 # -------------------------
                 # UPDATE THE DUAL VARIABLES
@@ -819,7 +734,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
                     # HINT: Here happens the actual update ...
                     if self.alphas.update(i, y_i_hat, gamma):
                         # Add the fingerprint belonging to the newly added active dual variable
-                        _new_fps[_n_added, :] = candidates.get_candidate_fps(y[i], y_i_hat, for_training=True)
+                        _new_fps[_n_added, :] = candidates.get_candidates_fp(y[i], y_i_hat)
 
                         # Add the label loss belonging to the newly added active dual variable
                         _new_losses[_n_added] = self.label_loss_fun(_new_fps[_n_added], candidates.get_gt_fp(y[i]))
@@ -849,69 +764,58 @@ class StructuredSVMMetIdent(_StructuredSVM):
                 assert self._is_feasible_matrix(self.alphas, self.C), \
                     "Dual variables not feasible anymore after update."
 
+                # Write out debug information
+                # ---------------------------
+                if (k % 10) == 0:  # TODO: write out debug information every 10'th iteration --> make it a parameter
+                    if pre_calc_args["pre_calc_L_matrices"]:
+                        _n_missing = self.fps_active.shape[0] - pre_calc_data["L_S"].shape[0]
+                        if _n_missing > 0:
+                            # Update the L_S and L_SS
+                            # -----------------------
+                            # L_S: Old shape (|S|, N) --> new shape (|S| + n_added, N)
+                            pre_calc_data["L_S"].resize(
+                                (pre_calc_data["L_S"].shape[0] + _n_missing, pre_calc_data["L_S"].shape[1]),
+                                refcheck=False)
+                            pre_calc_data["L_S"][-_n_missing:] = candidates.get_kernel(
+                                self.fps_active[-_n_missing:], candidates.get_gt_fp(self.y_train))
+
+                            # L_SS: Old shape (|S|, |S|) --> new shape (|S| + n_added, |S| + n_added)
+                            new_entries = candidates.get_kernel(self.fps_active[-_n_missing:],
+                                                                self.fps_active)  # shape = (n_added, |S| + n_added)
+                            _L_SS = np.zeros((pre_calc_data["L_SS"].shape[0] + _n_missing,
+                                              pre_calc_data["L_SS"].shape[1] + _n_missing))
+                            _L_SS[:pre_calc_data["L_SS"].shape[0], :pre_calc_data["L_SS"].shape[1]] = pre_calc_data["L_SS"]
+                            _L_SS[pre_calc_data["L_SS"].shape[0]:, :] = new_entries
+                            _L_SS[:, pre_calc_data["L_SS"].shape[1]:] = new_entries.T
+                            pre_calc_data["L_SS"] = _L_SS
+                            assert np.all(np.equal(pre_calc_data["L_SS"], pre_calc_data["L_SS"].T))
+
+                    # Update the L_S_Ci matrices
+                    # --------------------------
+                    if pre_calc_args["pre_calc_L_Ci_S_matrices"]:
+                        for y_i in pre_calc_data["mol_kernel_L_S_Ci"]:
+                            if pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[0] == self.fps_active.shape[0]:
+                                # There is nothing to update here
+                                continue
+
+                            _n_missing = self.fps_active.shape[0] - pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[0]
+                            assert _n_missing > 0
+
+                            pre_calc_data["mol_kernel_L_S_Ci"][y_i].resize(
+                                (pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[0] + _n_missing,
+                                 pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[1]),
+                                refcheck=False)
+                            pre_calc_data["mol_kernel_L_S_Ci"][y_i][-_n_missing:] = candidates.get_kernel(
+                                self.fps_active[-_n_missing:], candidates.get_candidates_fp(y_i))
+                            assert not np.any(np.isnan(pre_calc_data["mol_kernel_L_S_Ci"][y_i]))
+
+                    self._write_debug_output(debug_args, epoch=epoch, step_batch=step, step_total=k + 1,
+                                             stepsize=gamma, data_for_topk_acc=data_for_topk_acc,
+                                             pre_calc_data=pre_calc_data, candidates=candidates)
+
                 k += 1
 
-            # Write out debug information
-            # ---------------------------
-            self._update_L_matrices(pre_calc_args, pre_calc_data, candidates)
-            self._update_L_Ci_S_matrices(pre_calc_args, pre_calc_data, candidates)
-            convergence_value = self._write_debug_output(debug_args, epoch=epoch + 1, step_batch=-1, step_total=k,
-                                                         stepsize=gamma, data_for_topk_acc=data_for_topk_acc,
-                                                         pre_calc_data=pre_calc_data, candidates=candidates)
-
-            # After every pass we check the convergence
-            if self.conv_criteria in ["rel_duality_gap_decay", "normalized_duality_gap"]:
-                if convergence_value < self.conv_threshold:
-                    print("Convergence of '%s': val=%f" % (self.conv_criteria, convergence_value))
-                    break
-
-        self.k = k
-
         return self
-
-    def _update_L_matrices(self, pre_calc_args, pre_calc_data, candidates):
-        if pre_calc_args["pre_calc_L_matrices"]:
-            _n_missing = self.fps_active.shape[0] - pre_calc_data["L_S"].shape[0]
-            if _n_missing > 0:
-                # L_S: Old shape (|S|, N) --> new shape (|S| + n_added, N)
-                pre_calc_data["L_S"].resize(
-                    (pre_calc_data["L_S"].shape[0] + _n_missing, pre_calc_data["L_S"].shape[1]),
-                    refcheck=True)
-                pre_calc_data["L_S"][-_n_missing:] = candidates.get_kernel(
-                    self.fps_active[-_n_missing:], candidates.get_gt_fp(self.y_train))
-
-                # L_SS: Old shape (|S|, |S|) --> new shape (|S| + n_added, |S| + n_added)
-                new_entries = candidates.get_kernel(self.fps_active[-_n_missing:],
-                                                    self.fps_active)  # shape = (n_added, |S| + n_added)
-                _L_SS = np.zeros((pre_calc_data["L_SS"].shape[0] + _n_missing,
-                                  pre_calc_data["L_SS"].shape[1] + _n_missing))
-                _L_SS[:pre_calc_data["L_SS"].shape[0], :pre_calc_data["L_SS"].shape[1]] = pre_calc_data["L_SS"]
-                _L_SS[pre_calc_data["L_SS"].shape[0]:, :] = new_entries
-                _L_SS[:, pre_calc_data["L_SS"].shape[1]:] = new_entries.T
-                pre_calc_data["L_SS"] = _L_SS
-                assert np.all(np.equal(pre_calc_data["L_SS"], pre_calc_data["L_SS"].T))
-
-    def _update_L_Ci_S_matrices(self, pre_calc_args, pre_calc_data, candidates, batch=None):
-        if pre_calc_args["pre_calc_L_Ci_S_matrices"]:
-            if batch is None:
-                batch = range(self.N)
-
-            for i in batch:
-                y_i = self.y_train[i]
-
-                if pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[0] == self.fps_active.shape[0]:
-                    # There is nothing to update here
-                    continue
-
-                _n_missing = self.fps_active.shape[0] - pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[0]
-                assert _n_missing > 0
-
-                pre_calc_data["mol_kernel_L_S_Ci"][y_i].resize(
-                    (pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[0] + _n_missing,
-                     pre_calc_data["mol_kernel_L_S_Ci"][y_i].shape[1]))
-                pre_calc_data["mol_kernel_L_S_Ci"][y_i][-_n_missing:] = candidates.get_kernel(
-                    self.fps_active[-_n_missing:], candidates.get_candidate_fps(y_i, for_training=True))
-                assert not np.any(np.isnan(pre_calc_data["mol_kernel_L_S_Ci"][y_i]))
 
     def _write_debug_output(self, debug_args, epoch, step_batch, step_total, stepsize, pre_calc_data, data_for_topk_acc,
                             candidates):
@@ -931,14 +835,10 @@ class StructuredSVMMetIdent(_StructuredSVM):
         except KeyError:
             summary_writer = None
 
-        print("Epoch %d / %d ; Steps total: %d" % (
-            epoch, self.max_n_epochs, step_total))
+        print("Epoch %d / %d; Step: %d / %d (per epoch); Step total: %d" % (
+            epoch, self.n_epochs, step_batch, np.ceil(self.K_train.shape[0] / self.batch_size), step_total))
 
-        calc_objectives = debug_args["track_objectives"] or self.conv_criteria == "rel_duality_gap_decay"
-
-        convergence_value = None
-
-        if calc_objectives:
+        if debug_args["track_objectives"]:
             prim_obj, dual_obj, rel_duality_gap, lin_duality_gap = self._evaluate_primal_and_dual_objective(
                 candidates, pre_calc_data=pre_calc_data)
 
@@ -953,8 +853,8 @@ class StructuredSVMMetIdent(_StructuredSVM):
                 convergence_value = rel_duality_gap
 
             print("\tf(w) = %.5f; g(a) = %.5f\n"
-                  "\tNormalized duality gap = %.5f; Linear duality gap = %.5f; Relative duality gap decay = %.5f"
-                  % (prim_obj, dual_obj, rel_duality_gap, lin_duality_gap, lin_duality_gap / self.lin_duality_gap_0))
+                  "\tRelative duality gap = %.5f; Linear duality gap = %.5f"
+                  % (prim_obj, dual_obj, rel_duality_gap, lin_duality_gap))
 
             if summary_writer:
                 with summary_writer.as_default():
@@ -985,7 +885,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
                         tf.summary.scalar("Step-size", stepsize, step_total)
 
         if debug_args["track_topk_acc"]:
-            acc_k_train = self._score_on_training_data(self.K_train, self.y_train, candidates, pre_calc_data)
+            acc_k_train = self.score(self.K_train, self.y_train, candidates)
             print("\tTop-1=%2.2f; Top-5=%2.2f; Top-10=%2.2f\tTraining" % (
                 acc_k_train[0], acc_k_train[4], acc_k_train[9]))
 
@@ -1001,9 +901,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
                         with tf.name_scope("Metric (Validation)"):
                             tf.summary.scalar("Top-%d (validation)" % tpk, acc_k_val[tpk - 1], step_total)
 
-        return convergence_value
-
-    def _get_active_fingerprints_and_losses(self, alphas: DualVariables, y: Union[np.ndarray, None],
+    def _get_active_fingerprints_and_losses(self, alphas: DualVariables, y: np.ndarray,
                                             candidates: CandidateSetMetIdent, verbose=False):
         """
         Load the molecular fingerprints corresponding to the molecules of active dual variables. Furthermore, calculate
@@ -1025,7 +923,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
                 ground truth fingerprints
         """
         fps_active = np.zeros((alphas.n_active(), candidates.n_fps()))
-        label_losses_active = np.full((alphas.n_active(), ), fill_value=np.nan)
+        label_losses_active = np.zeros((alphas.n_active(), ))
 
         itr = range(alphas.n_active())
         if verbose:
@@ -1034,37 +932,13 @@ class StructuredSVMMetIdent(_StructuredSVM):
         for c in itr:
             j, ybar = alphas.get_iy_for_col(c)
             # Get the fingerprints of the active candidates for example j
-            fps_active[c] = candidates.get_candidate_fps(y[j], ybar, for_training=True)
+            fps_active[c] = candidates.get_candidates_fp(y[j], ybar)
             # Get label loss between the active fingerprint candidate and its corresponding gt fingerprint
             label_losses_active[c] = self.label_loss_fun(candidates.get_gt_fp(y[j]), fps_active[c])
 
         return fps_active, label_losses_active
 
-    @staticmethod
-    def _is_feasible_matrix(alphas: DualVariables, C: float) -> bool:
-        """
-        Check whether the given dual variables are feasible.
-
-        :param alphas: DualVariables, dual variables to test.
-
-        :param C: scalar, regularization parameter of the support vector machine
-
-        :return: boolean, indicating whether the dual variables are feasible.
-        """
-        B = alphas.get_dual_variable_matrix()
-        N = B.shape[0]
-
-        if (B < 0).getnnz():
-            return False
-
-        if not np.all(np.isclose(B.sum(axis=1), C / N)):
-            return False
-
-        return True
-
-    def _get_candidate_scores(self, X_i: np.ndarray, y_i: str, candidates: CandidateSetMetIdent,
-                              pre_calc_data: Dict[str, Union[Dict[str, np.ndarray], np.ndarray]], for_training) \
-            -> np.ndarray:
+    def _get_candidate_scores(self, i: int, candidates: CandidateSetMetIdent, pre_calc_data: Dict) -> np.ndarray:
         """
         Function to evaluate the following term for all candidates y in Sigma_i corresponding to example i:
 
@@ -1079,12 +953,17 @@ class StructuredSVMMetIdent(_StructuredSVM):
         :return: array-like, shape = (|Sigma_i|, )
         """
         # Get candidate fingerprints for all y in Sigma_i
-        if y_i in pre_calc_data["mol_kernel_L_S_Ci"]:
+        if "mol_kernel_L_S_Ci" not in pre_calc_data or self.y_train[i] not in pre_calc_data["mol_kernel_L_S_Ci"]:
+            L_Ci_S_available = False
+        else:
             L_Ci_S_available = True
+
+        if "mol_kernel_l_y" not in pre_calc_data or self.y_train[i] not in pre_calc_data["mol_kernel_l_y"]:
+            L_Ci_S_available = False
         else:
             L_Ci_S_available = False
 
-        if y_i in pre_calc_data["mol_kernel_L_Ci"]:
+        if self.y_train[i] in pre_calc_data["mol_kernel_L_Ci"]:
             L_Ci_available = True
         else:
             L_Ci_available = False
@@ -1092,26 +971,26 @@ class StructuredSVMMetIdent(_StructuredSVM):
         if L_Ci_available and L_Ci_S_available:
             fps_Ci = None
         else:
-            fps_Ci = candidates.get_candidate_fps(y_i, for_training=for_training)
+            fps_Ci = candidates.get_candidates_fp(self.y_train[i])
 
         if L_Ci_S_available:
-            L_S_Ci = pre_calc_data["mol_kernel_L_S_Ci"][y_i]
-            assert L_S_Ci.shape[0] == pre_calc_data["fps_active"].shape[0]
+            L_Ci_S = pre_calc_data["mol_kernel_L_S_Ci"][self.y_train[i]].T
+            assert L_Ci_S.shape[1] == self.fps_active.shape[0]
         else:
-            L_S_Ci = candidates.get_kernel(pre_calc_data["fps_active"], fps_Ci)
-        # L_Ci_S with shape = (|S|, |Sigma_i|)
+            L_Ci_S = candidates.get_kernel(fps_Ci, self.fps_active)
+        # L_Ci_S with shape = (|Sigma_i|, |S|)
 
         if L_Ci_available:
-            L_Ci = pre_calc_data["mol_kernel_L_Ci"][y_i]
+            L_Ci = pre_calc_data["mol_kernel_l_y"][self.y_train[i]]
         else:
             L_Ci = candidates.get_kernel(fps_Ci, candidates.get_gt_fp(self.y_train))
         # L_Ci with shape = (|Sigma_i|, N)
 
-        B_S = pre_calc_data["B_S"]  # shape = (N, |Sigma_i|)
+        B_S = self.alphas.get_dual_variable_matrix(type="dense")  # shape = (N, |Sigma_i|)
 
-        N = B_S.shape[0]
+        N = self.K_train.shape[0]
 
-        scores = (self.C * L_Ci @ X_i) / N - (X_i @ B_S @ L_S_Ci)  # B.4 Eq. (19)
+        scores = np.array(self.C / N * L_Ci @ self.K_train[i] - L_Ci_S @ (B_S.T @ self.K_train[i])).flatten()
 
         return scores
 
@@ -1128,76 +1007,53 @@ class StructuredSVMMetIdent(_StructuredSVM):
             scalar, value of the optimization problem
         )
         """
-        # Predict candidate scores after Eq. (19). See Section B.4 and III.
-        cand_scores = self._get_candidate_scores(self.K_train[i], self.y_train[i], candidates, pre_calc_data,
-                                                 for_training=True)
+        # HINT: Only one row in A has changed since last time. Eventually there was a new column.
+        # HINT: 'loss' and 's_j_y' do not change if the set of active dual variable changes.
+        cand_scores = self._get_candidate_scores(i, candidates, pre_calc_data)
 
-        # Get the label loss for example i. See Section B.4 and I
+        # Get the label loss for example i
         if self.y_train[i] in pre_calc_data["label_losses"]:
             loss = pre_calc_data["label_losses"][self.y_train[i]]
         else:
             fp_i = candidates.get_gt_fp(self.y_train[i]).flatten()
-            loss = self.label_loss_fun(fp_i, candidates.get_candidate_fps(self.y_train[i], for_training=True))
+            loss = self.label_loss_fun(fp_i, candidates.get_candidates_fp(self.y_train[i]))
 
-        score = np.array(loss + cand_scores).flatten()  # I + III (see B.4)
+        score = np.array(loss + cand_scores).flatten()
 
         # Find the max-violator
         max_idx = np.argmax(score).item()
 
-        # Get the corresponding candidate sequence label as tuple
-        y_hat_i = (candidates.get_labelspace(self.y_train[i], for_training=True)[max_idx], )
+        # Get the corresponding candidate sequence label
+        y_hat_i = (candidates.get_labelspace(self.y_train[i])[max_idx], )
 
         return y_hat_i, score[max_idx]
 
     def _evaluate_primal_and_dual_objective(self, candidates: CandidateSetMetIdent, pre_calc_data: Dict) \
             -> Tuple[float, float, float, float]:
         """
-        Function to calculating the:
-            (1) Primal objective value: f_k = f(w(alpha_k), xi(alpha_k))
-            (2) Dual objective value:   g_k = g(alpha_k)
-            (3) normalized duality gap: (f_k - g_k) / (f_k + 1)
-            (4) linear duality gap:     h_k = f_k - g_k
+        Function to calculate the dual and primal objective values.
+
+        :return:
         """
-        if self.use_aggregated_model:
-            fps_active, label_losses_active = self._get_active_fingerprints_and_losses(self.alphas_avg, self.y_train,
-                                                                                       candidates)
-            B_S = self.alphas_avg.get_dual_variable_matrix(type="dense")  # shape = (N, |S|)
+        # Pre-calculate some matrices
+        L = pre_calc_data["L"]
+        B_S = self.alphas.get_dual_variable_matrix(type="dense")  # shape = (N, |S|)
+        L_S = pre_calc_data["L_S"]  # shape = (|S|, N)
+        L_SS = pre_calc_data["L_SS"]  # shape = (|S|, |S|)
 
-            L = candidates.getMolKernel_ExpVsExp(self.y_train)
-            L_S = candidates.get_kernel(fps_active, candidates.get_gt_fp(self.y_train))
-            L_SS = candidates.get_kernel(fps_active)
-
-            _pre_calc_data = {"mol_kernel_L_Ci": pre_calc_data["mol_kernel_L_Ci"], "mol_kernel_L_S_Ci": {},
-                              "B_S": B_S, "fps_active": fps_active, "label_losses_active": label_losses_active,
-                              "label_losses": pre_calc_data["label_losses"]}
-        else:
-            B_S = self.alphas.get_dual_variable_matrix(type="dense")  # shape = (N, |S|)
-
-            # Pre-calculate some matrices
-            if "L" in pre_calc_data:
-                L  = pre_calc_data["L"]
-                L_S = pre_calc_data["L_S"]  # shape = (|S|, N)
-                L_SS = pre_calc_data["L_SS"]  # shape = (|S|, |S|)
-            else:
-                L = candidates.getMolKernel_ExpVsExp(self.y_train)
-                L_S = candidates.get_kernel(self.fps_active, candidates.get_gt_fp(self.y_train))
-                L_SS = candidates.get_kernel(self.fps_active)
-
-            _pre_calc_data = {**pre_calc_data,
-                              "fps_active": self.fps_active, "B_S": self.alphas.get_dual_variable_matrix("dense")}
-
+        # Calculate the dual objective
         N = self.K_train.shape[0]
         aTATAa = np.sum(self.K_train * ((self.C**2 / N**2 * L) + (B_S @ (L_SS @ B_S.T - 2 * self.C / N * L_S))))
-        aTl = np.sum(B_S @ _pre_calc_data["label_losses_active"])
+        aTl = np.sum(B_S @ pre_calc_data["lab_losses_active"])
         dual_obj = aTl - aTATAa / 2
 
         # Calculate the primal objective
         wtw = aTATAa
         assert wtw >= 0
-        const = np.sum((self.C / N * L - L_S.T @ B_S.T) * self.K_train, axis=1)  # II (see B.4)
+        const = np.sum((self.C / N * L - L_S.T @ B_S.T) * self.K_train, axis=1)
         xi = 0
         for i in range(N):
-            _, max_score = self._solve_sub_problem(i, candidates, _pre_calc_data)  # z_i(y) (see B.4)
+            _, max_score = self._solve_sub_problem(i, candidates, pre_calc_data)
             xi += np.maximum(0, max_score - const[i])
         prim_obj = wtw / 2 + (self.C / N) * xi
         prim_obj = prim_obj.flatten().item()
@@ -1273,14 +1129,21 @@ class StructuredSVMMetIdent(_StructuredSVM):
             keys are integer indices of each spectrum;
             values are array-like with shape = (|Sigma_i|,) containing predicted candidate scores
         """
-        if not for_training and self.train_set is not None:
-            # Remove those training examples, that where part of the validation set and therefore not used for fitting
-            # the model.
-            X = X[:, self.train_set]
-        assert X.shape[1] == self.K_train.shape[0]
+        B_S = self.alphas.get_dual_variable_matrix(type="dense")
+        N = B_S.shape[0]
+        score = {}
 
-        score = {i: self._get_candidate_scores(X[i], y[i], candidates, pre_calc_data, for_training)
-                 for i in range(X.shape[0])}
+        for i in range(X.shape[0]):
+            # Calculate the kernels between the training examples and candidates
+            mol_kernel_l_y_i = candidates.getMolKernel_ExpVsCand(self.y_train, y[i])
+
+            # ...
+            s_ybar_y = X[i] @ B_S @ candidates.get_kernel(self.fps_active, candidates.get_candidates_fp(y[i]))
+
+            # molecule kernel between all candidates of example i and all other training examples
+            s_j_y = (self.C / N) * X[i] @ mol_kernel_l_y_i  # shape = (|Sigma_i|, )
+
+            score[i] = np.array(s_j_y - s_ybar_y).flatten()
 
         return score
 
@@ -1368,8 +1231,8 @@ class StructuredSVMMetIdent(_StructuredSVM):
         s_iy, s_a = [], self.C / len(self.y_train)
         for idx, i in enumerate(I_B):
             s_iy.append((i, res_k[idx][0]))
-        s_minus_a = DualVariables(self.C, self.alphas.l_cand_ids, initialize=False).set_alphas(s_iy, s_a) \
-            - DualVariables(self.C, self.alphas.l_cand_ids, initialize=False).set_alphas(alpha_iy, alpha_a)
+        s_minus_a = DualVariables(self.C, self.alphas.label_space, initialize=False).set_alphas(s_iy, s_a) \
+            - DualVariables(self.C, self.alphas.label_space, initialize=False).set_alphas(alpha_iy, alpha_a)
 
         # Get the B(S) matrix with shape: (N, |S|)
         B_S = self.alphas.get_dual_variable_matrix(type="dense")
@@ -1399,78 +1262,182 @@ class StructuredSVMMetIdent(_StructuredSVM):
         return np.clip(nom / (den + 1e-8), 0, 1).item()
 
 
-class StructuredSVMSequences(_StructuredSVM):
-    def __init__(self, C=1.0, max_n_epochs=1000, label_loss="hamming", rs=None):
-        super(StructuredSVMSequences, self).__init__(C=C, max_n_epochs=max_n_epochs, label_loss=label_loss, rs=rs)
+class StructuredSVMSequencesFixedMS2(_StructuredSVM):
+    """
+    Structured Support Vector Machine (SSVM) for (MS, RT)-sequence classification.
+    """
+    def __init__(self, mol_feat_label_loss: str, mol_feat_retention_order: str,
+                 mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]],
+                 *args, **kwargs):
 
-    def fit(self, data: SequenceSample, num_init_active_vars_per_seq=1):
+        self.mol_feat_label_loss = mol_feat_label_loss
+        self.mol_feat_retention_order = mol_feat_retention_order
+        self.mol_kernel = self.get_mol_kernel(mol_kernel)
+
+        super().__init__(*args, **kwargs)
+
+    @staticmethod
+    def get_mol_kernel(mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]]) \
+            -> Callable[[np.ndarray, np.ndarray], np.ndarray]:
         """
-        Train the SSVM given a dataset.
+
+        :param mol_kernel:
         :return:
         """
+        if callable(mol_kernel):
+            return mol_kernel
+        elif mol_kernel == "tanimoto":
+            return tanimoto_kernel
+        elif mol_kernel == "minmax":
+            return generalized_tanimoto_kernel
+        else:
+            raise ValueError("Invalid molecule kernel")
+
+    def fit(self, data: SequenceSample, n_init_per_example: int = 1, n_trees_per_sequence: int = 1):
+        """
+        Train the SSVM given a dataset.
+
+        :param data: SequenceSample, set of training sequences. All needed information, such as features, labels and
+            potential label sequences, are accessible through this object.
+
+        :param n_init_per_example: scalar, number of initially active dual variables per example. That is, the number of
+            active (potential) label sequences.
+
+        :param n_trees_per_sequence: scalar, number of spanning trees per sequence.
+
+        :return: reference to it self.
+        """
+        random_state = check_random_state(self.random_state)
+
         # Number of training sequences
         N = len(data)
 
         # Set up the dual initial dual vector
-        alphas = [DualVariablesForExample(N=N, C=self.C, cand_ids=data.get_labelspace(i),
-                                          rs=self.rs, num_init_active_vars=num_init_active_vars_per_seq)
-                  for i in range(N)]
-        assert self._is_feasible(alphas, self.C), "Initial dual variables must be feasible."
+        alphas = DualVariables(C=self.C, label_space=data.get_labelspace(), num_init_active_vars=n_init_per_example,
+                               random_state=self.random_state)
+        assert self._is_feasible_matrix(alphas, self.C), "Initial dual variables must be feasible."
 
-        k = 0
-        while k < self.max_n_epochs:
-            # Pick a random coordinate to update
-            i = self.rs.choice(N)
+        # Initialize the graphs for each sequence
+        graph_set = self._get_graph_set(data, n_trees_per_sequence)
 
-            # Find the most violating example
-            y_i_hat = self._solve_sub_problem(alphas, data, i)
+        # Run over the data
+        # - each epoch is a cycle through the full data
+        # - each batch contains a subset of the full data
+        n_iterations_total = 0
+        for epoch in range(self.n_epochs):
+            for step, batch in enumerate(mit.chunked(random_state.permutation(np.arange(N)), self.batch_size)):
+                # Find the most violating examples for the current batch
+                y_I_hat = [self._solve_sub_problem(alphas, data, graph_set, i) for i in batch]
 
-            # Get step-width
-            gamma = self._get_step_size_diminishing(k, N)
+                # Get step-width
+                gamma = self._get_step_size_diminishing(n_iterations_total, N)
 
-            # Update the dual variables
-            alphas[i].update(y_i_hat, gamma)
+                # Update the dual variables
+                is_new = [alphas.update(i, y_i_hat, gamma) for i, y_i_hat in zip(batch, y_I_hat)]
 
-            assert self._is_feasible(alphas, self.C)
+                assert self._is_feasible_matrix(alphas, self.C), "Dual variables after update are not feasible anymore."
 
         return self
 
-    def _solve_sub_problem(self, alpha: List[DualVariablesForExample], data: SequenceSample, i: int) -> tuple:
+    @staticmethod
+    def _get_graph_set(data: SequenceSample, n_trees_per_sequence: int = 1) -> List[List[nx.Graph]]:
+        """
+
+        :param data:
+        :param n_trees_per_sequence:
+        :return:
+        """
+        if n_trees_per_sequence < 1:
+            raise ValueError("Number of trees per sequence must >= 1.")
+
+        if n_trees_per_sequence > 1:
+            raise NotImplementedError("Currently only one tree per sequence allowed.")
+
+        return [[ChainFactorGraph._get_chain_connectivity(data_i)] for data_i in data]
+
+    def _solve_sub_problem(self, alphas: DualVariables, data: SequenceSample, graph_set: List[List[nx.Graph]], i: int) \
+            -> Tuple:
         """
         Find the most violating example by solving the MAP problem. Forward-pass using max marginals.
 
-        :param alphas:
-        :param X:
+        :param alphas: DualVariables, dual variables
+        
+        :param data: SequenceSample, set of training sequences. All needed information, such as features, labels and
+            potential label sequences, are accessible through this object.
+
+        :param i: scalar, example index for which the sub-problem should be solved.
+        
         :return:
         """
-        V = list(range(data.L))  # Number of sequence elements defines the set of nodes
-        E = [(sigma, sigma + 1) for sigma in V[:-1]]  # Edge set of a linear graph (tree-like)
-        labspace_i = data.get_labelspace(i)
+        N = len(data)  # Number of training examples
+        L_i = len(data[i])  # Length of the i'th sequence
 
-        # Pre-calculate the Hamming-losses
-        y_i = data.get_gt_labels(i)
-        lloss = {sigma: np.array([hamming_loss(y_i, y_cand) for y_cand in labspace_i[sigma]]) for sigma in V}
-        # TODO: The hamming loss can be globally pre-computed, as it does not depend on alpha.
+        # Set up the candidate dictionary as needed for the 'msmsrt_scorer' package
+        candidates = OrderedDict()
+        for s in range(L_i):
+            candidates[s] = {}
 
-        # Pre-calculate the node-potentials: sv_i
-        sv_i = {}
-        for sigma in V:
-            # - A score-vector for each node sigma in V
-            # - Each score-vector is has the length of the label space corresponding to this node Sigma_{i sigma}
-            # - The label space corresponds candidates for spectrum sigma in sequence i.
-            sv_i[sigma] = np.zeros_like(labspace_i[sigma])  # Sigma_{i\sigma}
+            # Get the candidate identifiers
+            candidates[s]["structure"] = data[i].get_labelspace(s)
 
-            # Working with the dual representation requires us to go over all training sequences, here denoted with j.
-            for j in range(data.N):
-                # Get active dual variables for j: alpha(j, bar_y) > 0
-                # y__j_ybar, a__j_ybar = zip(*alpha[j].items())
-                # y__j_ybar ... list of tuples = list of active label sequences
-                # a__j_ybar ... value of the dual variable associated with each active label sequence
+            # Get the index of the correct structure
+            candidates[s]["index_of_correct_structure"] = data[i].get_index_of_correct_structure(s)
 
-                for y__j_ybar, a__j_ybar in alpha[j].items():
-                    sv_i[sigma] += a__j_ybar * data.delta_jointKernelMS((j, None), (i, sigma), y__j_ybar)
+            # MS2 scores are fixed and assumed to be pre-computed
+            candidates[s]["ms2_score"] = data[i].get_ms2_scores(s)
+            candidates[s]["ms2_score_of_correct_structure"] = \
+                candidates[s]["ms2_score"][candidates[s]["index_of_correct_structure"]]
+            candidates[s]["ms2_score_loss"] = \
+                candidates[s]["ms2_score_of_correct_structure"] - candidates[s]["ms2_score"]
 
-            sv_i[sigma] += lloss[sigma]
+            # Calculate the label loss for the current sequence
+            candidates[s]["label_loss"] = data[i].get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s)
 
-        # Pre-calculate the edge-potentials: se_i
-        pass
+            # Calculate the node-score for 'msmsrt_scorer'
+            # (1 / L) * (Loss(y_i, y_is) - (S(x_i, y_i) - S(x_i, y_is)))
+            candidates[s]["log_score"] = (candidates[s]["label_loss"] - candidates[s]["ms2_score_loss"]) / L_i
+
+            # Load the candidate molecule feature representations used for the retention order prediction
+            candidates[s]["mol_feat_retention_order"] = data[i].get_molecule_features(self.mol_feat_retention_order, s)
+
+        # Calculate the transition matrices encoding the SSVM's prediction on the candidate pairs.
+        sign_delta = np.concatenate((data[j].get_sign_delta_t(graph_set[j][0].edges)) for j in range(len(data)))
+
+        order_probs = dict()
+        for s, t in graph_set[i][0].edges:
+            order_probs[s] = {t: dict()}
+            order_probs[s][t]["log_score"] = ...
+
+            # -----------
+            # Equation  I
+            # -----------
+            Y_candidates_s = candidates[s]["mol_feat_retention_order"]
+            lambda_delta_s = np.vstack(
+                (data[j].get_lambda_delta(
+                    graph_set[j][0].edges, Y_candidates_s, self.mol_feat_retention_order, self.mol_kernel))
+                for j in range(len(data))
+            )
+
+            Y_candidates_t = candidates[t]["mol_feat_retention_order"]
+            lambda_delta_t = np.vstack(
+                (data[j].get_lambda_delta(
+                    graph_set[j][0].edges, Y_candidates_t, self.mol_feat_retention_order, self.mol_kernel))
+                for j in range(len(data))
+            )
+
+            I = self.C * ((sign_delta @ lambda_delta_s)[:, np.newaxis] - (sign_delta @ lambda_delta_t)[np.newaxis, :]) / N
+
+            # -----------
+            # Equation II
+            # -----------
+
+
+        # Find the most violating example
+        Z_max, _ = ChainFactorGraph(candidates=candidates, make_order_probs=identity, order_probs=order_probs) \
+            .MAP_only()  # type: List[int]
+
+        # MAP returns a list of candidate indices, we need to convert them back to actual molecules identifier
+        label_space_i = data[i].get_labelspace()
+        y_i_hat = tuple(label_space_i[s][Z_max[s]] for s in range(L_i))
+
+        return y_i_hat

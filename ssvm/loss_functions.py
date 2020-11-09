@@ -27,6 +27,8 @@ import numpy as np
 
 from scipy.sparse import issparse
 
+from ssvm.kernel_utils import tanimoto_kernel
+
 
 def hamming_loss(y: np.ndarray, Y: np.ndarray) -> np.ndarray:
     """
@@ -52,3 +54,17 @@ def hamming_loss(y: np.ndarray, Y: np.ndarray) -> np.ndarray:
         loss = np.sum(y != Y, axis=1) / d
 
     return loss
+
+
+def tanimoto_loss(y: np.ndarray, Y: np.ndarray) -> np.ndarray:
+    """
+
+    :param y:
+    :param Y:
+    :return:
+    """
+    assert len(y.shape) == 1
+    assert not issparse(y)
+    assert not issparse(Y)
+
+    return 1 - tanimoto_kernel(np.atleast_2d(y), np.atleast_2d(Y), shallow_input_check=True).flatten()
