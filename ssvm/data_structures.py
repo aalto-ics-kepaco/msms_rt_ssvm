@@ -435,20 +435,23 @@ class CandidateSQLiteDB(object):
 
         return df_features
 
-    def get_molecule_features_for_labels(self, molecule_ids: List[str], features: str) -> np.ndarray:
+    def get_molecule_features_by_molecule_id(self, molecule_ids: List[str], features: str) -> np.ndarray:
         """
+        Load the molecular features for the specified molecule identifiers from the database.
 
-        :param molecule_ids:
-        :param features:
-        :return:
+        :param molecule_ids: list of strings, molecule identifier
+
+        :param feature: string, identifier of the feature to load from the database.
+
+        :return: array-like, shape = (n_mol, feature_dimension), feature matrix. Each row i corresponds to molecule i.
         """
         df_features = pd.read_sql_query(
             "SELECT %s AS identifier, %s AS molecular_feature FROM molecules"
             "   INNER JOIN fingerprints_data fd ON fd.molecule = molecules.inchi"
             "   WHERE identifier IN %s" % (self.molecule_identifier, features, self._in_sql(molecule_ids)),
-            self.db)
+            self.db, index_col="identifier")
 
-        return self._get_molecule_feature_matrix(df_features, features)
+        return self._get_molecule_feature_matrix(df_features[molecule_ids], features)
 
     def get_labelspace(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> List[str]:
         """
@@ -808,26 +811,33 @@ class LabeledSequence(Sequence):
         if s is None:
             return [self.get_label_loss(label_loss_fun, features, s) for s in range(self.__len__())]
         else:
-            Y = self.get_molecule_features(s, features)
+            Y = self.get_molecule_features(features, s)
             return label_loss_fun(Y[self.get_index_of_correct_structure(s)], Y)
 
     def get_lambda_delta(self, edges: Union[EdgeView, List[Tuple[int, int]]], Y_candidates: np.ndarray, features: str,
                          mol_kernel: Callable[[np.ndarray, np.ndarray], np.ndarray]) -> np.ndarray:
         """
 
-        :param edges:
-        :param Y_candidates:
-        :param features:
-        :param mol_kernel:
+
+        :param edges: EdgeView or list of tuples, edges of the tree like graph connecting the sequence elements.
+
+        :param Y_candidates: array-like, shape = (n_cand, n_features), molecular candidate features.
+
+        :param features: string, identifier of the molecular feature used to calculate the label loss. The feature must
+            be available in the candidate database.
+
+        :param mol_kernel: Callable, kernel function to calculate molecule similarity using the molecular features.
+
         :return:
         """
-        Y_gt_sequence = self.get_molecule_features_for_labels(features)
+        # Load the molecular features for each label of the sequence
+        Y_gt_sequence = self.get_molecule_features_for_labels(features)  # shape = (L, n_features)
 
         # Extract sequence indices corresponding to the edges (\bar{s}, \bar{t})
         if isinstance(edges, EdgeView):
             edges = list(edges)
 
-        bS, bT = zip(*edges)
+        bS, bT = zip(*edges)  # each of length |E| = L - 1
 
         return mol_kernel(Y_gt_sequence[bS], Y_candidates) - mol_kernel(Y_gt_sequence[bT], Y_candidates)
 
@@ -837,7 +847,7 @@ class LabeledSequence(Sequence):
         :param features:
         :return:
         """
-        return self.candidates.get_molecule_features_for_labels(self.labels, features)
+        return self.candidates.get_molecule_features_by_molecule_id(self.labels, features)
 
 
 class SequenceSample(object):

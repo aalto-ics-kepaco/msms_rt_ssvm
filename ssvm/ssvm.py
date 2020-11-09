@@ -82,24 +82,20 @@ class DualVariables(object):
         self.C = C
         assert self.C > 0, "The regularization parameter must be positive."
         self.N = len(label_space)
-        # Store a shuffled version of the candidate sets for each example and sequence element
         self.random_state = check_random_state(random_state)
 
         self.num_init_active_vars = num_init_active_vars
         assert self.num_init_active_vars > 0
 
+        # Store a shuffled version of the candidate sets for each example and sequence element
+        self.label_space = [[self.random_state.permutation(_cand_ids).tolist() for _cand_ids in label_space[i]]
+                            for i in range(self.N)]
+
         if initialize:
-            self.label_space = []
-            for i in range(self.N):
-                self.label_space.append([self.random_state.permutation(_cand_ids).tolist()
-                                         for _cand_ids in label_space[i]])
             # Initialize the dual variables
-            self.initialize_alphas()
+            self._alphas, self._y2col, self._iy = self.initialize_alphas()
         else:
-            self.label_space = label_space
-            self._alphas = None  # type: lil_matrix
-            self._y2col = None
-            self._iy = None
+            self._alphas, self._y2col, self._iy = None, None, None
 
     def _assert_input_iy(self, i: int, y_seq: Tuple):
         """
@@ -166,9 +162,7 @@ class DualVariables(object):
         # TODO Faster verification of the label sequence correctness, we transform all candidate set lists in to sets
         # self.l_cand_ids = [for cand_ids_seq in (for cand_ids_exp in self.l_cand_ids)]
 
-        self._alphas = _alphas
-        self._y2col = _y2col
-        self._iy = _iy
+        return _alphas, _y2col, _iy
 
     def set_alphas(self, iy: List[Tuple[int, Tuple]], alphas: Union[float, List[float], np.ndarray]) -> DUALVARIABLES_T:
         """
@@ -331,7 +325,7 @@ class DualVariables(object):
             raise ValueError("Can only multiply with scalar.")
 
         if fac == 0:
-            return DualVariables(self.C, self.l_cand_ids, initialize=False).set_alphas([], [])
+            return DualVariables(self.C, self.label_space, initialize=False).set_alphas([], [])
         else:
             out = deepcopy(self)
             out._alphas *= fac
@@ -424,114 +418,6 @@ class DualVariables(object):
                     return False
 
         return True
-
-
-class DualVariablesForExample(object):
-    def __init__(self, C: float, N: int, cand_ids: List[List[str]], num_init_active_vars=1, rs=None):
-        """
-
-        :param C: scalar, regularization parameter of the Structured SVM
-
-        :param N: scalar, total number of sequences used for training
-
-        :param cand_ids: list of lists, of candidate identifiers. Each sequence element has an associated candidate set.
-            The candidates are identified by a string.
-
-            Example:
-
-                [
-                    [M1, M2, M3],
-                    [M6, M3, M5, M7],
-                    ...
-                ]
-
-        :param num_init_active_vars: scalar, number of initially active dual variables per
-
-        :param rs: None | int | instance of RandomState
-            If seed is None, return the RandomState singleton used by np.random.
-            If seed is an int, return a new RandomState instance seeded with seed.
-            If seed is already a RandomState instance, return it.
-            Otherwise raise ValueError.
-        """
-        self.C = C
-        assert self.C > 0, "The regularization parameter must be positive."
-        self.N = N
-        assert self.N > 0
-        self.l_cand_ids = cand_ids
-        self.num_init_active_vars = num_init_active_vars
-        assert self.num_init_active_vars > 0
-        self.rs = check_random_state(rs)
-
-        # Initialize the dual variables
-        self._alphas = self._get_initial_alphas()
-
-    def _get_initial_alphas(self) -> dict:
-        """
-        Return initialized dual variables.
-
-        :return: dictionary: key = label sequence, value = dual variable value
-        """
-        # Active dual variables are stored in a dictionary: key = label sequence, value = variable value
-        _alphas = {}
-
-        # Initial dual variable value ensuring feasibility
-        init_var_val = self.C / (self.N * self.num_init_active_vars)  # (C / N) / num_act = C / (N * num_act)
-
-        for i in range(self.num_init_active_vars):
-            y_seq = tuple(self.rs.choice(cand_ids) for cand_ids in self.l_cand_ids)
-            assert y_seq not in _alphas, "Oups, we sampled the same active dual variable again."
-
-            _alphas[y_seq] = init_var_val
-
-        return _alphas
-
-    def __len__(self) -> int:
-        """
-        :return: scalar, number of active dual variables
-        """
-        return len(self._alphas)
-
-    def __iter__(self) -> Iterator:
-        return self._alphas.__iter__()
-
-    def __getitem__(self, y_seq: tuple) -> float:
-        try:
-            return self._alphas[y_seq]
-        except KeyError:
-            return 0.0
-
-    def is_active(self, y_seq: tuple) -> bool:
-        return y_seq in self._alphas
-
-    def items(self) -> ItemsView[Tuple, float]:
-        return self._alphas.items()
-
-    def values(self) -> ValuesView[float]:
-        return self._alphas.values()
-
-    def keys(self) -> KeysView[Tuple]:
-        return self._alphas.keys()
-
-    def update(self, y_seq: tuple, gamma: float):
-        """
-        Update the value of a dual variable.
-
-        :param y_seq: tuple of strings, sequence of candidate indices identifying the dual variable
-        :param gamma: scalar, step-width used to update the dual variable value
-        """
-        for y_seq_active in self._alphas:
-            if y_seq == y_seq_active:
-                continue
-
-            self._alphas[y_seq_active] -= (gamma * self._alphas[y_seq_active])
-
-        try:
-            # Update an active dual variable
-            # self._alphas[y_seq] = (1 - gamma) * self._alphas[y_seq] + gamma * (self.C / self.N)
-            self._alphas[y_seq] += gamma * ((self.C / self.N) - self._alphas[y_seq])
-        except KeyError:
-            # Add a new dual active dual variable
-            self._alphas[y_seq] = gamma * (self.C / self.N)
 
 
 class _StructuredSVM(object):
@@ -1544,7 +1430,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             # -----------
             # Equation II
             # -----------
-            
+
 
         # Find the most violating example
         Z_max, _ = ChainFactorGraph(candidates=candidates, make_order_probs=identity, order_probs=order_probs) \
