@@ -37,7 +37,7 @@ from scipy.sparse import csc_matrix, lil_matrix, csr_matrix
 from tqdm import tqdm
 
 from ssvm.data_structures import SequenceSample, CandidateSetMetIdent
-from ssvm.loss_functions import hamming_loss
+from ssvm.loss_functions import hamming_loss, tanimoto_loss
 from ssvm.evaluation_tools import get_topk_performance_csifingerid
 from ssvm.factor_graphs import ChainFactorGraph, identity
 
@@ -537,7 +537,8 @@ class _StructuredSVM(object):
     Structured Support Vector Machine (SSVM) meta-class
     """
     def __init__(self, C: Union[int, float] = 1, n_epochs: int = 100, batch_size: int = 1, label_loss: str = "hamming",
-                 step_size: str = "diminishing", random_state: Optional[Union[int, np.random.RandomState]] = None):
+                 step_size: str = "diminishing", random_state: Optional[Union[int, np.random.RandomState]] = None,
+                 label_loss_features: str = "iokr_fps__positive"):
         """
         Structured Support Vector Machine (SSVM)
 
@@ -551,11 +552,14 @@ class _StructuredSVM(object):
         
         :param step_size: string, indicating which strategy is used to determine the step-size. 
 
-        :param rs: None | int | instance of RandomState
+        :param random_state: None | int | instance of RandomState
             If seed is None, return the RandomState singleton used by np.random.
             If seed is an int, return a new RandomState instance seeded with seed.
             If seed is already a RandomState instance, return it.
             Otherwise raise ValueError.
+
+        :param label_loss_features: string, identifier of the molecular feature to be used for the label loss calculation.
+
         """
         self.C = C
         self.n_epochs = n_epochs
@@ -563,11 +567,14 @@ class _StructuredSVM(object):
         self.label_loss = label_loss
         self.random_state = random_state
         self.step_size = step_size
+        self.label_loss_features = label_loss_features
 
         if self.label_loss == "hamming":
             self.label_loss_fun = hamming_loss
+        elif self.label_loss == "tanimoto_loss":
+            self.label_loss_fun = tanimoto_loss
         else:
-            raise ValueError("Invalid label loss '%s'. Choices are 'hamming'.")
+            raise ValueError("Invalid label loss '%s'. Choices are 'hamming' and 'tanimoto_loss'.")
 
         if self.step_size not in ["diminishing", "linesearch"]:
             raise ValueError("Invalid stepsize method '%s'. Choices are 'diminishing' and 'linesearch'." %
@@ -1448,21 +1455,18 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             candidates[s]["structure"] = data[i].get_labelspace(s)
 
             # Get the index of the correct structure
-            candidates[s]["index_of_correct_structure"] = candidates[s]["structure"].index(data[i].labels[s])
+            candidates[s]["index_of_correct_structure"] = data[i].get_index_of_correct_structure(s)
 
             # MS2 scores are fixed and assumed to be pre-computed
             candidates[s]["ms2_score"] = data[i].get_ms2_scores(s)
             candidates[s]["ms2_score_of_correct_structure"] = \
                 candidates[s]["ms2_score"][candidates[s]["index_of_correct_structure"]]
 
-            # Calculate the label loss for the current
-            candidates[s]["mol_feat_label_loss"] = data[i].get_molecule_features(s, self.mol_feat_label_loss)
-            candidates[s]["label_loss"] = self.label_loss_fun(
-                candidates[s]["mol_feat_label_loss"][candidates[s]["index_of_correct_structure"]],
-                candidates[s]["mol_feat_label_loss"])
+            # Calculate the label loss for the current sequence
+            candidates[s]["label_loss"] = data[i].get_label_loss(self.label_loss_fun, self.label_loss_features, s)
 
             # Calculate the node-score for 'msmsrt_scorer'
-            # (1 / L) * Loss(y_i, y_is) - (S(x_i, y_i) - S(x_i, y_is))
+            # (1 / L) * (Loss(y_i, y_is) - (S(x_i, y_i) - S(x_i, y_is)))
             candidates[s]["log_score"] = candidates[s]["label_loss"]
             candidates[s]["log_score"] -= (candidates[s]["ms2_score_of_correct_structure"] - candidates[s]["ms2_score"])
             candidates[s]["log_score"] /= L_i

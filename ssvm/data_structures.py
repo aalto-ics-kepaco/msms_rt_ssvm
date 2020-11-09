@@ -31,7 +31,7 @@ import pandas as pd
 
 from collections import OrderedDict
 from scipy.io import loadmat
-from typing import List, Tuple, Union, Dict, Optional
+from typing import List, Tuple, Union, Dict, Optional, Callable
 
 from sklearn.model_selection import GroupKFold
 from sklearn.utils.validation import check_random_state
@@ -737,6 +737,44 @@ class LabeledSequence(Sequence):
         :return:
         """
         return self.spectra, self.labels
+
+    def get_index_of_correct_structure(self, s: Optional[int] = None) -> Union[List[int], int]:
+        """
+        Return the index of candidate those molecule identifier matches the label of the label
+
+        :param s: scalar, sequence index for which the index of scores should be returned. If None, scores are returned
+            for all spectra in the sequence.
+
+        :return: scalar, first index of the label, i.e. correct molecular structure, in the label-space.
+
+        :raises: ValueError if the label could not be found in the label space
+        """
+        if s is None:
+            return [self.get_index_of_correct_structure(s) for s in range(self.__len__())]
+        else:
+            return self.get_labelspace(s).index(self.labels[s])
+
+    def get_label_loss(self, label_loss_fun: Callable[[np.ndarray, np.ndarray], np.ndarray], features: str,
+                       s: Optional[int] = None) \
+            -> Union[List[np.ndarray], np.ndarray]:
+        """
+
+
+        :param s: scalar, sequence index for which the label loss should be calculate. If None, losses are calculated
+            for all spectra in the sequence.
+
+        :param features: string, identifier of the molecular feature used to calculate the label loss. The feature must
+            be available in the candidate database.
+
+        :param label_loss_fun: Callable,
+
+        :return:
+        """
+        if s is None:
+            return [self.get_label_loss(label_loss_fun, features, s) for s in range(self.__len__())]
+        else:
+            Y = self.get_molecule_features(s, features)
+            return label_loss_fun(Y[self.get_index_of_correct_structure(s)], Y)
 
 
 class SequenceSample(object):
