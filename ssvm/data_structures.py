@@ -31,7 +31,7 @@ import pandas as pd
 
 from collections import OrderedDict
 from scipy.io import loadmat
-from typing import List, Tuple, Union, Dict, Optional, Callable
+from typing import List, Tuple, Union, Dict, Optional, Callable, Iterable
 from networkx.classes.graph import EdgeView
 
 from sklearn.model_selection import GroupKFold
@@ -409,24 +409,24 @@ class CandidateSQLiteDB(object):
         """
         return len(self.get_labelspace(spectrum))
 
-    def get_molecule_features(self, spectrum: Spectrum, feature: str, return_dataframe: bool = False) \
+    def get_molecule_features(self, spectrum: Spectrum, features: str, return_dataframe: bool = False) \
             -> Union[np.ndarray, pd.DataFrame]:
         """
         :param spectrum: matchms.Spectrum, of the sequence element to get the molecular features.
 
-        :param feature: string, identifier of the feature to load from the database.
+        :param features: string, identifier of the feature to load from the database.
 
         :param return_dataframe: boolean, indicating whether the score should be returned in a pandas.DataFrame storing
             the molecule ids and molecule features (shape = (n_samples, d_features + 1)).
 
         :return: array-like, shape = (n_cand, feature_dimension), feature matrix
         """
-        self._ensure_feature_is_available(feature)
+        self._ensure_feature_is_available(features)
 
         df_features = pd.read_sql_query(
-            self._get_molecule_feature_query(spectrum, feature, self._get_candidate_subset(spectrum)), self.db)
+            self._get_molecule_feature_query(spectrum, features, self._get_candidate_subset(spectrum)), self.db)
 
-        feature_matrix = self._get_molecule_feature_matrix(df_features, feature)
+        feature_matrix = self._get_molecule_feature_matrix(df_features, features)
 
         if return_dataframe:
             df_features = pd.concat((df_features["identifier"], pd.DataFrame(feature_matrix)), axis=1)
@@ -435,29 +435,47 @@ class CandidateSQLiteDB(object):
 
         return df_features
 
-    def get_molecule_features_by_molecule_id(self, molecule_ids: List[str], features: str) -> np.ndarray:
+    def get_molecule_features_by_molecule_id(self, molecule_ids: Union[List[str], Tuple[str, ...]], features: str,
+                                             return_dataframe: bool = False) -> Union[pd.DataFrame, np.ndarray]:
         """
         Load the molecular features for the specified molecule identifiers from the database.
 
-        :param molecule_ids: list of strings, molecule identifier
+        :param molecule_ids: list or tuple of strings, molecule identifier
 
-        :param feature: string, identifier of the feature to load from the database.
+        :param features: string, molecular feature identifier
+
+        :param return_dataframe: boolean, indicating whether the score should be returned in a pandas.DataFrame storing
+            the molecule ids and molecule features (shape = (n_samples, d_features + 1)).
 
         :return: array-like, shape = (n_mol, feature_dimension), feature matrix. Each row i corresponds to molecule i.
         """
+        self._ensure_feature_is_available(features)
+
         df_features = pd.read_sql_query(
             "SELECT %s AS identifier, %s AS molecular_feature FROM molecules"
             "   INNER JOIN fingerprints_data fd ON fd.molecule = molecules.inchi"
             "   WHERE identifier IN %s" % (self.molecule_identifier, features, self._in_sql(molecule_ids)),
             self.db, index_col="identifier")
 
-        return self._get_molecule_feature_matrix(df_features[molecule_ids], features)
+        # Ensure feature rows have the same order as the _input_ molecule identifier
+        df_features = df_features.loc[molecule_ids].reset_index()
+
+        feature_matrix = self._get_molecule_feature_matrix(df_features, features)
+
+        if return_dataframe:
+            df_features = pd.concat((df_features["identifier"], pd.DataFrame(feature_matrix)), axis=1)
+        else:
+            df_features = feature_matrix
+
+        return df_features
 
     def get_labelspace(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> List[str]:
         """
         Returns the label-space for the given spectrum.
 
         :param spectrum: matchms.Spectrum, of the sequence element to get the label space.
+
+        :param candidate_subset:
 
         :return: list of strings, molecule identifiers for the given spectrum.
         """
@@ -498,7 +516,7 @@ class CandidateSQLiteDB(object):
         return df_scores
 
     @staticmethod
-    def _in_sql(li) -> str:
+    def _in_sql(li: Union[List[str], Tuple[str, ...]]) -> str:
         """
         Concatenates a list of strings to a SQLite ready string that can be used in combination
         with the 'in' statement.
@@ -684,15 +702,27 @@ class Sequence(object):
         """
         return self.L
 
-    def get_molecule_features(self, features: str, s: Optional[int] = None) -> Union[List[np.ndarray], np.ndarray]:
-        """
+    def get_retention_time(self, s: Optional[int] = None):
+        if s is None:
+            return [self.get_retention_time(s) for s in range(self.__len__())]
+        else:
+            return self._rts[s]
 
-        :param s:
-        :param features:
-        :return:
+    def get_molecule_features_for_candidates(self, features: str, s: Optional[int] = None) \
+            -> Union[List[np.ndarray], np.ndarray]:
+        """
+        Returns the molecular features for all candidates of the spectra in the sequence.
+
+        :param s: scalar, index of the spectrum for which candidate features should be loaded. If None, features for all
+            candidates are loaded.
+
+        :param features: string, identifier of the feature to load from the database.
+
+        :return: array-like or list of array-likes, (list of) feature matrix (matrices)
+            with shape = (n_cand_s, feature_dimension)
         """
         if s is None:
-            return [self.get_molecule_features(features, s) for s in range(self.__len__())]
+            return [self.get_molecule_features_for_candidates(features, s) for s in range(self.__len__())]
         else:
             return self.candidates.get_molecule_features(self.spectra[s], features)
 
@@ -811,35 +841,8 @@ class LabeledSequence(Sequence):
         if s is None:
             return [self.get_label_loss(label_loss_fun, features, s) for s in range(self.__len__())]
         else:
-            Y = self.get_molecule_features(features, s)
+            Y = self.get_molecule_features_for_candidates(features, s)
             return label_loss_fun(Y[self.get_index_of_correct_structure(s)], Y)
-
-    def get_lambda_delta(self, edges: Union[EdgeView, List[Tuple[int, int]]], Y_candidates: np.ndarray, features: str,
-                         mol_kernel: Callable[[np.ndarray, np.ndarray], np.ndarray]) -> np.ndarray:
-        """
-
-
-        :param edges: EdgeView or list of tuples, edges of the tree like graph connecting the sequence elements.
-
-        :param Y_candidates: array-like, shape = (n_cand, n_features), molecular candidate features.
-
-        :param features: string, identifier of the molecular feature used to calculate the label loss. The feature must
-            be available in the candidate database.
-
-        :param mol_kernel: Callable, kernel function to calculate molecule similarity using the molecular features.
-
-        :return:
-        """
-        # Load the molecular features for each label of the sequence
-        Y_gt_sequence = self.get_molecule_features_for_labels(features)  # shape = (L, n_features)
-
-        # Extract sequence indices corresponding to the edges (\bar{s}, \bar{t})
-        if isinstance(edges, EdgeView):
-            edges = list(edges)
-
-        bS, bT = zip(*edges)  # each of length |E| = L - 1
-
-        return mol_kernel(Y_gt_sequence[bS], Y_candidates) - mol_kernel(Y_gt_sequence[bT], Y_candidates)
 
     def get_molecule_features_for_labels(self, features: str) -> np.ndarray:
         """

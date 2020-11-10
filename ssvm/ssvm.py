@@ -324,7 +324,7 @@ class DualVariables(object):
             i = np.arange(self.N)
         else:
             i = np.atleast_1d(i)
-            
+
         iy = []
         a = []
         for _i in i:
@@ -1391,6 +1391,9 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         for s in range(L_i):
             candidates[s] = {}
 
+            # Get retention time
+            candidates[s]["retention_time"] = data[i].get_retention_time(s)
+
             # Get the candidate identifiers
             candidates[s]["structure"] = data[i].get_labelspace(s)
 
@@ -1412,30 +1415,45 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             candidates[s]["log_score"] = (candidates[s]["label_loss"] - candidates[s]["ms2_score_loss"]) / L_i
 
             # Load the candidate molecule feature representations used for the retention order prediction
-            candidates[s]["mol_feat_retention_order"] = data[i].get_molecule_features(self.mol_feat_retention_order, s)
+            candidates[s]["mol_feat_retention_order"] = data[i].get_molecule_features_for_candidates(
+                self.mol_feat_retention_order, s)
 
         # Calculate the transition matrices encoding the SSVM's prediction on the candidate pairs.
-        sign_delta = np.concatenate((data[j].get_sign_delta_t(graph_set[j][0].edges)) for j in range(len(data)))
+        l_sign_delta = [data[j].get_sign_delta_t(graph_set[j][0].edges) for j in range(N)]
+        sign_delta = np.concatenate(l_sign_delta)
+
+        l_Y_gt_sequence = [data[j].get_molecule_features_for_labels(self.mol_feat_retention_order) for j in range(N)]
+        l_Y_act_sequence = []
+        l_A_Sj = []
+        for j in range(N):
+            Sj, A_Sj = alphas.get_blocks(j)
+            _, Sj = zip(*Sj)  # type: List[Tuple]
+            l_A_Sj.append(np.array(A_Sj))
+
+            l_Y_act_sequence.append([
+                data.candidates.get_molecule_features_by_molecule_id(Sj[s], self.mol_feat_retention_order)
+                for s in range(len(data[j]))
+            ])
 
         order_probs = dict()
         for s, t in graph_set[i][0].edges:
             order_probs[s] = {t: dict()}
-            order_probs[s][t]["log_score"] = ...
+
+            Y_candidates_s = candidates[s]["mol_feat_retention_order"]
+            Y_candidates_t = candidates[t]["mol_feat_retention_order"]
 
             # -----------
             # Equation  I
             # -----------
-            Y_candidates_s = candidates[s]["mol_feat_retention_order"]
             lambda_delta_s = np.vstack(
-                (data[j].get_lambda_delta(
-                    graph_set[j][0].edges, Y_candidates_s, self.mol_feat_retention_order, self.mol_kernel))
+                (StructuredSVMSequencesFixedMS2.get_lambda_delta(
+                    l_Y_gt_sequence[j], Y_candidates_s, graph_set[j][0].edges, self.mol_kernel))
                 for j in range(len(data))
             )
 
-            Y_candidates_t = candidates[t]["mol_feat_retention_order"]
             lambda_delta_t = np.vstack(
-                (data[j].get_lambda_delta(
-                    graph_set[j][0].edges, Y_candidates_t, self.mol_feat_retention_order, self.mol_kernel))
+                (StructuredSVMSequencesFixedMS2.get_lambda_delta(
+                    l_Y_gt_sequence[j], Y_candidates_t, graph_set[j][0].edges, self.mol_kernel))
                 for j in range(len(data))
             )
 
@@ -1444,8 +1462,21 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             # -----------
             # Equation II
             # -----------
-            alphas.get_blocks(i)
+            II = np.empty((N, len(Y_candidates_s), len(Y_candidates_t)))
+            for j in range(N):
+                lambda_delta_s = np.hstack(StructuredSVMSequencesFixedMS2.get_lambda_delta(
+                    l_Y_act_sequence[j], Y_candidates_s, graph_set[j][0].edges, self.mol_kernel))
 
+                lambda_delta_t = np.hstack(StructuredSVMSequencesFixedMS2.get_lambda_delta(
+                    l_Y_act_sequence[j], Y_candidates_t, graph_set[j][0].edges, self.mol_kernel))
+
+                II[j] = (l_sign_delta[j] @ lambda_delta_s @ l_A_Sj[j])[:, np.newaxis] \
+                        - (l_sign_delta[j] @ lambda_delta_t @ l_A_Sj[j])[np.newaxis, :]
+
+            II = np.sum(II, axis=0)
+
+            order_probs[s][t]["log_score"] = \
+                np.sign(candidates[s]["retention_time"] - candidates[t]["retention_time"]) * (I - II)
 
         # Find the most violating example
         Z_max, _ = ChainFactorGraph(candidates=candidates, make_order_probs=identity, order_probs=order_probs) \
@@ -1456,3 +1487,33 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         y_i_hat = tuple(label_space_i[s][Z_max[s]] for s in range(L_i))
 
         return y_i_hat
+
+    @staticmethod
+    def get_lambda_delta(Y_sequences: Union[np.ndarray, List[np.ndarray]],
+                         Y_candidates: np.ndarray,
+                         edges: Union[nx.classes.graph.EdgeView, List[Tuple[int, int]]],
+                         mol_kernel: Callable[[np.ndarray, np.ndarray], np.ndarray]) -> List[np.ndarray]:
+        """
+
+        :param Y_sequences: list of array-like, length = (n_sequences, ), array-shape = (L, feature_dimension), list of
+            matrices storing the candidate features associated with the active labels along the sequences, e.g. from an
+            example sequence.
+
+        :param Y_candidates: array-like, shape = (|Sigma_i|, feature_dimension), feature matrix
+        :param edges:
+        :param mol_kernel:
+        :return:
+        """
+        if not isinstance(Y_sequences, list):
+            Y_sequences = [Y_sequences]
+
+        # Extract sequence indices corresponding to the edges (\bar{s}, \bar{t})
+        if isinstance(edges, nx.classes.graph.EdgeView):
+            edges = list(edges)
+
+        bS, bT = zip(*edges)  # each of length |E| = L - 1
+
+        return [
+            mol_kernel(Y_sequences[a][bS], Y_candidates) - mol_kernel(Y_sequences[a][bT], Y_candidates)
+            for a in range(len(Y_sequences))
+        ]
