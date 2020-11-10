@@ -162,6 +162,9 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         np.testing.assert_equal(feature_matrix, df_features.iloc[:, 1:].values)
         self.assertListEqual(molecule_ids, df_features["identifier"].to_list())
 
+        feature_matrix_rev = candidates.get_molecule_features_by_molecule_id(molecule_ids[::-1], "iokr_fps__positive")
+        self.assertFalse(np.array_equal(feature_matrix, feature_matrix_rev))
+
     def test_all_outputs_are_sorted_equally(self):
         # ----------
         # SPECTRUM 1
