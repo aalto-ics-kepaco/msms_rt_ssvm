@@ -307,10 +307,24 @@ class DualVariables(object):
 
         return self._iy[c]
 
-    def get_blocks(self, i: Union[List[int], np.ndarray, int]) -> Tuple[List[Tuple[int, Tuple]], List[float]]:
-        i = np.atleast_1d(i)
-        assert np.all(np.isin(i, np.arange(self.N)))
+    def get_blocks(self, i: Optional[Union[List[int], np.ndarray, int]] = None) \
+            -> Tuple[List[Tuple[int, Tuple]], List[float]]:
+        """
+        Returns the active sequences and dual variable values for the requested example(s).
 
+        :param i: scalar or array-like, example sequence index or indices. If None, the active sequences and dual values
+            for all examples are returned.
+
+        :return: tuple (
+            list of tuples, (example index, label sequence),
+            list of scalars, associated dual variable values
+        )
+        """
+        if i is None:
+            i = np.arange(self.N)
+        else:
+            i = np.atleast_1d(i)
+            
         iy = []
         a = []
         for _i in i:
@@ -1430,6 +1444,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             # -----------
             # Equation II
             # -----------
+            alphas.get_blocks(i)
 
 
         # Find the most violating example
