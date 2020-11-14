@@ -29,10 +29,10 @@ import numpy as np
 import itertools as it
 import time
 
-from joblib import Parallel, delayed
 from scipy.sparse import csr_matrix
 
-from ssvm.kernel_utils import minmax_kernel, tanimoto_kernel, check_input, generalized_tanimoto_kernel
+from ssvm.kernel_utils import minmax_kernel, tanimoto_kernel, check_input
+from ssvm.kernel_utils import generalized_tanimoto_kernel, generalized_tanimoto_kernel_OLD
 
 
 class TestCheckInput(unittest.TestCase):
@@ -426,13 +426,15 @@ class TestGeneralizedTanimotoKernel(unittest.TestCase):
 
         start = time.time()
         _ = generalized_tanimoto_kernel(S1, S2, shallow_input_check=True, n_jobs=1)
-        print("njobs=1: %.5fs" % (time.time() - start))
+        print("NEW -- njobs=1: %.5fs" % (time.time() - start))
 
-        S1 = np.random.RandomState(3).randn(n1, d)
-        S2 = np.random.RandomState(4).randn(n2, d)
         start = time.time()
         _ = generalized_tanimoto_kernel(S1, S2, shallow_input_check=True, n_jobs=4)
-        print("njobs=4: %.5fs" % (time.time() - start))
+        print("NEW -- njobs=4: %.5fs" % (time.time() - start))
+
+        start = time.time()
+        _ = generalized_tanimoto_kernel_OLD(S1, S2, shallow_input_check=True)
+        print("OLD: %.5fs" % (time.time() - start))
 
 
 if __name__ == '__main__':

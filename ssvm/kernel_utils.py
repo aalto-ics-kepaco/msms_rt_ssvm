@@ -240,26 +240,24 @@ def generalized_tanimoto_kernel(X, Y=None, shallow_input_check=False, n_jobs=1):
     return K_gtan
 
 
-def get_kernel(s1, s2, kernel, raw_data_db, cache_db=None):
+def generalized_tanimoto_kernel_OLD(X, Y=None, shallow_input_check=False):
     """
-    Calculate the kernel values for all elements in S1 x S2
+    Generalized tanimoto kernel function
 
-    :param s1:
-    :param kernel:
-    :param raw_data_db:
-    :param cache_db:
+    :param X:
+    :param Y:
     :return:
     """
-    K = np.full((len(s1), len(s2)), fill_value=np.nan)
-    f_desc = raw_data_db.get_f_desc()
+    X, Y, is_sparse = check_input(X, Y, datatype="real", shallow=shallow_input_check)
 
-    for idx, (y_1, y_2) in enumerate(it.product(s1, s2)):
-        i, j = np.unravel_index(idx, shape=K.shape)
-        try:
-            K[i, j] = cache_db(y_1, y_2, kernel, f_desc)
-        except NotInCacheDBError:
-            f_1 = raw_data_db(y_1)
-            f_2 = raw_data_db(y_2)
-            K[i, j] = kernel(f_1, f_2)
+    if is_sparse:
+        raise NotImplementedError("Sparse matrices not supported.")
 
-    return K
+    XL1 = np.sum(np.abs(X), axis=1)[:, np.newaxis]
+    YL1 = np.sum(np.abs(Y), axis=1)[:, np.newaxis]
+
+    XmYL1 = manhattan_distances(X, Y)
+
+    K_gtan = (XL1 + YL1.T - XmYL1) / (XL1 + YL1.T + XmYL1)
+
+    return K_gtan
