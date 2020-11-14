@@ -28,7 +28,7 @@ import numpy as np
 import scipy.sparse as sp
 import itertools as it
 
-from sklearn.metrics.pairwise import manhattan_distances
+from sklearn.metrics.pairwise import manhattan_distances, pairwise_distances
 from joblib import delayed, Parallel
 
 """
@@ -217,7 +217,30 @@ def tanimoto_kernel(X, Y=None, shallow_input_check=False):
     return K_tan
 
 
-def generalized_tanimoto_kernel(X, Y=None, shallow_input_check=False):
+def generalized_tanimoto_kernel(X, Y=None, shallow_input_check=False, n_jobs=1):
+    """
+    Generalized tanimoto kernel function
+
+    :param X:
+    :param Y:
+    :return:
+    """
+    X, Y, is_sparse = check_input(X, Y, datatype="real", shallow=shallow_input_check)
+
+    if is_sparse:
+        raise NotImplementedError("Sparse matrices not supported.")
+
+    XL1 = np.sum(np.abs(X), axis=1)[:, np.newaxis]
+    YL1 = np.sum(np.abs(Y), axis=1)[:, np.newaxis]
+
+    XmYL1 = pairwise_distances(X, Y, metric="manhattan", n_jobs=n_jobs)
+
+    K_gtan = (XL1 + YL1.T - XmYL1) / (XL1 + YL1.T + XmYL1)
+
+    return K_gtan
+
+
+def generalized_tanimoto_kernel_OLD(X, Y=None, shallow_input_check=False):
     """
     Generalized tanimoto kernel function
 
