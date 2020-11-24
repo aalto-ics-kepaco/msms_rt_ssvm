@@ -464,4 +464,32 @@ class TestVectorization(unittest.TestCase):
         print("B:\t%.5fs" % (time.time() - start))
         self.assertEqual((nSs, nSt), res_b.shape)
 
+    def test_difference_vectors(self):
+        n_edges = 50  # |E_j|
+        n_active = 20  # |S_j|
+        n_molecules = 100  # n_molecules
 
+        n_rep = 50
+
+        t_loop = 0.0
+        t_einsum = 0.0
+
+        for _ in range(n_rep):
+            sign_delta_j = np.random.rand(n_edges)  # shape = (|E_j|, )
+            A_j = np.random.rand(n_active)  # shape = (|S_j|, )
+            L_delta = np.random.rand(n_edges, n_molecules, n_active)  # shape = (|E_j|, n_molecules, |S_j|)
+
+            start = time.time()
+            II_j_ref = np.zeros((n_molecules, ))
+            for n in range(n_molecules):
+                II_j_ref[n] = sign_delta_j @ L_delta[:, n, :] @ A_j
+            t_loop += time.time() - start
+
+            start = time.time()
+            II_j = np.einsum("i,ikj,j", sign_delta_j, L_delta, A_j)
+            t_einsum += time.time() - start
+
+            np.testing.assert_allclose(II_j_ref, II_j)
+
+        print("Loop: %.3fs" % (t_loop / n_rep))
+        print("Einsum: %.3fs" % (t_einsum / n_rep))
