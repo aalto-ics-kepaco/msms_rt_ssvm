@@ -28,6 +28,7 @@ import sqlite3
 import logging
 import numpy as np
 import pandas as pd
+import networkx as nx
 
 from collections import OrderedDict
 from scipy.io import loadmat
@@ -771,16 +772,13 @@ class Sequence(object):
 
         return ms2_scores
 
-    def get_sign_delta_t(self, edges: Union[EdgeView, List[Tuple[int, int]]]) -> np.ndarray:
+    def get_sign_delta_t(self, G: nx.Graph) -> np.ndarray:
         """
+        :param G: networkx.Graph, representing the MRF or an tree-like approximation of it.
 
-        :param edges:
-        :return:
+        :return: array-like, shape = (|E|,), sign of the retention time differences for all edges.
         """
-        if isinstance(edges, EdgeView):
-            edges = list(edges)
-
-        return self._rt_diff_signs[edges]
+        return self._rt_diff_signs[list(G.edges)]
 
 
 class LabeledSequence(Sequence):

@@ -1390,23 +1390,15 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         :param Y: array-like, shape = (n_molecules, n_features), molecular feature vectors to calculate the preference
             values for.
 
-        :param alphas: DualVariables, dual variables of the SSVM
-
-        :param data: SequenceSample
-
-        :param edges:
-
         :return: array-like, shape = (n_molecules, ), preference values for all molecules.
         """
-        edges = [G_j.edges for G_j in self.training_graphs_[0]]
-
         # Note: L_i = |E_j|
         N = len(self.training_data_)
 
         # List of the retention time differences for all examples j over the spanning trees
         l_sign_delta = [
             # sign(delta t_j)
-            self.training_data_[j].get_sign_delta_t(edges[j]) for j in range(N)  # shape = (|E_j|, )
+            self.training_data_[j].get_sign_delta_t(self.training_graphs_[0][j]) for j in range(N)  # shape = (|E_j|, )
         ]
         sign_delta = np.concatenate(l_sign_delta)  # shape = (sum_j |E_j|, )
 
@@ -1417,7 +1409,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         ]
 
         lambda_delta = np.vstack(
-            StructuredSVMSequencesFixedMS2._get_lambda_delta(l_Y_gt_sequence[j], Y, edges[j], self.mol_kernel)
+            StructuredSVMSequencesFixedMS2._get_lambda_delta(l_Y_gt_sequence[j], Y, self.training_graphs_[0][j],
+                                                             self.mol_kernel)
             for j in range(N)
             # shape = (|E_j|, n_mol), with n_mol = Y.shape[0]
         )
@@ -1445,60 +1438,98 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         II = np.zeros((len(Y), ))  # shape = (n_molecules, )
         for j in range(N):
             lambda_delta = np.dstack(
-                [StructuredSVMSequencesFixedMS2._get_lambda_delta(Y_sequence, Y, edges[j], self.mol_kernel)
+                [StructuredSVMSequencesFixedMS2._get_lambda_delta(Y_sequence, Y, self.training_graphs_[0][j],
+                                                                  self.mol_kernel)
                  for Y_sequence in l_Y_act_sequence[j]])  # shape = (|E_j|, n_molecules, |S_j|)
 
             II += np.einsum("i,ikj,j", l_sign_delta[j], lambda_delta, l_A_Sj[j])
 
         return I - II
 
-    def inference(self, data_i: Union[Sequence, LabeledSequence], G_i: List[nx.Graph], loss_augmented: bool = False) \
-            -> Tuple:
+    def inference(self, sequence: Union[Sequence, LabeledSequence], G: Optional[List[nx.Graph]] = None,
+                  loss_augmented: bool = False, n_trees: Optional[int] = None) -> Tuple[str, ...]:
         """
-        Find the most violating example by solving the MAP problem. Forward-pass using max marginals.
+        Infer the most likely label sequence for the given (MS, RT)-sequence.
 
-        :param alphas: DualVariables, dual variables
-        
-        :param data: SequenceSample, set of training sequences. All needed information, such as features, labels and
-            potential label sequences, are accessible through this object.
+        :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
 
-        :param i: scalar, example index for which the sub-problem should be solved.
-        
-        :return:
+        :param G: list of networkx.Graphs or None, list of tree-like graphs used to approximate the MRT associated with
+            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'n_trees')
+
+        :param loss_augmented: boolean, indicating whether the node potentials should be augmented with the label loss.
+            Set this option to True during model parameter estimation.
+
+        :param n_trees: scalar or None, number of spanning trees used to approximate the MRF.
+
+        :return: tuple, length = L, most likely label sequence
         """
-        node_potentials, edge_potentials = self._get_node_and_edge_potentials(data_i, G_i, loss_augmented)
+        if G is None:
+            # Get a list of random spanning trees used to approximate the MRF associated with the provided sequence.
+            assert n_trees is not None
+
+            if n_trees > 1:
+                raise NotImplementedError("Currently only one tree per sequence allowed.")
+
+            G = [get_random_spanning_tree(sequence, random_state=tree) for tree in range(n_trees)]
+
+        # Calculate the node- and edge-potentials
+        node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, G[0], loss_augmented)
 
         # Find the MAP estimate
-        return self._inference(data_i, node_potentials, edge_potentials, G_i[0])
+        return self._inference(sequence, node_potentials, edge_potentials, G[0])
 
-    def marginals(self, data_i: Union[Sequence, LabeledSequence], G_i: List[nx.Graph]):
+    def max_marginals(self, sequence: Union[Sequence, LabeledSequence], G: Optional[List[nx.Graph]] = None,
+                      n_trees: Optional[int] = None):
         """
+        Calculate the max-marginals for all possible label assignments of the given (MS, RT)-sequence.
 
-        :param data_i:
-        :param G_i:
-        :return:
+        :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
+
+        :param G: list of networkx.Graphs or None, list of tree-like graphs used to approximate the MRT associated with
+            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'n_trees')
+
+        :param n_trees: scalar or None, number of spanning trees used to approximate the MRF.
+
+        :return: dictionary,
         """
-        node_potentials, edge_potentials = self._get_node_and_edge_potentials(data_i, G_i)
+        if G is None:
+            # Get a list of random spanning trees used to approximate the MRF associated with the provided sequence.
+            assert n_trees is not None
 
-        # Calcualte the max-marginals
-        return self._marginals(data_i, node_potentials, edge_potentials, G_i[0], normalize=True)
+            if n_trees > 1:
+                raise NotImplementedError("Currently only one tree per sequence allowed.")
 
-    def _get_node_and_edge_potentials(self, data_i: Union[Sequence, LabeledSequence], G_i: List[nx.Graph],
+            G = [get_random_spanning_tree(sequence, random_state=tree) for tree in range(n_trees)]
+
+        node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, G[0])
+
+        # Calculate the max-max_marginals
+        return self._max_marginals(sequence, node_potentials, edge_potentials, G[0], normalize=True)
+
+    def _get_node_and_edge_potentials(self, sequence: Union[Sequence, LabeledSequence], G_i: nx.Graph,
                                       loss_augmented: bool = False):
         """
 
-        :param data_i:
-        :param G_i:
-        :param loss_augmented:
-        :return:
+        :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
+
+        :param G: networkx.Graph, random spanning tree of the MRF defined over the (MS, RT)-sequence.
+
+        :param loss_augmented: boolean, indicating whether the node potentials should be augmented with the label loss.
+            Set this option to True during model parameter estimation.
+
+        :return: tuple (
+            OrderedDict: key = nodes of G, values {"log_score": node scores, "n_cand": size of the label space},
+            nested dictionary: key = nodes of G, (nested) key = nodes of G (<- edges): (nested) values: transition
+                matrices
+        )
         """
         # Calculate the node potentials. If needed, augment the MS scores with the label loss
         node_potentials = OrderedDict()
-        for s in G_i[0].nodes:  # V
-            _score = data_i.get_ms2_scores(s)  # S(x_i, y)
+        for s in G_i.nodes:  # V
+            _score = sequence.get_ms2_scores(s)  # S(x_i, y)
 
             if loss_augmented:
-                _score += data_i.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s) / len(data_i)
+                _score += sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s) / len(sequence)
                 # Delta_i(y)
 
             node_potentials[s] = {"log_score": _score, "n_cand": len(_score)}
@@ -1507,18 +1538,32 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         edge_potentials = {s: {t: {"log_score":
             self._get_edge_potentials(
                 # Retention times
-                data_i.get_retention_time(s),
-                data_i.get_retention_time(t),
+                sequence.get_retention_time(s),
+                sequence.get_retention_time(t),
                 # Molecule features used for the retention order prediction
-                data_i.get_molecule_features_for_candidates(self.mol_feat_retention_order, s),
-                data_i.get_molecule_features_for_candidates(self.mol_feat_retention_order, t))}}
-            for s, t in G_i[0].edges}  # E
+                sequence.get_molecule_features_for_candidates(self.mol_feat_retention_order, s),
+                sequence.get_molecule_features_for_candidates(self.mol_feat_retention_order, t))}}
+            for s, t in G_i.edges}  # E
 
         return node_potentials, edge_potentials
 
     def _get_edge_potentials(self, rt_s: float, rt_t: float, Y_s: np.ndarray, Y_t: np.ndarray):
         """
-        Predict the transition matrix for the edge = (s, t)
+        Predict the transition matrix M (n_cand_s x n_cand_t) for the edge = (s, t) with:
+
+            M[y_s, y_t] = < w, Psi((rt_s, rt_t), (y_s, y_t)) for all y_s in Y_s and y_t in Y_t
+
+        :param rt_s: scalar, retention time of node s, i.e. RT_s
+
+        :param rt_t: scalar, retention time of node t, i.e. RT_t
+
+        :param Y_s: array-like, shape = (n_cand_s, n_features), row-wise feature matrix for all labels associated with
+            node s
+
+        :param Y_t: array-like, shape = (n_cand_t, n_features), row-wise feature matrix for all labels associated with
+            node t
+
+        :return: array-like, shape = (n_cand_s, n_cand_t), transition matrix for edge (s, t)
         """
         pref_scores_s = self.predict_molecule_preference_values(Y_s)
         # shape = (n_mol_s, )
@@ -1529,58 +1574,55 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         return np.sign(rt_s - rt_t) * (pref_scores_s[:, np.newaxis] - pref_scores_t[np.newaxis, :])
 
     @staticmethod
-    def _marginals(data_i: Union[Sequence, LabeledSequence], node_potentials: OrderedDict, edge_potentials: Dict,
-                   G_i: nx.Graph, normalize=True):
+    def _max_marginals(sequence: Union[Sequence, LabeledSequence], node_potentials: OrderedDict, edge_potentials: Dict,
+                       G: nx.Graph, normalize=True):
         """
-        Max-marginals
+        Max-max_marginals
         """
-        # Calculate the normalized max-marginals
-        marg = TreeFactorGraph(candidates=node_potentials, var_conn_graph=G_i, make_order_probs=None,
+        # Calculate the normalized max-max_marginals
+        marg = TreeFactorGraph(candidates=node_potentials, var_conn_graph=G, make_order_probs=None,
                                order_probs=edge_potentials) \
             .get_max_marginals(normalize)
 
-        label_space_i = data_i.get_labelspace()
-        return {s: {"label": label_space_i[s], "marg": marg[s]} for s in G_i.nodes}
+        label_space_i = sequence.get_labelspace()
+        return {s: {"label": label_space_i[s], "marg": marg[s]} for s in G.nodes}
 
     @staticmethod
-    def _inference(data_i: Union[Sequence, LabeledSequence], node_potentials: OrderedDict, edge_potentials: Dict,
-                   G_i: nx.Graph) -> Tuple:
+    def _inference(sequence: Union[Sequence, LabeledSequence], node_potentials: OrderedDict, edge_potentials: Dict,
+                   G: nx.Graph) -> Tuple:
         """
         MAP inference
         """
         # MAP inference (find most likely label sequence) for the given node- and edge-potentials
-        Z_max, _ = TreeFactorGraph(candidates=node_potentials, var_conn_graph=G_i, make_order_probs=None,
+        Z_max, _ = TreeFactorGraph(candidates=node_potentials, var_conn_graph=G, make_order_probs=None,
                                    order_probs=edge_potentials) \
             .MAP_only()  # type: List[int]
 
         # MAP returns a list of candidate indices, we need to convert them back to actual molecules identifier
-        label_space_i = data_i.get_labelspace()
-        y_i_hat = tuple(label_space_i[s][Z_max[s]] for s in G_i.nodes)
+        label_space_i = sequence.get_labelspace()
+        y_i_hat = tuple(label_space_i[s][Z_max[s]] for s in G.nodes)
 
         return y_i_hat
 
     @staticmethod
-    def _get_lambda_delta(Y_sequence: np.ndarray, Y_candidates: np.ndarray,
-                          edges: Union[nx.classes.graph.EdgeView, List[Tuple[int, int]]],
+    def _get_lambda_delta(Y_sequence: np.ndarray, Y_candidates: np.ndarray, G: nx.Graph,
                           mol_kernel: Callable[[np.ndarray, np.ndarray], np.ndarray]) -> List[np.ndarray]:
         """
+        Calculate the 'Lambda_Delta(y, y_s)' term, with shape = (L - 1, ) for all y_s in Y_candidates.
 
-        :param Y_sequence: array-like, shape = (L, n_features), features associated with the labels along a label
-            sequence
+        :param Y_sequence: array-like, shape = (L, n_features), molecule features associated with the
 
-        :param Y_candidates: array-like, shape = (n_molecules, feature_dimension), feature matrix
+        :param Y_candidates: array-like, shape = (n_candidates, n_features), feature matrix
 
-        :param edges:
+        :param G: networkx.Graph, spanning tree defined over the MRF associated with the label sequence.
 
-        :param mol_kernel:
+        :param mol_kernel: callable, function that takes in two feature row-matrices as input and outputs the kernel
+            similarity matrix.
 
-        :return: list of array-like, length = (n_sequences, ), array-shape = (L, n_molecules)
+        :return: array-shape = (L - 1, n_molecules)
         """
+        Ky = mol_kernel(Y_sequence, Y_candidates)  # shape = (L, n_candidates)
 
-        # Extract sequence indices corresponding to the edges (\bar{s}, \bar{t})
-        if isinstance(edges, nx.classes.graph.EdgeView):
-            edges = list(edges)
+        bS, bT = zip(*G.edges)  # each of length |E| = L - 1
 
-        bS, bT = zip(*edges)  # each of length |E| = L - 1
-
-        return mol_kernel(Y_sequence[bS], Y_candidates) - mol_kernel(Y_sequence[bT], Y_candidates)
+        return Ky[list(bS)] - Ky[list(bT)]
