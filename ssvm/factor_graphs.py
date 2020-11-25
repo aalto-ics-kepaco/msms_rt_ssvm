@@ -61,7 +61,7 @@ def get_random_spanning_tree(y: Sequence, random_state: Optional[Union[int, np.r
     # Add variable nodes and edges with random weight
     var = list(range(len(y)))
     for s in var:
-        var_conn_graph.add_node(s, retention_time=y.get_retention_time(s)["retention_time"])
+        var_conn_graph.add_node(s, retention_time=y.get_retention_time(s))
 
     for s, t in it.combinations(var, 2):
         rt_s, rt_t = var_conn_graph.nodes[s]["retention_time"], var_conn_graph.nodes[t]["retention_time"]

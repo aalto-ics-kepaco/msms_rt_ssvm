@@ -763,7 +763,7 @@ class Sequence(object):
             all spectra in the sequence.
         """
         if self.ms2scorer is None:
-            ValueError("No MS2 scorer specified!")
+            raise ValueError("No MS2 scorer specified!")
 
         if s is None:
             ms2_scores = [self.get_ms2_scores(s) for s in range(self.__len__())]
@@ -786,14 +786,15 @@ class LabeledSequence(Sequence):
     """
     Class representing the a _labeled_ (MS, RT)-sequence (x, t, y) with associated molecular candidate set C.
     """
-    def __init__(self, spectra: List[Spectrum], labels: List[str], candidates: CandidateSQLiteDB):
+    def __init__(self, spectra: List[Spectrum], labels: List[str], candidates: CandidateSQLiteDB,
+                 ms2scorer: Optional[str] = None):
         """
         :param spectra: list of strings, spectrum-ids belonging sequence
         :param labels: list of strings, ground truth molecule identifiers belonging to the spectra of the sequence
         """
         self.labels = labels
 
-        super(LabeledSequence, self).__init__(spectra=spectra, candidates=candidates)
+        super(LabeledSequence, self).__init__(spectra=spectra, candidates=candidates, ms2scorer=ms2scorer)
 
     def as_Xy_input(self) -> Tuple[List[Spectrum], List[str]]:
         """
@@ -857,7 +858,8 @@ class SequenceSample(object):
     Class representing a sequence sample.
     """
     def __init__(self, spectra: List[Spectrum], labels: List[str], candidates: CandidateSQLiteDB, N: int, L_min: int,
-                 L_max: Optional[int] = None, random_state: Optional[int] = None, sort_sequence_by_rt=False):
+                 L_max: Optional[int] = None, random_state: Optional[int] = None, sort_sequence_by_rt: bool = False, 
+                 ms2scorer: Optional[str] = None):
         """
         :param data: list of matchms.Spectrum, spectra to sample sequences from
 
@@ -881,6 +883,7 @@ class SequenceSample(object):
         self.L_max = L_max
         self.random_state = random_state
         self.sort_sequence_by_rt = sort_sequence_by_rt
+        self.ms2scorer = ms2scorer
 
         assert pd.Series([spectrum.get("spectrum_id") for spectrum in self.spectra]).is_unique, \
             "Spectra IDs must be unique."
@@ -953,7 +956,8 @@ class SequenceSample(object):
                 seq_spectra, seq_labels = zip(*sorted(zip(seq_spectra, seq_labels),
                                                       key=lambda s: s[0].get("retention_time")))
 
-            spl_seqs.append(LabeledSequence(seq_spectra, seq_labels, candidates=self.candidates))
+            spl_seqs.append(LabeledSequence(seq_spectra, seq_labels, candidates=self.candidates,
+                                            ms2scorer=self.ms2scorer))
 
         return spl_seqs
 
@@ -989,10 +993,10 @@ class SequenceSample(object):
             yield (
                 SequenceSample([self.spectra[i] for i in train], [self.labels[i] for i in train],
                                candidates=self.candidates, N=N_train, L_min=self.L_min, L_max=self.L_max,
-                               random_state=self.random_state),
+                               random_state=self.random_state, ms2scorer=self.ms2scorer),
                 SequenceSample([self.spectra[i] for i in test], [self.labels[i] for i in test],
                                candidates=self.candidates, N=N_test, L_min=self.L_min, L_max=self.L_max,
-                               random_state=self.random_state)
+                               random_state=self.random_state, ms2scorer=self.ms2scorer)
             )
 
     def get_n_samples(self):
@@ -1021,7 +1025,6 @@ class SequenceSample(object):
     def as_Xy_input(self):
         x, rt, y = zip(*self._sampled_sequences)
         return x, y
-
 
 
     def get_gt_labels(self, i: int) -> tuple:

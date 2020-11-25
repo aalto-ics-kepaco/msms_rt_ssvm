@@ -332,7 +332,6 @@ class TestSequenceSample(unittest.TestCase):
                         for (spec_id, rt, chlg) in zip(res["spectrum"], res["rt"], res["challenge"])]
         self.labels = res["molecule"].to_list()
 
-    def tearDown(self) -> None:
         self.db.close()
 
     def test_sequence_generation(self):
