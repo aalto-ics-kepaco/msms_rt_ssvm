@@ -1351,21 +1351,69 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         random_state = check_random_state(self.random_state)
         n_iterations_total = 0
         for epoch in range(self.n_epochs):
-            for step, batch in enumerate(mit.chunked(random_state.permutation(np.arange(N)), self.batch_size)):
+            for step, I_batch in enumerate(mit.chunked(random_state.permutation(np.arange(N)), self.batch_size)):
                 # Find the most violating examples for the current batch
-                y_I_hat = [self.inference(self.training_data_[i], self.training_graphs_[0][i], loss_augmented=True)
-                           for i in batch]
+                res = [self.inference(self.training_data_[i], self.training_graphs_[0][i], loss_augmented=True,
+                                      return_graphical_model=True)
+                       for i in I_batch]
+
+                y_I_hat = [y_i_hat for _, y_i_hat in res]
 
                 # Get step-width
-                gamma = self._get_step_size_diminishing(n_iterations_total, N)
+                if self.step_size == "linesearch":
+                    gamma = self._get_step_size_linesearch(I_batch, y_I_hat, [TFG for TFG, _ in res])
+                else:
+                    gamma = self._get_step_size_diminishing(n_iterations_total, N)
 
                 # Update the dual variables
-                is_new = [self.alphas_.update(i, y_i_hat, gamma) for i, y_i_hat in zip(batch, y_I_hat)]
+                is_new = [self.alphas_.update(i, y_i_hat, gamma) for i, y_i_hat in zip(I_batch, y_I_hat)]
 
                 assert self._is_feasible_matrix(self.alphas_, self.C), \
                     "Dual variables after update are not feasible anymore."
 
         return self
+
+    def _get_step_size_linesearch(self, I_batch: List[int], y_I_hat: List[Tuple[str, ...]],
+                                  TFG_I: List[TreeFactorGraph]) -> float:
+        """
+        Determine step-size using linesearch.
+
+        :param I_batch: list, training example indices in the current batch
+
+        :param y_I_hat: list of tuples, list of most-violating label sequences
+
+        :param TFG_I: list of TreeFactorGraph, list of graphical models associated with the training examples
+
+        :return: scalar, line search step-size
+        """
+        nom = 0.0
+        for idx, i in enumerate(I_batch):
+            y_i_hat = y_I_hat[idx]
+            TFG = TFG_I[idx]
+
+            for (_, y), a_iy in self.alphas_.get_blocks(i):
+                Z = self.label_sequence_to_Z(y, self.training_data_[i].get_labelspace())
+                llh = TFG.likelihood(Z, log=False)
+                nom += -a_iy * llh
+
+            Z_hat = self.label_sequence_to_Z(y_i_hat, self.training_data_[i].get_labelspace())
+            nom += self.C * TFG.likelihood(Z_hat, log=False) / len(self.training_data_)
+
+        den = 0.0
+        
+
+        return np.maximum(0.0, np.minimum(1.0, nom / den))
+
+    @staticmethod
+    def label_sequence_to_Z(y: Tuple[str, ...], labelspace: List[List[str]]) -> List[int]:
+        """
+        :param y: tuple, label sequence
+
+        :param labelspace: list of lists, label sequence spaces
+
+        :return: list, indices of the labels along the provided sequence in the label space
+        """
+        return [labelspace_s.index(y_s) for y_s, labelspace_s in zip(y, labelspace)]
 
     @staticmethod
     def _get_graph_set(data: SequenceSample, n_trees_per_sequence: int = 1) -> List[List[nx.Graph]]:
@@ -1463,7 +1511,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         return I - II
 
     def inference(self, sequence: Union[Sequence, LabeledSequence], G: Optional[List[nx.Graph]] = None,
-                  loss_augmented: bool = False, n_trees: Optional[int] = None) -> Tuple[str, ...]:
+                  loss_augmented: bool = False, n_trees: Optional[int] = None, return_graphical_model: bool = False) \
+            -> Union[Tuple[str, ...], Tuple[Tuple[str, ...], TreeFactorGraph]]:
         """
         Infer the most likely label sequence for the given (MS, RT)-sequence.
 
@@ -1476,6 +1525,9 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             Set this option to True during model parameter estimation.
 
         :param n_trees: scalar or None, number of spanning trees used to approximate the MRF.
+
+        :param return_graphical_model: boolean, indicating whether the graphical model, e.g. the Tree-Factor-Graph, used
+            to solve performance the inference should be returned.
 
         :return: tuple, length = L, most likely label sequence
         """
@@ -1492,7 +1544,15 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, G[0], loss_augmented)
 
         # Find the MAP estimate
-        return self._inference(sequence, node_potentials, edge_potentials, G[0])
+        TFG, Z_max = self._inference(node_potentials, edge_potentials, G[0])
+
+        # MAP returns a list of candidate indices, we need to convert them back to actual molecules identifier
+        y_hat = tuple(sequence.get_labelspace(s)[Z_max[s]] for s in G[0].nodes)
+
+        if return_graphical_model:
+            return y_hat, TFG
+        else:
+            return y_hat
 
     def max_marginals(self, sequence: Union[Sequence, LabeledSequence], G: Optional[List[nx.Graph]] = None,
                       n_trees: Optional[int] = None):
@@ -1616,20 +1676,17 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         return {s: {"label": sequence.get_labelspace(s), "marg": marg[s]} for s in G.nodes}
 
     @staticmethod
-    def _inference(sequence: Union[Sequence, LabeledSequence], node_potentials: OrderedDict, edge_potentials: Dict,
-                   G: nx.Graph) -> Tuple:
+    def _inference(node_potentials: OrderedDict, edge_potentials: Dict, G: nx.Graph) \
+            -> Tuple[TreeFactorGraph, List[List[int]]]:
         """
         MAP inference
         """
         # MAP inference (find most likely label sequence) for the given node- and edge-potentials
-        Z_max, _ = TreeFactorGraph(candidates=node_potentials, var_conn_graph=G, make_order_probs=None,
-                                   order_probs=edge_potentials) \
-            .MAP_only()  # type: List[int]
+        TFG = TreeFactorGraph(candidates=node_potentials, var_conn_graph=G, make_order_probs=None,
+                              order_probs=edge_potentials)
+        Z_max, _ = TFG.MAP_only()
 
-        # MAP returns a list of candidate indices, we need to convert them back to actual molecules identifier
-        y_i_hat = tuple(sequence.get_labelspace(s)[Z_max[s]] for s in G.nodes)
-
-        return y_i_hat
+        return TFG, Z_max
 
     @staticmethod
     def _get_lambda_delta(Y_sequence: np.ndarray, Y_candidates: np.ndarray, G: nx.Graph,
