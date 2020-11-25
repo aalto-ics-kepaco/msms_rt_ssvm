@@ -504,11 +504,13 @@ class _StructuredSVM(object):
     @staticmethod
     def _get_step_size_diminishing(k: int, N: int) -> float:
         """
-        Step-width calculation after [1].
+        Step-size calculation after [1].
 
-        :param k:
-        :param N:
-        :return:
+        :param k: scalar, number of iterations so far
+
+        :param N: scalar, number of training samples
+
+        :return: scalar, step-size
         """
         return (2 * N) / (k + 2 * N)
 
