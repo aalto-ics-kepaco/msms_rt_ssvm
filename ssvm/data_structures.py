@@ -778,7 +778,8 @@ class Sequence(object):
 
         :return: array-like, shape = (|E|,), sign of the retention time differences for all edges.
         """
-        return self._rt_diff_signs[list(G.edges)]
+        bS, bT = zip(*G.edges)
+        return self._rt_diff_signs[list(bS), list(bT)]
 
 
 class LabeledSequence(Sequence):

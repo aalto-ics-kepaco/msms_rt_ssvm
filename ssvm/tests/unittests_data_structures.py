@@ -30,6 +30,7 @@ import pickle
 import pandas as pd
 import numpy as np
 import itertools as it
+import networkx as nx
 
 from matchms.Spectrum import Spectrum
 
@@ -276,34 +277,47 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
 
 
 class TestSequence(unittest.TestCase):
-    def test_get_number_of_candidates(self):
-        spectra_ids = ["Challenge-016", "Challenge-017", "Challenge-018", "Challenge-019"]
-        spectra = [Spectrum(np.array([]), np.array([]),
-                            {"spectrum_id": spectrum_id, "retention_time": np.random.randint(10)})
-                   for spectrum_id in spectra_ids]
-        sequence = Sequence(spectra=spectra, candidates=CandidateSQLiteDB(DB_FN))
+    def setUp(self) -> None:
+        self.spectra_ids = ["Challenge-016", "Challenge-017", "Challenge-018", "Challenge-019", "Challenge-001"]
+        self.rts = np.random.RandomState(len(self.spectra_ids)).randint(low=1, high=21, size=len(self.spectra_ids))
+        self.spectra = [Spectrum(np.array([]), np.array([]), {"spectrum_id": spectrum_id, "retention_time": rt})
+                        for spectrum_id, rt in zip(self.spectra_ids, self.rts)]
+        self.sequence = Sequence(spectra=self.spectra, candidates=CandidateSQLiteDB(DB_FN))
 
-        n_cand = sequence.get_n_cand()
+    def test_get_number_of_candidates(self):
+        n_cand = self.sequence.get_n_cand()
+        self.assertEqual(len(self.spectra_ids), len(n_cand))
         self.assertEqual(2233, n_cand[0])
         self.assertEqual(1130, n_cand[1])
         self.assertEqual(62,   n_cand[2])
         self.assertEqual(5784, n_cand[3])
+        self.assertEqual(459,  n_cand[4])
 
     def test_get_label_space(self):
-        # Create a spectrum sequence
-        spectra_ids = ["Challenge-016", "Challenge-022", "Challenge-018", "Challenge-019", "Challenge-001"]
-        spectra = [Spectrum(np.array([]), np.array([]),
-                            {"spectrum_id": spectrum_id, "retention_time": np.random.randint(10)})
-                   for spectrum_id in spectra_ids]
-        sequence = Sequence(spectra=spectra, candidates=CandidateSQLiteDB(DB_FN))
-
         # Get the label space
-        labelspace = sequence.get_labelspace()
-        self.assertEqual(len(spectra_ids), len(labelspace))
+        labelspace = self.sequence.get_labelspace()
+        self.assertEqual(len(self.spectra_ids), len(labelspace))
 
         # Compare number of candidates
-        for ls, n in zip(labelspace, sequence.get_n_cand()):
+        for ls, n in zip(labelspace, self.sequence.get_n_cand()):
             self.assertEqual(n, len(ls))
+
+    def test_get_sign_delta_t(self):
+        _rt_diff_signs = np.empty((len(self.spectra_ids), len(self.spectra_ids)))
+        for r in range(_rt_diff_signs.shape[0]):
+            for c in range(_rt_diff_signs.shape[1]):
+                _rt_diff_signs[r, c] = np.sign(self.rts[r] - self.rts[c])
+
+        np.testing.assert_equal(_rt_diff_signs, self.sequence._rt_diff_signs)
+
+        for rep in range(10):
+            G = nx.generators.trees.random_tree(len(self.spectra_ids))
+
+            sign_delta_t_ref = np.empty(len(G.edges))
+            for idx, (s, t) in enumerate(G.edges):
+                sign_delta_t_ref[idx] = np.sign(self.rts[s] - self.rts[t])
+
+            np.testing.assert_equal(sign_delta_t_ref, self.sequence.get_sign_delta_t(G))
 
 
 class TestSequenceSample(unittest.TestCase):
