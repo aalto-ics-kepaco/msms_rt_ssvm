@@ -1610,10 +1610,10 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         # Calculate the normalized max-max_marginals
         marg = TreeFactorGraph(candidates=node_potentials, var_conn_graph=G, make_order_probs=None,
                                order_probs=edge_potentials) \
+            .max_product() \
             .get_max_marginals(normalize)
 
-        label_space_i = sequence.get_labelspace()
-        return {s: {"label": label_space_i[s], "marg": marg[s]} for s in G.nodes}
+        return {s: {"label": sequence.get_labelspace(s), "marg": marg[s]} for s in G.nodes}
 
     @staticmethod
     def _inference(sequence: Union[Sequence, LabeledSequence], node_potentials: OrderedDict, edge_potentials: Dict,
@@ -1627,8 +1627,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             .MAP_only()  # type: List[int]
 
         # MAP returns a list of candidate indices, we need to convert them back to actual molecules identifier
-        label_space_i = sequence.get_labelspace()
-        y_i_hat = tuple(label_space_i[s][Z_max[s]] for s in G.nodes)
+        y_i_hat = tuple(sequence.get_labelspace(s)[Z_max[s]] for s in G.nodes)
 
         return y_i_hat
 

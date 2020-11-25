@@ -262,6 +262,16 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
                 self.assertIn(y_i_hat__la[s], self.ssvm.training_data_[i].get_labelspace(s))
                 self.assertIn(y_i_hat__wola[s], self.ssvm.training_data_[i].get_labelspace(s))
 
+    def test_max_marginals(self):
+        for i in [0, 8, 3]:
+            marg = self.ssvm.max_marginals(self.ssvm.training_data_[i], G=None, n_trees=1)
+
+            self.assertEqual(len(self.ssvm.training_data_[i]), len(marg))
+
+            for s in range(len(self.ssvm.training_data_[i])):
+                self.assertEqual(len(self.ssvm.training_data_[i].get_labelspace(s)), len(marg[s]["label"]))
+                self.assertEqual(len(self.ssvm.training_data_[i].get_labelspace(s)), len(marg[s]["marg"]))
+
 
 class TestDualVariables(unittest.TestCase):
     def test_initialization(self):
