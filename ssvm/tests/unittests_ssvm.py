@@ -25,18 +25,17 @@
 ####
 import numpy as np
 import unittest
-import pickle
-import gzip
-import os
+import time
 import itertools as it
+import networkx as nx
 
 from typing import Tuple
 from scipy.sparse import csr_matrix
 
-from ssvm.ssvm import _StructuredSVM, StructuredSVMMetIdent, DualVariables
+from ssvm.ssvm import _StructuredSVM, StructuredSVMMetIdent, DualVariables, StructuredSVMSequencesFixedMS2
 
 
-class TestStructuredSVM(unittest.TestCase):
+class Test_StructuredSVM(unittest.TestCase):
     def test_is_feasible_matrix(self):
         class DummyDualVariables(object):
             def __init__(self, B):
@@ -73,84 +72,40 @@ class TestStructuredSVM(unittest.TestCase):
         self.assertFalse(_StructuredSVM._is_feasible_matrix(alphas, C + 1))
 
 
-# class TestStructuredSVMMetIdent(unittest.TestCase):
-#     def setUp(self) -> None:
-#         """
-#         Set up a small example data for the metabolite identification tests.
-#         """
-#         if not os.path.exists("small_metabolite_data.pkl.gz"):
-#             # Create a small example containing metabolite identification data from the ISMB 2016 paper
-#             from sklearn.model_selection import ShuffleSplit
-#             from ssvm.development.ssvm_metident__conv_params import read_data
-#             from ssvm.data_structures import CandidateSetMetIdent
-#
-#             idir = "/home/bach/Documents/doctoral/data/metindent_ismb2016"
-#             X, fps, mols, mols2cand = read_data(idir)
-#
-#             # Get a smaller subset
-#             _, subset = next(ShuffleSplit(n_splits=1, test_size=0.025, random_state=1989).split(X))
-#             X = X[np.ix_(subset, subset)]
-#             fps = fps[subset]
-#             mols = mols[subset]
-#             print("N samples:", len(mols))
-#
-#             # Wrap the candidate sets for easier access
-#             cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(idir, "candidates"), preload_data=False)
-#
-#             with gzip.open(os.path.join("small_metabolite_data.pkl.gz"), "wb") as gz_file:
-#                 pickle.dump({"X": X, "mols": mols, "cand": cand}, gz_file)
-#
-#         with gzip.open("small_metabolite_data.pkl.gz", "rb") as gz_file:
-#             data = pickle.load(gz_file)
-#
-#         self.ssvm = StructuredSVMMetIdent(C=2)
-#         self.ssvm.K_train = data["X"]
-#         self.ssvm.y_train = data["mols"]
-#         self.cand = data["cand"]  # type: CandidateSetMetIdent
-#         self.N = self.ssvm.K_train.shape[0]
-#         self.rs = np.random.RandomState(18221)
-#         self.ssvm.alphas = DualVariables(C=self.ssvm.C, random_state=self.rs, num_init_active_vars=2,
-#                                          label_space=[[self.cand.get_labelspace(self.ssvm.y_train[i])]
-#                                                       for i in range(self.N)])
-#
-#     def test_get_candidate_scores(self):
-#         """
-#         Test that the scores for the candidates corresponding to a particular spectrum x_i are correctly calculated
-#         given an SSVM model (w or alphas). The score is calculated like:
-#
-#             s(x_i, y) = < w , Psi(x_i, y) >     for all y in Sigma_i
-#         """
-#         i = 10
-#
-#         self.ssvm.fps_active, lab_losses_active = self.ssvm._get_active_fingerprints_and_losses(
-#             self.ssvm.alphas, self.ssvm.y_train, self.cand, verbose=True)
-#         scores = self.ssvm._get_candidate_scores(
-#             self.ssvm.K_train[i], self.ssvm.y_train[i], self.cand,
-#             {"lab_losses_active": lab_losses_active, "mol_kernel_L_S_Ci": {}, "mol_kernel_L_Ci": {},
-#              "fps_active": self.ssvm.fps_active, "B_S": self.ssvm.alphas.get_dual_variable_matrix("dense")},
-#             for_training=True)
-#
-#         fps_gt_i = self.cand.get_gt_fp(self.ssvm.y_train[i])[np.newaxis, :]
-#         fps_gt = self.cand.get_gt_fp(self.ssvm.y_train)
-#         B = self.ssvm.alphas.get_dual_variable_matrix(type="csr")
-#
-#         # Part which is constant for all y in Sigma_i
-#         s1 = self.ssvm.C / self.N * self.ssvm.K_train[i] @ self.cand.get_kernel(fps_gt_i, fps_gt).flatten()
-#         self.assertTrue(np.isscalar(s1))
-#
-#         s2 = (self.cand.get_kernel(fps_gt_i, self.ssvm.fps_active) @ B.T @ self.ssvm.K_train[i]).item()
-#         self.assertTrue(np.isscalar(s2))
-#
-#         # Part that is specific to each candidate y in Sigma_i
-#         L_Ci = self.cand.get_kernel(self.cand.get_candidate_fps(self.ssvm.y_train[i]), fps_gt)
-#         s3 = self.ssvm.C / self.N * L_Ci @ self.ssvm.K_train[i]
-#         self.assertEqual((len(self.cand.get_labelspace(self.ssvm.y_train[i])),), s3.shape)
-#
-#         L_Ci_S = self.cand.get_kernel(self.cand.get_candidate_fps(self.ssvm.y_train[i]), self.ssvm.fps_active)
-#         s4 = L_Ci_S @ (B.T @ self.ssvm.K_train[i])
-#         self.assertEqual((len(self.cand.get_labelspace(self.ssvm.y_train[i])),), s4.shape)
-#
-#         np.testing.assert_allclose(scores, (s3 - s4))
+class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
+    def test_get_lambda_delta(self):
+        def mol_kernel(x, y):
+            return x @ y.T
+
+        rt_loop = 0.0
+        rt_vec = 0.0
+
+        n_rep = 15
+        for rep in range(n_rep):
+            n_features = 231
+            n_molecules = 501
+            L = 101
+            G = nx.generators.trees.random_tree(L, seed=(rep + 3))
+
+            Y_sequence = np.random.RandomState(rep + 5).rand(L, n_features)
+            Y_candidates = np.random.RandomState(rep + 6).rand(n_molecules, n_features)
+
+            start = time.time()
+            lambda_delta_ref = np.empty((L - 1, n_molecules))
+            for idx, (s, t) in enumerate(G.edges):
+                lambda_delta_ref[idx] = mol_kernel(Y_sequence[s], Y_candidates) - mol_kernel(Y_sequence[t], Y_candidates)
+            rt_loop += time.time() - start
+
+            start = time.time()
+            lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta(Y_sequence, Y_candidates, G, mol_kernel)
+            rt_vec += time.time() - start
+
+            self.assertEqual(lambda_delta_ref.shape, lambda_delta.shape)
+            np.testing.assert_almost_equal(lambda_delta_ref, lambda_delta)
+
+        print("== get_lambda_delta ==")
+        print("Loop: %.3fs" % (rt_loop / n_rep))
+        print("Vec: %.3fs" % (rt_vec / n_rep))
 
 
 class TestDualVariables(unittest.TestCase):

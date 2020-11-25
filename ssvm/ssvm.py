@@ -1606,7 +1606,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
     @staticmethod
     def _get_lambda_delta(Y_sequence: np.ndarray, Y_candidates: np.ndarray, G: nx.Graph,
-                          mol_kernel: Callable[[np.ndarray, np.ndarray], np.ndarray]) -> List[np.ndarray]:
+                          mol_kernel: Callable[[np.ndarray, np.ndarray], np.ndarray]) -> np.ndarray:
         """
         Calculate the 'Lambda_Delta(y, y_s)' term, with shape = (L - 1, ) for all y_s in Y_candidates.
 
