@@ -24,18 +24,16 @@
 #
 ####
 import sqlite3
-import os
 import unittest
-import pickle
 import pandas as pd
 import numpy as np
 import itertools as it
+import networkx as nx
 
 from matchms.Spectrum import Spectrum
 
-from ssvm.data_structures import CandidateSetMetIdent, SequenceSample, CandidateSQLiteDB, RandomSubsetCandidateSQLiteDB
+from ssvm.data_structures import SequenceSample, CandidateSQLiteDB, RandomSubsetCandidateSQLiteDB
 from ssvm.data_structures import Sequence
-from ssvm.examples.ssvm_metident import read_data
 
 DB_FN = "/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_LATEST.db"
 
@@ -276,34 +274,47 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
 
 
 class TestSequence(unittest.TestCase):
-    def test_get_number_of_candidates(self):
-        spectra_ids = ["Challenge-016", "Challenge-017", "Challenge-018", "Challenge-019"]
-        spectra = [Spectrum(np.array([]), np.array([]),
-                            {"spectrum_id": spectrum_id, "retention_time": np.random.randint(10)})
-                   for spectrum_id in spectra_ids]
-        sequence = Sequence(spectra=spectra, candidates=CandidateSQLiteDB(DB_FN))
+    def setUp(self) -> None:
+        self.spectra_ids = ["Challenge-016", "Challenge-017", "Challenge-018", "Challenge-019", "Challenge-001"]
+        self.rts = np.random.RandomState(len(self.spectra_ids)).randint(low=1, high=21, size=len(self.spectra_ids))
+        self.spectra = [Spectrum(np.array([]), np.array([]), {"spectrum_id": spectrum_id, "retention_time": rt})
+                        for spectrum_id, rt in zip(self.spectra_ids, self.rts)]
+        self.sequence = Sequence(spectra=self.spectra, candidates=CandidateSQLiteDB(DB_FN))
 
-        n_cand = sequence.get_n_cand()
+    def test_get_number_of_candidates(self):
+        n_cand = self.sequence.get_n_cand()
+        self.assertEqual(len(self.spectra_ids), len(n_cand))
         self.assertEqual(2233, n_cand[0])
         self.assertEqual(1130, n_cand[1])
         self.assertEqual(62,   n_cand[2])
         self.assertEqual(5784, n_cand[3])
+        self.assertEqual(459,  n_cand[4])
 
     def test_get_label_space(self):
-        # Create a spectrum sequence
-        spectra_ids = ["Challenge-016", "Challenge-022", "Challenge-018", "Challenge-019", "Challenge-001"]
-        spectra = [Spectrum(np.array([]), np.array([]),
-                            {"spectrum_id": spectrum_id, "retention_time": np.random.randint(10)})
-                   for spectrum_id in spectra_ids]
-        sequence = Sequence(spectra=spectra, candidates=CandidateSQLiteDB(DB_FN))
-
         # Get the label space
-        labelspace = sequence.get_labelspace()
-        self.assertEqual(len(spectra_ids), len(labelspace))
+        labelspace = self.sequence.get_labelspace()
+        self.assertEqual(len(self.spectra_ids), len(labelspace))
 
         # Compare number of candidates
-        for ls, n in zip(labelspace, sequence.get_n_cand()):
+        for ls, n in zip(labelspace, self.sequence.get_n_cand()):
             self.assertEqual(n, len(ls))
+
+    def test_get_sign_delta_t(self):
+        _rt_diff_signs = np.empty((len(self.spectra_ids), len(self.spectra_ids)))
+        for r in range(_rt_diff_signs.shape[0]):
+            for c in range(_rt_diff_signs.shape[1]):
+                _rt_diff_signs[r, c] = np.sign(self.rts[r] - self.rts[c])
+
+        np.testing.assert_equal(_rt_diff_signs, self.sequence._rt_diff_signs)
+
+        for rep in range(10):
+            G = nx.generators.trees.random_tree(len(self.spectra_ids))
+
+            sign_delta_t_ref = np.empty(len(G.edges))
+            for idx, (s, t) in enumerate(G.edges):
+                sign_delta_t_ref[idx] = np.sign(self.rts[s] - self.rts[t])
+
+            np.testing.assert_equal(sign_delta_t_ref, self.sequence.get_sign_delta_t(G))
 
 
 class TestSequenceSample(unittest.TestCase):
@@ -318,7 +329,6 @@ class TestSequenceSample(unittest.TestCase):
                         for (spec_id, rt, chlg) in zip(res["spectrum"], res["rt"], res["challenge"])]
         self.labels = res["molecule"].to_list()
 
-    def tearDown(self) -> None:
         self.db.close()
 
     def test_sequence_generation(self):
@@ -343,16 +353,6 @@ class TestSequenceSample(unittest.TestCase):
         # No intersection of molecules between training and test sequences
         for i, j in it.product(test_seq, train_seq):
             self.assertTrue(len(set(i.labels) & set(j.labels)) == 0)
-
-
-# class TestCandidateSetMetIdent(unittest.TestCase):
-#     def test_is_pickleable(self):
-#         idir = "/home/bach/Documents/doctoral/data/metindent_ismb2016"
-#         X, fps, mols, mols2cand = read_data(idir)
-#         cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(idir, "candidates"),
-#                                     preload_data=False)
-#
-#         cand_pkl = pickle.loads(pickle.dumps(cand))
 
 
 if __name__ == '__main__':

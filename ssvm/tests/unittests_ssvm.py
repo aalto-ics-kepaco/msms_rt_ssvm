@@ -23,20 +23,26 @@
 # SOFTWARE.
 #
 ####
+import sqlite3
 import numpy as np
 import unittest
-import pickle
-import gzip
-import os
+import time
 import itertools as it
+import networkx as nx
+import pandas as pd
 
+from matchms.Spectrum import Spectrum
 from typing import Tuple
 from scipy.sparse import csr_matrix
+from copy import deepcopy
 
-from ssvm.ssvm import _StructuredSVM, StructuredSVMMetIdent, DualVariables
+from ssvm.ssvm import _StructuredSVM, StructuredSVMMetIdent, DualVariables, StructuredSVMSequencesFixedMS2
+from ssvm.data_structures import CandidateSQLiteDB, SequenceSample, RandomSubsetCandidateSQLiteDB
+
+DB_FN = "/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_LATEST.db"
 
 
-class TestStructuredSVM(unittest.TestCase):
+class Test_StructuredSVM(unittest.TestCase):
     def test_is_feasible_matrix(self):
         class DummyDualVariables(object):
             def __init__(self, B):
@@ -73,84 +79,199 @@ class TestStructuredSVM(unittest.TestCase):
         self.assertFalse(_StructuredSVM._is_feasible_matrix(alphas, C + 1))
 
 
-# class TestStructuredSVMMetIdent(unittest.TestCase):
-#     def setUp(self) -> None:
-#         """
-#         Set up a small example data for the metabolite identification tests.
-#         """
-#         if not os.path.exists("small_metabolite_data.pkl.gz"):
-#             # Create a small example containing metabolite identification data from the ISMB 2016 paper
-#             from sklearn.model_selection import ShuffleSplit
-#             from ssvm.development.ssvm_metident__conv_params import read_data
-#             from ssvm.data_structures import CandidateSetMetIdent
-#
-#             idir = "/home/bach/Documents/doctoral/data/metindent_ismb2016"
-#             X, fps, mols, mols2cand = read_data(idir)
-#
-#             # Get a smaller subset
-#             _, subset = next(ShuffleSplit(n_splits=1, test_size=0.025, random_state=1989).split(X))
-#             X = X[np.ix_(subset, subset)]
-#             fps = fps[subset]
-#             mols = mols[subset]
-#             print("N samples:", len(mols))
-#
-#             # Wrap the candidate sets for easier access
-#             cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(idir, "candidates"), preload_data=False)
-#
-#             with gzip.open(os.path.join("small_metabolite_data.pkl.gz"), "wb") as gz_file:
-#                 pickle.dump({"X": X, "mols": mols, "cand": cand}, gz_file)
-#
-#         with gzip.open("small_metabolite_data.pkl.gz", "rb") as gz_file:
-#             data = pickle.load(gz_file)
-#
-#         self.ssvm = StructuredSVMMetIdent(C=2)
-#         self.ssvm.K_train = data["X"]
-#         self.ssvm.y_train = data["mols"]
-#         self.cand = data["cand"]  # type: CandidateSetMetIdent
-#         self.N = self.ssvm.K_train.shape[0]
-#         self.rs = np.random.RandomState(18221)
-#         self.ssvm.alphas = DualVariables(C=self.ssvm.C, random_state=self.rs, num_init_active_vars=2,
-#                                          label_space=[[self.cand.get_labelspace(self.ssvm.y_train[i])]
-#                                                       for i in range(self.N)])
-#
-#     def test_get_candidate_scores(self):
-#         """
-#         Test that the scores for the candidates corresponding to a particular spectrum x_i are correctly calculated
-#         given an SSVM model (w or alphas). The score is calculated like:
-#
-#             s(x_i, y) = < w , Psi(x_i, y) >     for all y in Sigma_i
-#         """
-#         i = 10
-#
-#         self.ssvm.fps_active, lab_losses_active = self.ssvm._get_active_fingerprints_and_losses(
-#             self.ssvm.alphas, self.ssvm.y_train, self.cand, verbose=True)
-#         scores = self.ssvm._get_candidate_scores(
-#             self.ssvm.K_train[i], self.ssvm.y_train[i], self.cand,
-#             {"lab_losses_active": lab_losses_active, "mol_kernel_L_S_Ci": {}, "mol_kernel_L_Ci": {},
-#              "fps_active": self.ssvm.fps_active, "B_S": self.ssvm.alphas.get_dual_variable_matrix("dense")},
-#             for_training=True)
-#
-#         fps_gt_i = self.cand.get_gt_fp(self.ssvm.y_train[i])[np.newaxis, :]
-#         fps_gt = self.cand.get_gt_fp(self.ssvm.y_train)
-#         B = self.ssvm.alphas.get_dual_variable_matrix(type="csr")
-#
-#         # Part which is constant for all y in Sigma_i
-#         s1 = self.ssvm.C / self.N * self.ssvm.K_train[i] @ self.cand.get_kernel(fps_gt_i, fps_gt).flatten()
-#         self.assertTrue(np.isscalar(s1))
-#
-#         s2 = (self.cand.get_kernel(fps_gt_i, self.ssvm.fps_active) @ B.T @ self.ssvm.K_train[i]).item()
-#         self.assertTrue(np.isscalar(s2))
-#
-#         # Part that is specific to each candidate y in Sigma_i
-#         L_Ci = self.cand.get_kernel(self.cand.get_candidate_fps(self.ssvm.y_train[i]), fps_gt)
-#         s3 = self.ssvm.C / self.N * L_Ci @ self.ssvm.K_train[i]
-#         self.assertEqual((len(self.cand.get_labelspace(self.ssvm.y_train[i])),), s3.shape)
-#
-#         L_Ci_S = self.cand.get_kernel(self.cand.get_candidate_fps(self.ssvm.y_train[i]), self.ssvm.fps_active)
-#         s4 = L_Ci_S @ (B.T @ self.ssvm.K_train[i])
-#         self.assertEqual((len(self.cand.get_labelspace(self.ssvm.y_train[i])),), s4.shape)
-#
-#         np.testing.assert_allclose(scores, (s3 - s4))
+class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
+    def setUp(self) -> None:
+        # ===================
+        # Get list of Spectra
+        # ===================
+        self.db = sqlite3.connect("file:" + DB_FN + "?mode=ro", uri=True)
+
+        # Read in spectra and labels
+        res = pd.read_sql_query("SELECT spectrum, molecule, rt, challenge FROM challenges_spectra "
+                                "   INNER JOIN spectra s ON s.name = challenges_spectra.spectrum", con=self.db)
+        self.spectra = [Spectrum(np.array([]), np.array([]),
+                                 {"spectrum_id": spec_id, "retention_time": rt, "dataset": chlg, "molecule_id": mol})
+                        for (spec_id, rt, chlg, mol) in zip(res["spectrum"], res["rt"], res["challenge"],
+                                                            res["molecule"])]
+        self.labels = res["molecule"].to_list()
+
+        self.db.close()
+
+        # ===================
+        # Setup a SSVM
+        # ===================
+        self.ssvm = StructuredSVMSequencesFixedMS2(
+            mol_feat_label_loss="iokr_fps__positive", mol_feat_retention_order="substructure_count",
+            mol_kernel="minmax", C=2)
+
+        self.N = 50
+        self.ssvm.training_data_ = SequenceSample(
+            self.spectra, self.labels,
+            RandomSubsetCandidateSQLiteDB(db_fn=DB_FN, molecule_identifier="inchi", random_state=192,
+                                          number_of_candidates=50, include_correct_candidate=True),
+            N=self.N, L_min=10,
+            L_max=15, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
+        self.ssvm.alphas_ = DualVariables(
+            self.ssvm.C, label_space=self.ssvm.training_data_.get_labelspace(), num_init_active_vars=3)
+        self.ssvm.training_graphs_ = StructuredSVMSequencesFixedMS2._get_graph_set(
+            self.ssvm.training_data_, n_trees_per_sequence=1)
+
+    def test_get_lambda_delta(self):
+        def mol_kernel(x, y):
+            return x @ y.T
+
+        rt_loop = 0.0
+        rt_vec = 0.0
+
+        n_rep = 15
+        for rep in range(n_rep):
+            n_features = 231
+            n_molecules = 501
+            L = 101
+            G = nx.generators.trees.random_tree(L, seed=(rep + 3))
+
+            Y_sequence = np.random.RandomState(rep + 5).rand(L, n_features)
+            Y_candidates = np.random.RandomState(rep + 6).rand(n_molecules, n_features)
+
+            start = time.time()
+            lambda_delta_ref = np.empty((L - 1, n_molecules))
+            for idx, (s, t) in enumerate(G.edges):
+                lambda_delta_ref[idx] = mol_kernel(Y_sequence[s], Y_candidates) - mol_kernel(Y_sequence[t], Y_candidates)
+            rt_loop += time.time() - start
+
+            start = time.time()
+            lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta(Y_sequence, Y_candidates, G, mol_kernel)
+            rt_vec += time.time() - start
+
+            self.assertEqual(lambda_delta_ref.shape, lambda_delta.shape)
+            np.testing.assert_almost_equal(lambda_delta_ref, lambda_delta)
+
+        print("== get_lambda_delta ==")
+        print("Loop: %.3fs" % (rt_loop / n_rep))
+        print("Vec: %.3fs" % (rt_vec / n_rep))
+
+    def test_I_rsvm_jfeat(self):
+        N_E = np.sum([len(self.ssvm.training_graphs_[0][j].edges) for j in range(self.N)])  # total number of edges
+
+        rt_loop = 0.0
+        rt_vec = 0.0
+
+        for i in range(5):  # inspect only the first 5 label sequences
+            Y_candidates = self.ssvm.training_data_[i].get_molecule_features_for_candidates("substructure_count", 2)
+
+            start = time.time()
+            I_ref = np.zeros((len(Y_candidates), ))
+            for j in range(self.N):
+                sign_delta_j = self.ssvm.training_data_[j].get_sign_delta_t(self.ssvm.training_graphs_[0][j])
+                lambda_delta_j = self.ssvm._get_lambda_delta(
+                    Y_sequence=self.ssvm.training_data_[j].get_molecule_features_for_labels(
+                        self.ssvm.mol_feat_retention_order),
+                    Y_candidates=Y_candidates,
+                    G=self.ssvm.training_graphs_[0][j],
+                    mol_kernel=self.ssvm.mol_kernel
+                )
+                I_ref += self.ssvm.C / len(self.ssvm.training_data_) * (sign_delta_j @ lambda_delta_j)
+
+                # self.assertEqual((len(ssvm.training_graphs_[0][j].edges),), sign_delta_j.shape)
+                # self.assertEqual((len(ssvm.training_graphs_[0][j].edges), len(Y_candidates)), lambda_delta_j.shape)
+
+            rt_loop += time.time() - start
+
+            start = time.time()
+            I = self.ssvm._I_rsvm_jfeat(Y_candidates)
+            rt_vec += time.time() - start
+
+            self.assertEqual((len(Y_candidates), ), I.shape)
+            np.testing.assert_almost_equal(I_ref, I)
+            self.assertTrue(np.all((I / self.ssvm.C * self.N) >= -N_E))
+            self.assertTrue(np.all((I / self.ssvm.C * self.N) <= N_E))
+
+        print("== I_rsvm_jfeat ==")
+        print("Loop: %.3fs" % (rt_loop / 5))
+        print("Vec: %.3fs" % (rt_vec / 5))
+
+    def test_predict_molecule_preference_values(self):
+        for i in range(5):  # inspect only the first 5 label sequences
+            Y_candidates = self.ssvm.training_data_[i].get_molecule_features_for_candidates("substructure_count", 2)
+            pref = self.ssvm.predict_molecule_preference_values(Y_candidates)
+            self.assertEqual((len(Y_candidates), ), pref.shape)
+
+    def test_get_node_and_edge_potentials(self):
+        i = 8
+        npot, epot = self.ssvm._get_node_and_edge_potentials(self.ssvm.training_data_[i],
+                                                             self.ssvm.training_graphs_[0][i])
+
+        self.assertEqual(len(self.ssvm.training_graphs_[0][i]), len(npot))
+
+        for s, t in self.ssvm.training_graphs_[0][i].edges:
+            self.assertIn(s, epot)
+            self.assertIn(t, epot[s])
+
+            # Reverse direction
+            self.assertIn(t, epot)
+            self.assertIn(s, epot[t])
+
+            # Check shape of transition matrices
+            n_cand_s = len(self.ssvm.training_data_[i].get_molecule_features_for_candidates(
+                self.ssvm.mol_feat_retention_order, s))
+            n_cand_t = len(self.ssvm.training_data_[i].get_molecule_features_for_candidates(
+                self.ssvm.mol_feat_retention_order, t))
+            self.assertEqual((n_cand_s, n_cand_t), epot[s][t]["log_score"].shape)
+            self.assertEqual((n_cand_t, n_cand_s), epot[t][s]["log_score"].shape)
+
+    def test_inference(self):
+        for i in [0, 8, 3]:
+            # =========================
+            # With loss augmentation
+            # =========================
+            y_i_hat__la = self.ssvm.inference(
+                self.ssvm.training_data_[i],
+                [self.ssvm.training_graphs_[k][i] for k in range(len(self.ssvm.training_graphs_))],
+                loss_augmented=True)
+
+            # =========================
+            # Without loss augmentation
+            # =========================
+            y_i_hat__wola = self.ssvm.inference(
+                self.ssvm.training_data_[i],
+                [self.ssvm.training_graphs_[k][i] for k in range(len(self.ssvm.training_graphs_))],
+                loss_augmented=False)
+
+            self.assertEqual(len(self.ssvm.training_data_[i]), len(y_i_hat__la))
+            self.assertEqual(len(self.ssvm.training_data_[i]), len(y_i_hat__wola))
+
+            for s in range(len(self.ssvm.training_data_[i])):
+                self.assertIn(y_i_hat__la[s], self.ssvm.training_data_[i].get_labelspace(s))
+                self.assertIn(y_i_hat__wola[s], self.ssvm.training_data_[i].get_labelspace(s))
+
+    def test_inference_without_tree_given(self):
+        for i in [0, 8, 3]:
+            # =========================
+            # With loss augmentation
+            # =========================
+            y_i_hat__la = self.ssvm.inference(self.ssvm.training_data_[i], G=None, n_trees=1, loss_augmented=True)
+
+            # =========================
+            # Without loss augmentation
+            # =========================
+            y_i_hat__wola = self.ssvm.inference(self.ssvm.training_data_[i], G=None, n_trees=1, loss_augmented=False)
+
+            self.assertEqual(len(self.ssvm.training_data_[i]), len(y_i_hat__la))
+            self.assertEqual(len(self.ssvm.training_data_[i]), len(y_i_hat__wola))
+
+            for s in range(len(self.ssvm.training_data_[i])):
+                self.assertIn(y_i_hat__la[s], self.ssvm.training_data_[i].get_labelspace(s))
+                self.assertIn(y_i_hat__wola[s], self.ssvm.training_data_[i].get_labelspace(s))
+
+    def test_max_marginals(self):
+        for i in [0, 8, 3]:
+            marg = self.ssvm.max_marginals(self.ssvm.training_data_[i], G=None, n_trees=1)
+
+            self.assertEqual(len(self.ssvm.training_data_[i]), len(marg))
+
+            for s in range(len(self.ssvm.training_data_[i])):
+                self.assertEqual(len(self.ssvm.training_data_[i].get_labelspace(s)), len(marg[s]["label"]))
+                self.assertEqual(len(self.ssvm.training_data_[i].get_labelspace(s)), len(marg[s]["marg"]))
 
 
 class TestDualVariables(unittest.TestCase):
@@ -428,8 +549,6 @@ class TestDualVariables(unittest.TestCase):
         self.assertFalse(DualVariables._eq_dual_domain(alpha_2a, alpha_2b))
 
     def test_deepcopy(self):
-        from copy import deepcopy
-
         cand_ids = [
             [
                 ["M1", "M2"],
@@ -458,11 +577,44 @@ class TestDualVariables(unittest.TestCase):
         self.assertEqual(alpha.get_dual_variable_matrix().shape,
                          alpha_cp.get_dual_variable_matrix().shape)
 
-        alpha.update(0, ("M1", "M2", "M20", "M2", "M3"), gamma=0.25)
+        self.assertTrue(alpha.update(0, ("M1", "M2", "M20", "M2", "M3"), gamma=0.25))
         self.assertEqual(4, alpha.n_active())
         self.assertEqual(3, alpha_cp.n_active())
         self.assertNotEqual(alpha.get_dual_variable_matrix().shape,
                             alpha_cp.get_dual_variable_matrix().shape)
+
+    def test_iter(self):
+        cand_ids = [
+            [
+                ["MA1", "MA2"],
+                ["MA1", "MA2", "MA19", "MA10"],
+                ["MA20", "MA4", "MA5"],
+                ["MA2"],
+                ["MA3", "MA56", "MA8"]
+            ],
+            [
+                ["MB1"],
+                ["MB1", "MB2", "MB3", "MB10", "MB20"],
+                ["MB4", "MB5"],
+                ["MB2", "MB4"],
+                ["MB7", "MB9", "MB8"]
+            ],
+            [
+                ["MC1", "MC2", "MC3"],
+                ["MC1", "MC2", "MC9", "MC10", "MC22"],
+                ["MC20", "MC7"],
+                ["MC2", "MC99"],
+                ["MC72", "MC8"]
+            ]
+        ]
+
+        for rep in range(10):
+            alpha = DualVariables(C=2, label_space=cand_ids, random_state=rep, num_init_active_vars=5)
+
+            for i, (pref, _) in enumerate(zip(["A", "B", "C"], cand_ids)):
+                for y, a in alpha.iter(i):
+                    for ys in y:
+                        self.assertTrue(ys.startswith("M" + pref))
 
     def test_multiplication(self):
         cand_ids = [

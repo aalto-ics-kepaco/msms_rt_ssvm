@@ -24,12 +24,60 @@
 #
 ####
 import networkx as nx
+import numpy as np
+import itertools as it
 
 from collections import OrderedDict
 from typing import Union, Dict, Callable, Optional
 from msmsrt_scorer.lib.exact_solvers import TreeFactorGraph
+from sklearn.utils import check_random_state
 
 from ssvm.data_structures import Sequence
+
+
+def get_random_spanning_tree(y: Sequence, random_state: Optional[Union[int, np.random.RandomState]] = None,
+                             remove_edges_with_zero_rt_diff: bool = True):
+    """
+    Sample a random spanning tree from the full MRF.
+
+    :param y: Sequence, label sequence over which the MRF is defined
+
+    :param random_state: None | int | instance of RandomState used as seed for the random tree sampling
+        If seed is None, return the RandomState singleton used by np.random.
+        If seed is an int, return a new RandomState instance seeded with seed.
+        If seed is already a RandomState instance, return it.
+        Otherwise raise ValueError.
+
+    :param remove_edges_with_zero_rt_diff: boolean, indicating whether edges with zero RT difference should be
+        included in the random spanning tree.
+
+    :return: networkx graph
+    """
+    random_state = check_random_state(random_state)
+
+    # Output graph
+    var_conn_graph = nx.Graph()
+
+    # Add variable nodes and edges with random weight
+    var = list(range(len(y)))
+    for s in var:
+        var_conn_graph.add_node(s, retention_time=y.get_retention_time(s))
+
+    for s, t in it.combinations(var, 2):
+        rt_s, rt_t = var_conn_graph.nodes[s]["retention_time"], var_conn_graph.nodes[t]["retention_time"]
+        rt_diff_st = rt_t - rt_s
+
+        if remove_edges_with_zero_rt_diff and (rt_s == rt_t):
+            edge_weight = np.inf  # Such edges will not be chosen in the MST
+        else:
+            edge_weight = random_state.rand()
+
+        var_conn_graph.add_edge(s, t, weight=edge_weight, rt_diff=rt_diff_st)
+
+    # Get minimum spanning tree
+    var_conn_graph = nx.algorithms.tree.minimum_spanning_tree(var_conn_graph)
+
+    return var_conn_graph
 
 
 def identity(x):
