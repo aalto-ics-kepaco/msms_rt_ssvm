@@ -350,7 +350,8 @@ class TestDualVariables(unittest.TestCase):
 
         for C in [0.5, 1.0, 2.0]:
             for num_init_active_vars in range(1, 5):  # 1, 2, 3, 4
-                alphas = DualVariables(C=C, label_space=cand_ids, num_init_active_vars=num_init_active_vars, random_state=10910)
+                alphas = DualVariables(C=C, label_space=cand_ids, num_init_active_vars=num_init_active_vars,
+                                       random_state=10910)
 
                 _n_max_possible_vars = [np.minimum(num_init_active_vars, len(cand_ids[i][0])) for i in range(N)]
                 n_active = np.sum(_n_max_possible_vars)
@@ -396,12 +397,12 @@ class TestDualVariables(unittest.TestCase):
         gamma = 0.46
 
         alphas = DualVariables(C=C, label_space=cand_ids, num_init_active_vars=2, random_state=10910)
-        # print(alphas._iy)
+        print(alphas._iy)
         # Active variables
-        # [(0, ('M2',)),  (0, ('M1',)),
-        #  (1, ('M8',)),  (1, ('M9',)),
+        # [(0, ('M19',)), (0, ('M10',)),
+        #  (1, ('M8',)), (1, ('M7',)),
         #  (2, ('M72',)), (2, ('M11',)),
-        #  (3, ('M13',)), (3, ('M4',))]
+        #  (3, ('M4',)), (3, ('M3',))]
 
         # ---- Update an active dual variable ----
         B_old = alphas.get_dual_variable_matrix().todense()
@@ -410,8 +411,8 @@ class TestDualVariables(unittest.TestCase):
         val_old_M9 = alphas.get_dual_variable(1, ("M9",))
 
         self.assertEqual(C / (N * 2), val_old_M8)
-        self.assertEqual(0,           val_old_M7)
-        self.assertEqual(C / (N * 2), val_old_M9)
+        self.assertEqual(0,           val_old_M9)
+        self.assertEqual(C / (N * 2), val_old_M7)
 
         self.assertFalse(alphas.update(1, ("M8",), gamma))
         self.assertEqual(8, alphas.n_active())  # Number of active variables must not change
@@ -430,20 +431,20 @@ class TestDualVariables(unittest.TestCase):
         val_old_M22 = alphas.get_dual_variable(3, ("M22",))
 
         self.assertEqual(0,           val_old_M12)
-        self.assertEqual(C / (N * 2), val_old_M13)
-        self.assertEqual(0,           val_old_M3)
+        self.assertEqual(0,           val_old_M13)
+        self.assertEqual(C / (N * 2), val_old_M3)
         self.assertEqual(C / (N * 2), val_old_M4)
         self.assertEqual(0,           val_old_M22)
 
-        self.assertTrue(alphas.update(3, ("M3",), gamma))
+        self.assertTrue(alphas.update(3, ("M12",), gamma))
         self.assertEqual(9, alphas.n_active())
-        self.assertEqual((1 - gamma) * val_old_M12 + gamma * 0, alphas.get_dual_variable(3, ("M12",)))
+        self.assertEqual((1 - gamma) * val_old_M12 + gamma * C / N, alphas.get_dual_variable(3, ("M12",)))
         self.assertEqual((1 - gamma) * val_old_M13 + gamma * 0, alphas.get_dual_variable(3, ("M13",)))
-        self.assertEqual((1 - gamma) * val_old_M3 + gamma * C / N, alphas.get_dual_variable(3, ("M3",)))
+        self.assertEqual((1 - gamma) * val_old_M3 + gamma * 0, alphas.get_dual_variable(3, ("M3",)))
         self.assertEqual((1 - gamma) * val_old_M4 + gamma * 0, alphas.get_dual_variable(3, ("M4",)))
         self.assertEqual((1 - gamma) * val_old_M22 + gamma * 0, alphas.get_dual_variable(3, ("M22",)))
 
-        self.assertEqual((3, ("M3",)), alphas.get_iy_for_col(8))
+        self.assertEqual((3, ("M12",)), alphas.get_iy_for_col(8))
 
     def test_eq_dual_domain(self):
         cand_ids_1a = [
@@ -709,17 +710,38 @@ class TestDualVariables(unittest.TestCase):
         # Test subtracting two non-empty dual variable sets
         alphas_2 = DualVariables(C=1.5, label_space=cand_ids, random_state=2)
         sub_alphas = alphas - alphas_2
-        print(alphas._iy)
-        # [(0, ('M10',)), (1, ('M7',)), (2, ('M72',)), (3, ('M3',))]
-        print(alphas_2._iy)
-        # [(0, ('M19',)), (1, ('M7',)), (2, ('M11',)), (3, ('M22',))]
+        # print(alphas._iy)
+        # [(0, ('M2',)), (1, ('M9',)), (2, ('M11',)), (3, ('M4',))]
+        # print(alphas_2._iy)
+        # [(0, ('M1',)), (1, ('M7',)), (2, ('M72',)), (3, ('M12',))]
         self.assertTrue(DualVariables._eq_dual_domain(alphas, sub_alphas))
         self.assertTrue(DualVariables._eq_dual_domain(alphas_2, sub_alphas))
-        self.assertEqual(6, sub_alphas.n_active())
-        for (i, y_seq), a in [((0, ("M10", )), alphas.C / alphas.N), ((0, ("M19", )), - alphas.C / alphas.N),
-                              ((2, ("M72", )), alphas.C / alphas.N), ((2, ("M11", )), - alphas.C / alphas.N),
-                              ((3, ("M3", )),  alphas.C / alphas.N), ((3, ("M22", )), - alphas.C / alphas.N)]:
+        self.assertEqual(8, sub_alphas.n_active())
+        for (i, y_seq), a in [((0, ("M2", )), alphas.C / alphas.N), ((0, ("M1", )), - alphas.C / alphas.N),
+                              ((1, ("M9",)), alphas.C / alphas.N), ((1, ("M7",)), - alphas.C / alphas.N),
+                              ((2, ("M11", )), alphas.C / alphas.N), ((2, ("M72", )), - alphas.C / alphas.N),
+                              ((3, ("M4", )),  alphas.C / alphas.N), ((3, ("M12", )), - alphas.C / alphas.N)]:
             self.assertIn((i, y_seq), sub_alphas._iy)
+            self.assertEqual(a, sub_alphas.get_dual_variable(i, y_seq))
+
+        # Test subtracting two non-empty dual variable sets
+        alphas_2 = DualVariables(C=1.5, label_space=cand_ids, random_state=5)
+        sub_alphas = alphas - alphas_2
+        # print(alphas._iy)
+        # [(0, ('M2',)), (1, ('M9',)), (2, ('M11',)), (3, ('M4',))]
+        # print(alphas_2._iy)
+        # [(0, ('M10',)), (1, ('M8',)), (2, ('M11',)), (3, ('M4',))]
+        self.assertTrue(DualVariables._eq_dual_domain(alphas, sub_alphas))
+        self.assertTrue(DualVariables._eq_dual_domain(alphas_2, sub_alphas))
+        self.assertEqual(4, sub_alphas.n_active())
+        for (i, y_seq), a in [((0, ("M2", )), alphas.C / alphas.N), ((0, ("M10", )), - alphas.C / alphas.N),
+                              ((1, ("M9",)), alphas.C / alphas.N), ((1, ("M8",)), - alphas.C / alphas.N),
+                              ((2, ("M11", )), 0), ((2, ("M11", )), 0),
+                              ((3, ("M4", )),  0), ((3, ("M4", )), 0)]:
+            if a != 0:
+                self.assertIn((i, y_seq), sub_alphas._iy)
+            else:
+                self.assertNotIn((i, y_seq), sub_alphas._iy)
             self.assertEqual(a, sub_alphas.get_dual_variable(i, y_seq))
 
 

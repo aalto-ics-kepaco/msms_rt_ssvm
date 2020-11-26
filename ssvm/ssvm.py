@@ -24,14 +24,13 @@
 #
 ####
 import numpy as np
-import itertools as it
 import more_itertools as mit
 import tensorflow as tf
 import networkx as nx
 
 from collections import OrderedDict
 from copy import deepcopy
-from typing import List, Tuple,Dict, Union, Optional, TypeVar, Callable
+from typing import List, Tuple, Dict, Union, Optional, TypeVar, Callable
 from sklearn.utils.validation import check_random_state
 from sklearn.model_selection import GroupKFold
 from scipy.sparse import csc_matrix, lil_matrix, csr_matrix
@@ -84,14 +83,13 @@ class DualVariables(object):
         self.C = C
         assert self.C > 0, "The regularization parameter must be positive."
         self.N = len(label_space)
-        self.random_state = check_random_state(random_state)
+        self.random_state = random_state
 
         self.num_init_active_vars = num_init_active_vars
         assert self.num_init_active_vars > 0
 
         # Store a shuffled version of the candidate sets for each example and sequence element
-        self.label_space = [[self.random_state.permutation(label_space_i).tolist() for label_space_i in label_space[i]]
-                            for i in range(self.N)]
+        self.label_space = label_space
 
         if initialize:
             # Initialize the dual variables
@@ -134,21 +132,21 @@ class DualVariables(object):
 
         col = 0
         for i in range(self.N):
+            rs_i = check_random_state(self.random_state)
+
             n_added = 0
+            n_rejections = 0
             # Lazy generation of sample sequences, no problem with exponential space here
-            # FIXME: Produces heavily biased sequences, as last indices is increased first, then the second last ...
-            for y_seq in it.product(*self.label_space[i]):
-                assert y_seq not in _y2col[i], "What, that should not happen."
+            while (n_added < self.num_init_active_vars) and (n_rejections < 1000):
+                y_seq = tuple(rs_i.choice(label_space_is, 1).item() for label_space_is in self.label_space[i])
 
-                _alphas[i, col + n_added] = self.C / self.N
-                _y2col[i][y_seq] = col + n_added
-                _iy.append((i, y_seq))
-                n_added += 1
-
-                # Stop after we have added the desired amount of active variables. This probably happens before we run
-                # out of new label sequences.
-                if n_added == self.num_init_active_vars:
-                    break
+                if y_seq not in _y2col[i]:
+                    _alphas[i, col + n_added] = self.C / self.N
+                    _y2col[i][y_seq] = col + n_added
+                    _iy.append((i, y_seq))
+                    n_added += 1
+                else:
+                    n_rejections += 1
 
             # Make initial values feasible and sum up to C / N
             _alphas[i, col:(col + n_added)] /= n_added
@@ -160,9 +158,6 @@ class DualVariables(object):
         assert col <= _alphas.shape[1]
         _alphas.resize(self.N, col)
         assert not np.any(_alphas.tocsc().sum(axis=0) == 0)
-
-        # TODO Faster verification of the label sequence correctness, we transform all candidate set lists in to sets
-        # self.l_cand_ids = [for cand_ids_seq in (for cand_ids_exp in self.l_cand_ids)]
 
         return _alphas, _y2col, _iy
 
