@@ -24,9 +24,7 @@
 #
 ####
 import sqlite3
-import os
 import unittest
-import pickle
 import pandas as pd
 import numpy as np
 import itertools as it
@@ -34,9 +32,8 @@ import networkx as nx
 
 from matchms.Spectrum import Spectrum
 
-from ssvm.data_structures import CandidateSetMetIdent, SequenceSample, CandidateSQLiteDB, RandomSubsetCandidateSQLiteDB
+from ssvm.data_structures import SequenceSample, CandidateSQLiteDB, RandomSubsetCandidateSQLiteDB
 from ssvm.data_structures import Sequence
-from ssvm.examples.ssvm_metident import read_data
 
 DB_FN = "/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_LATEST.db"
 
@@ -356,16 +353,6 @@ class TestSequenceSample(unittest.TestCase):
         # No intersection of molecules between training and test sequences
         for i, j in it.product(test_seq, train_seq):
             self.assertTrue(len(set(i.labels) & set(j.labels)) == 0)
-
-
-# class TestCandidateSetMetIdent(unittest.TestCase):
-#     def test_is_pickleable(self):
-#         idir = "/home/bach/Documents/doctoral/data/metindent_ismb2016"
-#         X, fps, mols, mols2cand = read_data(idir)
-#         cand = CandidateSetMetIdent(mols, fps, mols2cand, idir=os.path.join(idir, "candidates"),
-#                                     preload_data=False)
-#
-#         cand_pkl = pickle.loads(pickle.dumps(cand))
 
 
 if __name__ == '__main__':

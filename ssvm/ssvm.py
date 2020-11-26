@@ -31,7 +31,7 @@ import networkx as nx
 
 from collections import OrderedDict
 from copy import deepcopy
-from typing import List, ItemsView, Tuple, ValuesView, KeysView, Iterator, Dict, Union, Optional, TypeVar, Callable
+from typing import List, Tuple,Dict, Union, Optional, TypeVar, Callable
 from sklearn.utils.validation import check_random_state
 from sklearn.model_selection import GroupKFold
 from scipy.sparse import csc_matrix, lil_matrix, csr_matrix
@@ -42,7 +42,7 @@ from msmsrt_scorer.lib.exact_solvers import TreeFactorGraph
 from ssvm.data_structures import SequenceSample, CandidateSetMetIdent, Sequence, LabeledSequence
 from ssvm.loss_functions import hamming_loss, tanimoto_loss
 from ssvm.evaluation_tools import get_topk_performance_csifingerid
-from ssvm.factor_graphs import ChainFactorGraph, identity, get_random_spanning_tree
+from ssvm.factor_graphs import get_random_spanning_tree
 from ssvm.kernel_utils import generalized_tanimoto_kernel, tanimoto_kernel
 
 
@@ -90,7 +90,7 @@ class DualVariables(object):
         assert self.num_init_active_vars > 0
 
         # Store a shuffled version of the candidate sets for each example and sequence element
-        self.label_space = [[self.random_state.permutation(_cand_ids).tolist() for _cand_ids in label_space[i]]
+        self.label_space = [[self.random_state.permutation(label_space_i).tolist() for label_space_i in label_space[i]]
                             for i in range(self.N)]
 
         if initialize:
@@ -166,7 +166,8 @@ class DualVariables(object):
 
         return _alphas, _y2col, _iy
 
-    def set_alphas(self, iy: List[Tuple[int, Tuple]], alphas: Union[float, List[float], np.ndarray]) -> DUALVARIABLES_T:
+    def set_alphas(self, iy: List[Tuple[int, Tuple[str, ...]]], alphas: Union[float, List[float], np.ndarray]) \
+            -> DUALVARIABLES_T:
         """
         Sets the values for the active dual variables. Class must not be initialized before. This function does not
         do any checks on the feasibility of the resulting DualVariable object.
@@ -335,6 +336,12 @@ class DualVariables(object):
                 a.append(self.get_dual_variable(_i, y_seq))
 
         return iy, a
+
+    def iter(self, i: int):
+        assert 0 <= i < self.N
+
+        for y_seq in self._y2col[i]:
+            yield y_seq, self._alphas[i, self._y2col[i][y_seq]]
 
     def __mul__(self, fac: Union[float, int]) -> DUALVARIABLES_T:
         if not np.isscalar(fac):
@@ -1351,19 +1358,22 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         random_state = check_random_state(self.random_state)
         n_iterations_total = 0
         for epoch in range(self.n_epochs):
+            print(epoch)
             for step, I_batch in enumerate(mit.chunked(random_state.permutation(np.arange(N)), self.batch_size)):
+                print(step)
                 # Find the most violating examples for the current batch
-                res = [self.inference(self.training_data_[i], self.training_graphs_[0][i], loss_augmented=True,
-                                      return_graphical_model=True)
+                res = [self.inference(self.training_data_[i], [G[i] for G in self.training_graphs_],
+                                      loss_augmented=True, return_graphical_model=True)
                        for i in I_batch]
 
-                y_I_hat = [y_i_hat for _, y_i_hat in res]
+                y_I_hat = [y_i_hat for y_i_hat, _ in res]
 
                 # Get step-width
                 if self.step_size == "linesearch":
-                    gamma = self._get_step_size_linesearch(I_batch, y_I_hat, [TFG for TFG, _ in res])
+                    gamma = self._get_step_size_linesearch(I_batch, y_I_hat, [TFG for _, TFG in res])
                 else:
                     gamma = self._get_step_size_diminishing(n_iterations_total, N)
+                print(gamma)
 
                 # Update the dual variables
                 is_new = [self.alphas_.update(i, y_i_hat, gamma) for i, y_i_hat in zip(I_batch, y_I_hat)]
@@ -1382,27 +1392,83 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         :param y_I_hat: list of tuples, list of most-violating label sequences
 
-        :param TFG_I: list of TreeFactorGraph, list of graphical models associated with the training examples
+        :param TFG_I: list of TreeFactorGraph, list of graphical models associated with the training examples. The TFGs
+            must be generated using loss-augmentation.
 
         :return: scalar, line search step-size
         """
+        N = len(self.training_data_)
+
+        # Update direction s
+        s = DualVariables(self.C, self.training_data_.get_labelspace(), initialize=False).set_alphas(
+            [(i, y_i_hat) for i, y_i_hat in zip(I_batch, y_I_hat)], self.C / N)
+
+        # Difference of the dual vectors: s - a
+        s_minus_a = s - self.alphas_  # type: DualVariables
+
+        # ================
+        # Nominator
+        # ================
         nom = 0.0
+
+        # Tracking some variables we need later for the denominator
+        l_mol_features = [{} for _ in I_batch]
+
         for idx, i in enumerate(I_batch):
-            y_i_hat = y_I_hat[idx]
             TFG = TFG_I[idx]
 
-            for (_, y), a_iy in self.alphas_.get_blocks(i):
+            # Go over the active "dual" variables: s(i, y) - a(s, y) != 0
+            for y, fac in s_minus_a.iter(i):
                 Z = self.label_sequence_to_Z(y, self.training_data_[i].get_labelspace())
-                llh = TFG.likelihood(Z, log=False)
-                nom += -a_iy * llh
+                nom += fac * TFG.likelihood(Z, log=False)  # fac = s(i, y) - a(i, y)
 
-            Z_hat = self.label_sequence_to_Z(y_i_hat, self.training_data_[i].get_labelspace())
-            nom += self.C * TFG.likelihood(Z_hat, log=False) / len(self.training_data_)
+                # Load the molecular features for the active sequence y
+                l_mol_features[idx][y] = self.training_data_.candidates.get_molecule_features_by_molecule_id(
+                    list(y), self.mol_feat_retention_order)
 
+        # ================
+        # Denominator
+        # ================
         den = 0.0
-        
+
+        l_sign_delta_t = [self.training_data_[i].get_sign_delta_t(self.training_graphs_[0][i]) for i in I_batch]
+        l_P = [self._get_P(self.training_graphs_[0][i]) for i in I_batch]
+
+        # Go over all i, j for which i = j
+        for idx, i in enumerate(I_batch):
+            sign_delta_t_i_T_P_i = l_sign_delta_t[idx] @ l_P[idx]
+
+            for y, fac in s_minus_a.iter(i):
+                L_yy = self.mol_kernel(l_mol_features[idx][y], l_mol_features[idx][y])
+                den += sign_delta_t_i_T_P_i @ L_yy @ sign_delta_t_i_T_P_i
+
+        # Go iver all i,j for which i != j. Note (i, j) gets the same values as (j, i)
+        for idx_i, i in enumerate(I_batch):
+            sign_delta_t_i_T_P_i = l_sign_delta_t[idx_i] @ l_P[idx_i]
+
+            for idx_j, j in enumerate(I_batch[idx_i + 1:], idx_i + 1):
+                sign_delta_t_j_T_P_j = l_sign_delta_t[idx_j] @ l_P[idx_j]
+
+                for y, fac_i in s_minus_a.iter(i):
+                    for by, fac_j in s_minus_a.iter(j):
+                        L_yby = self.mol_kernel(l_mol_features[idx_i][y], l_mol_features[idx_j][by])
+                        den += 2 * fac_i * fac_j * sign_delta_t_i_T_P_i @ L_yby @ sign_delta_t_j_T_P_j
 
         return np.maximum(0.0, np.minimum(1.0, nom / den))
+
+    @staticmethod
+    def _get_P(G: nx.Graph) -> np.ndarray:
+        """
+
+        :param G:
+        :return:
+        """
+        P = np.zeros((len(G.edges), len(G.nodes)))
+        for e_idx, (s, t) in enumerate(G.edges):
+            P[e_idx, s] = 1
+            P[e_idx, t] = -1
+
+        return P
 
     @staticmethod
     def label_sequence_to_Z(y: Tuple[str, ...], labelspace: List[List[str]]) -> List[int]:

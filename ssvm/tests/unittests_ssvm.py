@@ -34,6 +34,7 @@ import pandas as pd
 from matchms.Spectrum import Spectrum
 from typing import Tuple
 from scipy.sparse import csr_matrix
+from copy import deepcopy
 
 from ssvm.ssvm import _StructuredSVM, StructuredSVMMetIdent, DualVariables, StructuredSVMSequencesFixedMS2
 from ssvm.data_structures import CandidateSQLiteDB, SequenceSample, RandomSubsetCandidateSQLiteDB
@@ -548,8 +549,6 @@ class TestDualVariables(unittest.TestCase):
         self.assertFalse(DualVariables._eq_dual_domain(alpha_2a, alpha_2b))
 
     def test_deepcopy(self):
-        from copy import deepcopy
-
         cand_ids = [
             [
                 ["M1", "M2"],
@@ -578,11 +577,44 @@ class TestDualVariables(unittest.TestCase):
         self.assertEqual(alpha.get_dual_variable_matrix().shape,
                          alpha_cp.get_dual_variable_matrix().shape)
 
-        alpha.update(0, ("M1", "M2", "M20", "M2", "M3"), gamma=0.25)
+        self.assertTrue(alpha.update(0, ("M1", "M2", "M20", "M2", "M3"), gamma=0.25))
         self.assertEqual(4, alpha.n_active())
         self.assertEqual(3, alpha_cp.n_active())
         self.assertNotEqual(alpha.get_dual_variable_matrix().shape,
                             alpha_cp.get_dual_variable_matrix().shape)
+
+    def test_iter(self):
+        cand_ids = [
+            [
+                ["MA1", "MA2"],
+                ["MA1", "MA2", "MA19", "MA10"],
+                ["MA20", "MA4", "MA5"],
+                ["MA2"],
+                ["MA3", "MA56", "MA8"]
+            ],
+            [
+                ["MB1"],
+                ["MB1", "MB2", "MB3", "MB10", "MB20"],
+                ["MB4", "MB5"],
+                ["MB2", "MB4"],
+                ["MB7", "MB9", "MB8"]
+            ],
+            [
+                ["MC1", "MC2", "MC3"],
+                ["MC1", "MC2", "MC9", "MC10", "MC22"],
+                ["MC20", "MC7"],
+                ["MC2", "MC99"],
+                ["MC72", "MC8"]
+            ]
+        ]
+
+        for rep in range(10):
+            alpha = DualVariables(C=2, label_space=cand_ids, random_state=rep, num_init_active_vars=5)
+
+            for i, (pref, _) in enumerate(zip(["A", "B", "C"], cand_ids)):
+                for y, a in alpha.iter(i):
+                    for ys in y:
+                        self.assertTrue(ys.startswith("M" + pref))
 
     def test_multiplication(self):
         cand_ids = [
