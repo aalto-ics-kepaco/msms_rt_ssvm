@@ -30,7 +30,7 @@ if __name__ == "__main__":
     # ===================
     ssvm = StructuredSVMSequencesFixedMS2(
         mol_feat_label_loss="iokr_fps__positive", mol_feat_retention_order="substructure_count",
-        mol_kernel="minmax", C=2, step_size="linesearch", batch_size=2)
+        mol_kernel="minmax", C=2, step_size="linesearch", batch_size=8)
 
     N = 50
     seq_sample = SequenceSample(
@@ -40,5 +40,5 @@ if __name__ == "__main__":
         N=N, L_min=10,
         L_max=15, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
 
-    ssvm.fit(seq_sample, n_init_per_example=1)
+    ssvm.fit(seq_sample, n_init_per_example=5)
 
