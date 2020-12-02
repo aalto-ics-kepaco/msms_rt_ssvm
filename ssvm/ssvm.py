@@ -1378,6 +1378,30 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         return self
 
+    def predict(self, data: Sequence, map: bool = False, n_trees: int = 1) -> Union[Tuple[str, ...], Dict]:
+        """
+        Function to predict the marginal distribution of the candidate sets along the given (MS, RT)-sequence.
+
+        :param data:
+
+        :param map: boolean, indicating whether only the most likely candidate sequence should be returned instead of
+            the marginals.
+
+        :param n_trees: scalar, number of spanning trees used to approximate MRF projected on the sequence.
+
+        :return:
+            Either a dictionary of dictionaries containing the marginals for the candidate sets of each sequence
+            (MS, RT)-tuple (map = False, see 'max_marginals')
+
+                or
+
+            A tuple of strings containing the most likely label sequence for the given input (map = True, see 'inference')
+        """
+        if map:
+            return self.inference(data, n_trees=n_trees, loss_augmented=False)
+        else:
+            return self.max_marginals(data, n_trees=n_trees)
+
     def _get_step_size_linesearch(self, I_batch: List[int], y_I_hat: List[Tuple[str, ...]],
                                   TFG_I: List[TreeFactorGraph]) -> float:
         """
@@ -1627,7 +1651,12 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         :param n_trees: scalar or None, number of spanning trees used to approximate the MRF.
 
-        :return: dictionary,
+        :return: dictionary = {
+            sequence_index: dictionary = {
+                labels: list of strings, length = m, candidate labels
+                marg: array-like, shape = (m, ), candidate marginals scores
+            }
+        }
         """
         if G is None:
             # Get a list of random spanning trees used to approximate the MRF associated with the provided sequence.
