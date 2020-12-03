@@ -1457,11 +1457,15 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         return topk
 
-    def top1_score(self, sequence: LabeledSequence, G: Optional[List[nx.Graph]] = None, n_trees: int = 1):
+    def top1_score(self, sequence: LabeledSequence, map: bool = False, G: Optional[List[nx.Graph]] = None,
+                   n_trees: int = 1) -> float:
         """
         Calculate top-1 accuracy of the ranked candidate lists based on the max-marginals.
 
         :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
+
+        :param map: boolean, indicating whether the top-1 accuracy should be calculated from the most likely candidate
+            sequence (MAP estimate) (True) or the using the highest ranked candidates based on the marginals (False).
 
         :param G: list of networkx.Graphs or None, list of tree-like graphs used to approximate the MRT associated with
             the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'n_trees')
@@ -1470,7 +1474,15 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         :return: scalar, top-1 accuracy
         """
-        return self.score(sequence, G=G, n_trees=n_trees, max_k=1, return_percentage=True)
+        if map:
+            # Use most likely candidate assignment (MAP)
+            map_seq = self.predict(sequence, True, G=G, n_trees=n_trees)
+            top1 = np.mean([map_s == sequence.get_labels(s) for s, map_s in enumerate(map_seq)])
+        else:
+            # Use top ranked candidate based on the marginals
+            top1 = self.score(sequence, G=G, n_trees=n_trees, max_k=1, return_percentage=True)
+
+        return top1
 
     def _get_step_size_linesearch(self, I_batch: List[int], y_I_hat: List[Tuple[str, ...]],
                                   TFG_I: List[TreeFactorGraph]) -> float:

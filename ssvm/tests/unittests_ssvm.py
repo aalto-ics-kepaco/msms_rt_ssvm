@@ -277,7 +277,11 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
         topk_acc = self.ssvm.score(self.ssvm.training_data_[3], G=None, n_trees=1, max_k=100)
         self.assertTrue(len(topk_acc) <= 100)
 
+    def test_top1_score(self):
         top1_acc = self.ssvm.top1_score(self.ssvm.training_data_[3], G=None, n_trees=1)
+        self.assertTrue(np.isscalar(top1_acc))
+
+        top1_acc = self.ssvm.top1_score(self.ssvm.training_data_[3], map=True, G=None, n_trees=1)
         self.assertTrue(np.isscalar(top1_acc))
 
 
