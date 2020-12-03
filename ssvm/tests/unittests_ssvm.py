@@ -273,16 +273,26 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
                 self.assertEqual(self.ssvm.training_data_[i].get_labelspace(s), marg[s]["label"])
                 self.assertEqual(len(self.ssvm.training_data_[i].get_labelspace(s)), len(marg[s]["score"]))
 
-    def test_score(self):
-        topk_acc = self.ssvm.score(self.ssvm.training_data_[3], G=None, n_trees=1, max_k=100)
-        self.assertTrue(len(topk_acc) <= 100)
+    def test_topk_score(self):
+        topk_acc = self.ssvm.topk_score(self.ssvm.training_data_[3], G=None, n_trees=1, max_k=100)
+        self.assertTrue(len(topk_acc) < 100)
+
+        topk_acc = self.ssvm.topk_score(self.ssvm.training_data_[3], G=None, n_trees=1, max_k=100, pad_output=True)
+        self.assertEqual(100, len(topk_acc))
 
     def test_top1_score(self):
         top1_acc = self.ssvm.top1_score(self.ssvm.training_data_[3], G=None, n_trees=1)
         self.assertTrue(np.isscalar(top1_acc))
 
-        top1_acc = self.ssvm.top1_score(self.ssvm.training_data_[3], map=True, G=None, n_trees=1)
+        top1_acc = self.ssvm.top1_score(self.ssvm.training_data_[3], G=None, n_trees=1, map=True)
         self.assertTrue(np.isscalar(top1_acc))
+
+    def test_ndcg_score(self):
+        ndcg_ll = self.ssvm.ndcg_score(self.ssvm.training_data_[2], use_label_loss=True)
+        self.assertTrue(np.isscalar(ndcg_ll))
+
+        ndcg_ohc = self.ssvm.ndcg_score(self.ssvm.training_data_[2], use_label_loss=False)
+        self.assertTrue(np.isscalar(ndcg_ohc))
 
 
 class TestDualVariables(unittest.TestCase):
