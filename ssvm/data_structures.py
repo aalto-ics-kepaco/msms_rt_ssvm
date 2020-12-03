@@ -796,6 +796,20 @@ class LabeledSequence(Sequence):
 
         super(LabeledSequence, self).__init__(spectra=spectra, candidates=candidates, ms2scorer=ms2scorer)
 
+    def get_labels(self, s: Optional[int] = None) -> Union[str, List[str]]:
+        """
+        Get the sequence labels.
+
+        :param s: scalar, sequence index for which the label should be returned. If None, labels are returned for all
+            spectra in the sequence.
+
+        :return: list of strings or string, label(s) of the spectra sequence
+        """
+        if s is None:
+            return self.labels
+        else:
+            return self.labels[s]
+
     def as_Xy_input(self) -> Tuple[List[Spectrum], List[str]]:
         """
         Return the (MS, RT)-sequence and ground truth label separately as input for the sklearn interface.

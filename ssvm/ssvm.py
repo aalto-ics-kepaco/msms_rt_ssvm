@@ -33,10 +33,12 @@ from copy import deepcopy
 from typing import List, Tuple, Dict, Union, Optional, TypeVar, Callable
 from sklearn.utils.validation import check_random_state
 from sklearn.model_selection import GroupKFold
+from sklearn.metrics import ndcg_score
 from scipy.sparse import csc_matrix, lil_matrix, csr_matrix
 from tqdm import tqdm
 
 from msmsrt_scorer.lib.exact_solvers import TreeFactorGraph
+from msmsrt_scorer.lib.evaluation_tools import get_topk_performance_from_scores as get_topk_performance_from_marginals
 
 from ssvm.data_structures import SequenceSample, CandidateSetMetIdent, Sequence, LabeledSequence
 from ssvm.loss_functions import hamming_loss, tanimoto_loss
@@ -1378,6 +1380,229 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         return self
 
+    def predict(self, sequence: Sequence, map: bool = False, G: Optional[List[nx.Graph]] = None, n_trees: int = 1) \
+            -> Union[Tuple[str, ...], Dict[int, Dict[str, Union[int, np.ndarray, List[str]]]]]:
+        """
+        Function to predict the marginal distribution of the candidate sets along the given (MS, RT)-sequence.
+
+        TODO: We should allow to pass in a SequenceSample to allow making predictions for multiple sequences at a time.
+
+        :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
+
+        :param map: boolean, indicating whether only the most likely candidate sequence should be returned instead of
+            the marginals.
+
+        :param G: list of networkx.Graphs or None, list of tree-like graphs used to approximate the MRT associated with
+            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'n_trees')
+
+        :param n_trees: scalar, number of spanning trees used to approximate MRF projected on the sequence.
+
+        :return:
+            Either a dictionary of dictionaries containing the marginals for the candidate sets of each sequence
+            (MS, RT)-tuple (map = False, see 'max_marginals')
+
+                or
+
+            A tuple of strings containing the most likely label sequence for the given input (map = True, see 'inference')
+        """
+        if map:
+            return self.inference(sequence, G=G, n_trees=n_trees, loss_augmented=False)
+        else:
+            return self.max_marginals(sequence, G=G, n_trees=n_trees)
+
+    def score(self, data: SequenceSample, G: Optional[List[nx.Graph]] = None, n_trees: int = 1, stype: str = "top1_mm",
+              average: bool = True, **kwargs) -> Union[float, np.ndarray]:
+        """
+        TODO: The passed graph related parameters are not used yet.
+        TODO: We could calculate the scores here in parallel
+
+        :param data: SequenceSample, Sample of (MS, RT)-sequence and associated data, e.g. candidate sets.
+
+        :param G: list of networkx.Graphs or None, list of tree-like graphs used to approximate the MRT associated with
+            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'n_trees')
+
+        :param n_trees: scalar, number of spanning trees used to approximate MRF projected on the sequence.
+
+        :param stype: string, indicating which scoring type to use:
+
+            "top1_mm" - top1 accuracy using max-marginals
+            "top1_map" - top1 accuracy of the MAP estimate
+            "topk_mm" - topk accuracy using max-marginals (k = 50)
+            "ndcg_ll" - Normalized Discounted Cumulative Gain calculated from the label-loss and max-marginals ranking.
+            "ndcg_ohc" - Normalized Discounted Cumulative Gain calculated from the one-hot-coding and max-marginals ranking.
+
+        :param average: boolean, indicating whether the score should be averaged across the sample
+
+        :param kwargs: keyword arguments passed to the scoring functions
+
+        :return: scalar or array-like, requested score
+        """
+        if stype == "top1_mm":
+            scores = [self.top1_score(sequence) for sequence in data]
+        elif stype == "top1_map":
+            scores = [self.top1_score(sequence, map=True) for sequence in data]
+        elif stype == "topk_mm":
+            return_percentage = kwargs.get("return_percentage", True)
+            max_k = kwargs.get("max_k", 50)
+            scores = [
+                self.topk_score(
+                    sequence, G=None, n_trees=1, return_percentage=return_percentage, max_k=max_k,  pad_output=True)
+                for sequence in data
+            ]
+        elif stype == "ndcg_ll":
+            scores = [self.ndcg_score(sequence, use_label_loss=True) for sequence in data]
+        elif stype == "ndcg_ohc":
+            scores = [self.ndcg_score(sequence, use_label_loss=False) for sequence in data]
+        else:
+            raise ValueError("Invalid scoring type: '%s'." % stype)
+
+        scores = np.array(scores)  # shape = (n_samples, ) or (n_samples, max_k)
+
+        # Average the scores across the samples if desired
+        if average:
+            scores = np.mean(scores, axis=0)
+
+        return scores
+
+    def topk_score(self, sequence: LabeledSequence, G: Optional[List[nx.Graph]] = None, n_trees: int = 1,
+                   return_percentage: bool = True, max_k: Optional[int] = None, pad_output: bool = False) \
+            -> Union[int, float, np.ndarray]:
+        """
+        Calculate top-k accuracy of the ranked candidate lists based on the max-marginals.
+
+        TODO: For sklearn compatibility we need to separate the sequence data from the labels.
+        TODO: Add a logger event here.
+
+        :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
+
+        :param G: list of networkx.Graphs or None, list of tree-like graphs used to approximate the MRT associated with
+            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'n_trees')
+
+        :param n_trees: scalar, number of spanning trees used to approximate MRF projected on the sequence.
+
+        :param return_percentage: boolean, indicating whether the percentage of correctly ranked candidates in top-k
+            should be returned (True) or the absolute number (False).
+
+        :param max_k: scalar, up to with k the top-k performance should be returned. If None, k is set to infinite.
+
+        :param pad_output: boolean, indicating whether the top-k accuracy output array should be padded to the length
+            equal 'max_k'. The value at the end of the array is repeated.
+
+        :return: array-like, shape = (max_k, ), list of top-k, e.g. top-1, top-2, ..., accuracies. Note, the array is
+            zero-based, i.e. at index 0 we have top-1. If max_k == 1, the output is a scalar.
+        """
+        # Calculate the marginals
+        marginals = self.predict(sequence, G=G, n_trees=n_trees, map=False)
+
+        # Need to find the index of the correct label / molecular structure in the candidate sets to determine the top-k
+        # accuracy.
+        for s in marginals:
+            marginals[s]["index_of_correct_structure"] = marginals[s]["label"].index(sequence.get_labels(s))
+
+        # Calculate the top-k performance
+        topk = get_topk_performance_from_marginals(marginals, method="casmi2016")[return_percentage]  # type: np.ndarray
+
+        # Restrict the output the maximum k requested
+        if max_k is not None:
+            assert max_k >= 1
+
+            topk = topk[:max_k]
+
+            # Pad the output to match the length with max_k,
+            #   e.g. let max_k = 7 then [12, 56, 97, 100] --> [12, 56, 97, 100, 100, 100, 100]
+            if pad_output:
+                _n_to_pad = max_k - len(topk)
+                topk = np.pad(topk, (0, _n_to_pad), mode="edge")
+                assert len(topk) == max_k
+
+        # Output scalar of only top-1 is requested.
+        if len(topk) == 1:
+            topk = topk[0].item()
+
+        return topk
+
+    def top1_score(self, sequence: LabeledSequence, G: Optional[List[nx.Graph]] = None, n_trees: int = 1,
+                   map: bool = False) -> float:
+        """
+        Calculate top-1 accuracy of the ranked candidate lists based on the max-marginals.
+
+        :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
+
+        :param G: list of networkx.Graphs or None, list of tree-like graphs used to approximate the MRT associated with
+            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'n_trees')
+
+        :param n_trees: scalar, number of spanning trees used to approximate MRF projected on the sequence.
+
+        :param map: boolean, indicating whether the top-1 accuracy should be calculated from the most likely candidate
+            sequence (MAP estimate) (True) or the using the highest ranked candidates based on the marginals (False).
+
+        :return: scalar, top-1 accuracy
+        """
+        if map:
+            # Use most likely candidate assignment (MAP)
+            map_seq = self.predict(sequence, True, G=G, n_trees=n_trees)
+            top1 = np.mean([y_map_s == sequence.get_labels(s) for s, y_map_s in enumerate(map_seq)]).item()
+        else:
+            # Use top ranked candidate based on the marginals
+            top1 = self.topk_score(sequence, G=G, n_trees=n_trees, max_k=1, return_percentage=True)
+
+        return top1
+
+    def ndcg_score(self, sequence: LabeledSequence, G: Optional[List[nx.Graph]] = None, n_trees: int = 1,
+                   use_label_loss: bool = True) -> float:
+        """
+        Compute the Normalized Discounted Cumulative Gain (NDCG) for the given (MS, RT)-sequence.
+
+        ''
+            Sum the true scores ranked in the order induced by the predicted scores, after applying a logarithmic
+            discount. Then divide by the best possible score (Ideal DCG, obtained for a perfect ranking) to obtain a
+            score between 0 and 1.
+        ''
+        From: https://scikit-learn.org/stable/modules/generated/sklearn.metrics.ndcg_score.html
+
+        The NDCG score will be high, if the predicted ranking is close to the ground truth (GT) ranking.
+
+        :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
+
+        :param G: list of networkx.Graphs or None, list of tree-like graphs used to approximate the MRT associated with
+            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'n_trees')
+
+        :param n_trees: scalar, number of spanning trees used to approximate MRF projected on the sequence.
+
+        :param use_label_loss: boolean, indicating whether the label-loss should be used to define the GT ranking, be
+            using 1 - label_loss for each candidate as GT relevance value (True). If set to False, a one-hot-encoding
+            vector with a one at the correct candidate and zero otherwise is used as GT relevance vector.
+
+        :return: scalar, NDCG value averaged across the sequence
+        """
+        def _one_hot_vector(idx, length):
+            v = np.zeros((length, ))
+            v[idx] = 1
+            return v
+
+        # Calculate the marginals
+        marginals = self.predict(sequence, G=G, n_trees=n_trees, map=False)
+
+        # Get the ground-truth relevance for the ranked lists
+        if use_label_loss:
+            # 1 - label_loss
+            gt_relevance = [
+                1 - sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s)
+                for s in marginals
+            ]
+        else:
+            # One-hot-encoding of the positive of the correct molecular structure
+            gt_relevance = [
+                _one_hot_vector(marginals[s]["label"].index(sequence.get_labels(s)), marginals[s]["n_cand"])
+                for s in marginals
+            ]
+
+        # Calculate the NDCG averaged over the sequence
+        return np.mean([
+            ndcg_score(gt_relevance[s][np.newaxis, :], marginals[s]["score"][np.newaxis, :])
+            for s in marginals
+        ]).item()
+
     def _get_step_size_linesearch(self, I_batch: List[int], y_I_hat: List[Tuple[str, ...]],
                                   TFG_I: List[TreeFactorGraph]) -> float:
         """
@@ -1496,12 +1721,12 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         return [[get_random_spanning_tree(y_seq, random_state=tree) for y_seq in data]
                 for tree in range(n_trees_per_sequence)]
 
-    def _I_rsvm_jfeat(self, Y: np.array) -> np.ndarray:
+    def _I_jfeat_rsvm(self, Y: np.array) -> np.ndarray:
         """
         :param Y: array-like, shape = (n_molecules, n_features), molecular feature vectors to calculate the preference
             values for.
 
-        :return:
+        :return: array-like, shape = (n_molecules, )
         """
         # Note: L_i = |E_j|
         N = len(self.training_data_)
@@ -1534,7 +1759,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         :return: array-like, shape = (n_molecules, ), preference values for all molecules.
         """
-        I = self._I_rsvm_jfeat(Y)
+        I = self._I_jfeat_rsvm(Y)
 
         # Note: L_i = |E_j|
         N = len(self.training_data_)
@@ -1627,7 +1852,13 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         :param n_trees: scalar or None, number of spanning trees used to approximate the MRF.
 
-        :return: dictionary,
+        :return: dictionary = {
+            sequence_index: dictionary = {
+                labels: list of strings, length = m, candidate labels
+                topk_score: array-like, shape = (m, ), candidate marginals scores
+                n_cand: scalar, number of candidate labels
+            }
+        } the dictionary is of length
         """
         if G is None:
             # Get a list of random spanning trees used to approximate the MRF associated with the provided sequence.
@@ -1734,7 +1965,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             .max_product() \
             .get_max_marginals(normalize)
 
-        return {s: {"label": sequence.get_labelspace(s), "marg": marg[s]} for s in G.nodes}
+        return {s: {"label": sequence.get_labelspace(s), "score": marg[s], "n_cand": len(marg[s])} for s in G.nodes}
 
     @staticmethod
     def _inference(node_potentials: OrderedDict, edge_potentials: Dict, G: nx.Graph) \

@@ -178,7 +178,7 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
             rt_loop += time.time() - start
 
             start = time.time()
-            I = self.ssvm._I_rsvm_jfeat(Y_candidates)
+            I = self.ssvm._I_jfeat_rsvm(Y_candidates)
             rt_vec += time.time() - start
 
             self.assertEqual((len(Y_candidates), ), I.shape)
@@ -270,8 +270,57 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
             self.assertEqual(len(self.ssvm.training_data_[i]), len(marg))
 
             for s in range(len(self.ssvm.training_data_[i])):
-                self.assertEqual(len(self.ssvm.training_data_[i].get_labelspace(s)), len(marg[s]["label"]))
-                self.assertEqual(len(self.ssvm.training_data_[i].get_labelspace(s)), len(marg[s]["marg"]))
+                self.assertEqual(self.ssvm.training_data_[i].get_labelspace(s), marg[s]["label"])
+                self.assertEqual(len(self.ssvm.training_data_[i].get_labelspace(s)), len(marg[s]["score"]))
+
+    # ------------------------------------------------------------
+    # FOR THE SCORING WE CURRENTLY ONLY TEST THE OUTPUT DIMENSIONS
+    # ------------------------------------------------------------
+    def test_topk_score(self):
+        topk_acc = self.ssvm.topk_score(self.ssvm.training_data_[3], G=None, n_trees=1, max_k=100)
+        self.assertTrue(len(topk_acc) < 100)
+
+        topk_acc = self.ssvm.topk_score(self.ssvm.training_data_[3], G=None, n_trees=1, max_k=100, pad_output=True)
+        self.assertEqual(100, len(topk_acc))
+
+    def test_top1_score(self):
+        top1_acc = self.ssvm.top1_score(self.ssvm.training_data_[3], G=None, n_trees=1)
+        self.assertTrue(np.isscalar(top1_acc))
+
+        top1_acc = self.ssvm.top1_score(self.ssvm.training_data_[3], G=None, n_trees=1, map=True)
+        self.assertTrue(np.isscalar(top1_acc))
+
+    def test_ndcg_score(self):
+        ndcg_ll = self.ssvm.ndcg_score(self.ssvm.training_data_[2], use_label_loss=True)
+        self.assertTrue(np.isscalar(ndcg_ll))
+
+        ndcg_ohc = self.ssvm.ndcg_score(self.ssvm.training_data_[2], use_label_loss=False)
+        self.assertTrue(np.isscalar(ndcg_ohc))
+
+    def test_score(self):
+        # Top-1 (averaged)
+        score = self.ssvm.score(
+            [self.ssvm.training_data_[0], self.ssvm.training_data_[1], self.ssvm.training_data_[3]],
+            stype="top1_mm")
+        self.assertTrue(np.isscalar(score))
+
+        # Top-1
+        score = self.ssvm.score(
+            [self.ssvm.training_data_[0], self.ssvm.training_data_[1], self.ssvm.training_data_[3]],
+            stype="top1_mm", average=False)
+        self.assertEqual((3, ), score.shape)
+
+        # Top-k (averaged)
+        score = self.ssvm.score(
+            [self.ssvm.training_data_[0], self.ssvm.training_data_[1], self.ssvm.training_data_[3]],
+            stype="topk_mm", max_k=100)
+        self.assertEqual((100, ), score.shape)
+
+        # Top-k
+        score = self.ssvm.score(
+            [self.ssvm.training_data_[0], self.ssvm.training_data_[1], self.ssvm.training_data_[3]],
+            stype="topk_mm", average=False, max_k=100)
+        self.assertEqual((3, 100), score.shape)
 
 
 class TestDualVariables(unittest.TestCase):
