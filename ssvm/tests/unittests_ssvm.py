@@ -178,7 +178,7 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
             rt_loop += time.time() - start
 
             start = time.time()
-            I = self.ssvm._I_rsvm_jfeat(Y_candidates)
+            I = self.ssvm._I_jfeat_rsvm(Y_candidates)
             rt_vec += time.time() - start
 
             self.assertEqual((len(Y_candidates), ), I.shape)
@@ -270,8 +270,15 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
             self.assertEqual(len(self.ssvm.training_data_[i]), len(marg))
 
             for s in range(len(self.ssvm.training_data_[i])):
-                self.assertEqual(len(self.ssvm.training_data_[i].get_labelspace(s)), len(marg[s]["label"]))
-                self.assertEqual(len(self.ssvm.training_data_[i].get_labelspace(s)), len(marg[s]["marg"]))
+                self.assertEqual(self.ssvm.training_data_[i].get_labelspace(s), marg[s]["label"])
+                self.assertEqual(len(self.ssvm.training_data_[i].get_labelspace(s)), len(marg[s]["score"]))
+
+    def test_score(self):
+        topk_acc = self.ssvm.score(self.ssvm.training_data_[3], G=None, n_trees=1, max_k=100)
+        self.assertTrue(len(topk_acc) <= 100)
+
+        top1_acc = self.ssvm.top1_score(self.ssvm.training_data_[3], G=None, n_trees=1)
+        self.assertTrue(np.isscalar(top1_acc))
 
 
 class TestDualVariables(unittest.TestCase):

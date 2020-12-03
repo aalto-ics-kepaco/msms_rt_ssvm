@@ -37,6 +37,7 @@ from scipy.sparse import csc_matrix, lil_matrix, csr_matrix
 from tqdm import tqdm
 
 from msmsrt_scorer.lib.exact_solvers import TreeFactorGraph
+from msmsrt_scorer.lib.evaluation_tools import get_topk_performance_from_scores as get_topk_performance_from_marginals
 
 from ssvm.data_structures import SequenceSample, CandidateSetMetIdent, Sequence, LabeledSequence
 from ssvm.loss_functions import hamming_loss, tanimoto_loss
@@ -1378,14 +1379,20 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         return self
 
-    def predict(self, data: Sequence, map: bool = False, n_trees: int = 1) -> Union[Tuple[str, ...], Dict]:
+    def predict(self, sequence: Sequence, map: bool = False, G: Optional[List[nx.Graph]] = None, n_trees: int = 1) \
+            -> Union[Tuple[str, ...], Dict[int, Dict[str, Union[int, np.ndarray, List[str]]]]]:
         """
         Function to predict the marginal distribution of the candidate sets along the given (MS, RT)-sequence.
 
-        :param data:
+        TODO: We should allow to pass in a SequenceSample to allow making predictions for multiple sequences at a time.
+
+        :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
 
         :param map: boolean, indicating whether only the most likely candidate sequence should be returned instead of
             the marginals.
+
+        :param G: list of networkx.Graphs or None, list of tree-like graphs used to approximate the MRT associated with
+            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'n_trees')
 
         :param n_trees: scalar, number of spanning trees used to approximate MRF projected on the sequence.
 
@@ -1398,9 +1405,72 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             A tuple of strings containing the most likely label sequence for the given input (map = True, see 'inference')
         """
         if map:
-            return self.inference(data, n_trees=n_trees, loss_augmented=False)
+            return self.inference(sequence, G=G, n_trees=n_trees, loss_augmented=False)
         else:
-            return self.max_marginals(data, n_trees=n_trees)
+            return self.max_marginals(sequence, G=G, n_trees=n_trees)
+
+    def score(self, sequence: LabeledSequence, G: Optional[List[nx.Graph]] = None, n_trees: int = 1,
+              return_percentage: bool = True, max_k: Optional[int] = None) -> Union[int, float, np.ndarray]:
+        """
+        Calculate top-k accuracy of the ranked candidate lists based on the max-marginals.
+
+        TODO: For sklearn compatibility we need to separate the sequence data from the labels.
+        TODO: We should allow to pass in a SequenceSample to allow making predictions for multiple sequences at a time.
+        TODO: Add a logger event here.
+
+        :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
+
+        :param G: list of networkx.Graphs or None, list of tree-like graphs used to approximate the MRT associated with
+            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'n_trees')
+
+        :param n_trees: scalar, number of spanning trees used to approximate MRF projected on the sequence.
+
+        :param return_percentage: boolean, indicating whether the percentage of correctly ranked candidates in top-k
+            should be returned (True) or the absolute number (False).
+
+        :param max_k: scalar, up to with k the top-k performance should be returned. If None, k is set to infinite.
+
+        :return: array-like, shape = (max_k, ), list of top-k, e.g. top-1, top-2, ..., accuracies. Note, the array is
+            zero-based, i.e. at index 0 we have top-1. If max_k == 1, the output is a scalar.
+        """
+        # Calculate the marginals
+        marginals = self.predict(sequence, G=G, n_trees=n_trees, map=False)
+
+        # Need to find the index of the correct label / molecular structure in the candidate sets to determine the top-k
+        # accuracy.
+        for s in marginals:
+            try:
+                marginals[s]["index_of_correct_structure"] = marginals[s]["label"].index(sequence.get_labels(s))
+            except ValueError:
+                marginals[s]["index_of_correct_structure"] = np.nan
+
+        # Calculate the top-k performance
+        topk = get_topk_performance_from_marginals(marginals, method="casmi2016")[return_percentage]  # type: np.ndarray
+
+        # Restrict the output the maximum k requested
+        if max_k is not None:
+            topk = topk[:max_k]
+
+        # Output scalar of only top-1 is requested.
+        if len(topk) == 1:
+            topk = topk[0].item()
+
+        return topk
+
+    def top1_score(self, sequence: LabeledSequence, G: Optional[List[nx.Graph]] = None, n_trees: int = 1):
+        """
+        Calculate top-1 accuracy of the ranked candidate lists based on the max-marginals.
+
+        :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
+
+        :param G: list of networkx.Graphs or None, list of tree-like graphs used to approximate the MRT associated with
+            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'n_trees')
+
+        :param n_trees: scalar, number of spanning trees used to approximate MRF projected on the sequence.
+
+        :return: scalar, top-1 accuracy
+        """
+        return self.score(sequence, G=G, n_trees=n_trees, max_k=1, return_percentage=True)
 
     def _get_step_size_linesearch(self, I_batch: List[int], y_I_hat: List[Tuple[str, ...]],
                                   TFG_I: List[TreeFactorGraph]) -> float:
@@ -1520,12 +1590,12 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         return [[get_random_spanning_tree(y_seq, random_state=tree) for y_seq in data]
                 for tree in range(n_trees_per_sequence)]
 
-    def _I_rsvm_jfeat(self, Y: np.array) -> np.ndarray:
+    def _I_jfeat_rsvm(self, Y: np.array) -> np.ndarray:
         """
         :param Y: array-like, shape = (n_molecules, n_features), molecular feature vectors to calculate the preference
             values for.
 
-        :return:
+        :return: array-like, shape = (n_molecules, )
         """
         # Note: L_i = |E_j|
         N = len(self.training_data_)
@@ -1558,7 +1628,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         :return: array-like, shape = (n_molecules, ), preference values for all molecules.
         """
-        I = self._I_rsvm_jfeat(Y)
+        I = self._I_jfeat_rsvm(Y)
 
         # Note: L_i = |E_j|
         N = len(self.training_data_)
@@ -1654,9 +1724,10 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         :return: dictionary = {
             sequence_index: dictionary = {
                 labels: list of strings, length = m, candidate labels
-                marg: array-like, shape = (m, ), candidate marginals scores
+                score: array-like, shape = (m, ), candidate marginals scores
+                n_cand: scalar, number of candidate labels
             }
-        }
+        } the dictionary is of length
         """
         if G is None:
             # Get a list of random spanning trees used to approximate the MRF associated with the provided sequence.
@@ -1763,7 +1834,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             .max_product() \
             .get_max_marginals(normalize)
 
-        return {s: {"label": sequence.get_labelspace(s), "marg": marg[s]} for s in G.nodes}
+        return {s: {"label": sequence.get_labelspace(s), "score": marg[s], "n_cand": len(marg[s])} for s in G.nodes}
 
     @staticmethod
     def _inference(node_potentials: OrderedDict, edge_potentials: Dict, G: nx.Graph) \
