@@ -273,6 +273,9 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
                 self.assertEqual(self.ssvm.training_data_[i].get_labelspace(s), marg[s]["label"])
                 self.assertEqual(len(self.ssvm.training_data_[i].get_labelspace(s)), len(marg[s]["score"]))
 
+    # ------------------------------------------------------------
+    # FOR THE SCORING WE CURRENTLY ONLY TEST THE OUTPUT DIMENSIONS
+    # ------------------------------------------------------------
     def test_topk_score(self):
         topk_acc = self.ssvm.topk_score(self.ssvm.training_data_[3], G=None, n_trees=1, max_k=100)
         self.assertTrue(len(topk_acc) < 100)
@@ -293,6 +296,31 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
 
         ndcg_ohc = self.ssvm.ndcg_score(self.ssvm.training_data_[2], use_label_loss=False)
         self.assertTrue(np.isscalar(ndcg_ohc))
+
+    def test_score(self):
+        # Top-1 (averaged)
+        score = self.ssvm.score(
+            [self.ssvm.training_data_[0], self.ssvm.training_data_[1], self.ssvm.training_data_[3]],
+            stype="top1_mm")
+        self.assertTrue(np.isscalar(score))
+
+        # Top-1
+        score = self.ssvm.score(
+            [self.ssvm.training_data_[0], self.ssvm.training_data_[1], self.ssvm.training_data_[3]],
+            stype="top1_mm", average=False)
+        self.assertEqual((3, ), score.shape)
+
+        # Top-k (averaged)
+        score = self.ssvm.score(
+            [self.ssvm.training_data_[0], self.ssvm.training_data_[1], self.ssvm.training_data_[3]],
+            stype="topk_mm", max_k=100)
+        self.assertEqual((100, ), score.shape)
+
+        # Top-k
+        score = self.ssvm.score(
+            [self.ssvm.training_data_[0], self.ssvm.training_data_[1], self.ssvm.training_data_[3]],
+            stype="topk_mm", average=False, max_k=100)
+        self.assertEqual((3, 100), score.shape)
 
 
 class TestDualVariables(unittest.TestCase):

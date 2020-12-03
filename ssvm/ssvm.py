@@ -1462,10 +1462,6 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         if average:
             scores = np.mean(scores, axis=0)
 
-        # Reduce singleton scores to scalars
-        if len(scores) == 1:
-            scores = scores.item()
-
         return scores
 
     def topk_score(self, sequence: LabeledSequence, G: Optional[List[nx.Graph]] = None, n_trees: int = 1,
