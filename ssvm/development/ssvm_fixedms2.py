@@ -30,9 +30,9 @@ if __name__ == "__main__":
     # ===================
     ssvm = StructuredSVMSequencesFixedMS2(
         mol_feat_label_loss="iokr_fps__positive", mol_feat_retention_order="substructure_count",
-        mol_kernel="minmax", C=2, step_size="linesearch", batch_size=8)
+        mol_kernel="minmax", C=2, step_size="linesearch", batch_size=8, n_epochs=1)
 
-    N = 50
+    N = 24
     seq_sample = SequenceSample(
         spectra, labels,
         RandomSubsetCandidateSQLiteDB(db_fn=DB_FN, molecule_identifier="inchi", random_state=192,
