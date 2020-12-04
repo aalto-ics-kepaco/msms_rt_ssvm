@@ -160,8 +160,19 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         np.testing.assert_equal(feature_matrix, df_features.iloc[:, 1:].values)
         self.assertListEqual(molecule_ids, df_features["identifier"].to_list())
 
-        feature_matrix_rev = candidates.get_molecule_features_by_molecule_id(molecule_ids[::-1], "iokr_fps__positive")
-        self.assertFalse(np.array_equal(feature_matrix, feature_matrix_rev))
+        for rep in range(100):
+            rnd_idc = np.random.RandomState(rep).permutation(np.arange(len(molecule_ids)))
+
+            # Feature matrix
+            feature_matrix_shf = candidates.get_molecule_features_by_molecule_id([molecule_ids[i] for i in rnd_idc],
+                                                                                 "iokr_fps__positive")
+            np.testing.assert_array_equal(feature_matrix[rnd_idc], feature_matrix_shf)
+
+            # Dataframe
+            df_features_shf = candidates.get_molecule_features_by_molecule_id(
+                [molecule_ids[i] for i in rnd_idc], "iokr_fps__positive", return_dataframe=True)
+            np.testing.assert_equal(feature_matrix[rnd_idc], df_features_shf.iloc[:, 1:].values)
+            self.assertListEqual([molecule_ids[i] for i in rnd_idc], df_features_shf["identifier"].to_list())
 
     def test_all_outputs_are_sorted_equally(self):
         # ----------
