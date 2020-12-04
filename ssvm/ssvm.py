@@ -1355,9 +1355,12 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         random_state = check_random_state(self.random_state)
         n_iterations_total = 0
         for epoch in range(self.n_epochs):
-            print(epoch)
-            for step, I_batch in enumerate(mit.chunked(random_state.permutation(np.arange(N)), self.batch_size)):
-                print(step)
+            print("Epoch: %d/%d" % (epoch + 1, self.n_epochs))
+
+            _batches = list(mit.chunked(random_state.permutation(np.arange(N)), self.batch_size))
+            for step, I_batch in enumerate(_batches):
+                print("\tStep: %d/%d" % (step + 1, len(_batches)))
+
                 # Find the most violating examples for the current batch
                 res = [self.inference(self.training_data_[i], [G[i] for G in self.training_graphs_],
                                       loss_augmented=True, return_graphical_model=True)
