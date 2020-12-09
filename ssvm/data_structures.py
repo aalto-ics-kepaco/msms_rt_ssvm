@@ -353,9 +353,13 @@ class CandidateSQLiteDB(object):
         Raises an ValueError, if the requested molecular feature is not in the database.
 
         :param feature: string, identifier of the requested molecule feature.
+        :raises: ValueError
         """
-        if feature not in pd.read_sql_query("SELECT name FROM fingerprints_meta", self.db)["name"].to_list():
-            raise ValueError("Requested feature is not in the database: '%s'." % feature)
+        for row in self.db.execute("SELECT name FROM fingerprints_meta"):
+            if row[0] == feature:
+                return
+
+        raise ValueError("Requested feature is not in the database: '%s'." % feature)
 
     def _ensure_molecule_identifier_is_available(self, molecule_identifier: str):
         """

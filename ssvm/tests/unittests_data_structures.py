@@ -192,6 +192,28 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         self.assertEqual(labspace, scores["identifier"].to_list())
         self.assertEqual(labspace, fps["identifier"].to_list())
 
+    def test_ensure_feature_is_available(self):
+        candidates = CandidateSQLiteDB(db_fn=DB_FN)
+
+        with self.assertRaises(ValueError):
+            candidates._ensure_feature_is_available("bla")
+            candidates._ensure_feature_is_available(None)
+            candidates._ensure_feature_is_available("")
+
+        candidates._ensure_feature_is_available("substructure_count")
+        candidates._ensure_feature_is_available("iokr_fps__positive")
+
+    def test_ensure_molecule_identifier_is_available(self):
+        candidates = CandidateSQLiteDB(db_fn=DB_FN)
+
+        with self.assertRaises(ValueError):
+            candidates._ensure_molecule_identifier_is_available("inchistr")
+            candidates._ensure_molecule_identifier_is_available(None)
+            candidates._ensure_molecule_identifier_is_available("")
+
+        candidates._ensure_molecule_identifier_is_available("inchi")
+        candidates._ensure_molecule_identifier_is_available("inchikey")
+
 
 class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
     def test_get_labelspace(self):
