@@ -389,8 +389,12 @@ class CandidateSQLiteDB(object):
 
         if features == "substructure_count":
             for i, row in enumerate(data):
-                _fp = eval("{" + row + "}")
-                X[i, list(_fp.keys())] = list(_fp.values())
+                # _fp = eval("{" + row + "}")
+                # X[i, list(_fp.keys())] = list(_fp.values())
+
+                for _fp_str in row.split(","):
+                    _idx, _cnt = _fp_str.split(":")
+                    X[i, int(_idx)] = int(_cnt)
         else:
             for i, row in enumerate(data):
                 _ids = list(map(int, row.split(",")))
@@ -428,13 +432,15 @@ class CandidateSQLiteDB(object):
         """
         self._ensure_feature_is_available(features)
 
-        df_features = pd.read_sql_query(
-            self._get_molecule_feature_query(spectrum, features, self._get_candidate_subset(spectrum)), self.db)
+        res = self.db.execute(
+            self._get_molecule_feature_query(spectrum, features, self._get_candidate_subset(spectrum))).fetchall()
 
-        feature_matrix = self._get_molecule_feature_matrix(df_features["molecular_feature"], features)
+        identifier, feature_rows = zip(*res)
+
+        feature_matrix = self._get_molecule_feature_matrix(feature_rows, features)
 
         if return_dataframe:
-            df_features = pd.concat((df_features["identifier"], pd.DataFrame(feature_matrix)), axis=1)
+            df_features = pd.concat((pd.DataFrame({"identifier": identifier}), pd.DataFrame(feature_matrix)), axis=1)
         else:
             df_features = feature_matrix
 
