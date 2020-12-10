@@ -1,6 +1,8 @@
 import sqlite3
+import os
 import pandas as pd
 import numpy as np
+import tensorflow as tf
 
 from matchms.Spectrum import Spectrum
 
@@ -8,6 +10,7 @@ from ssvm.data_structures import RandomSubsetCandidateSQLiteDB, SequenceSample
 from ssvm.ssvm import StructuredSVMSequencesFixedMS2
 
 if __name__ == "__main__":
+    tf_summary_base_dir = "/home/bach/Documents/doctoral/projects/rt_msms_ssvm/src/ssvm/development/logs"
     DB_FN = "/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_LATEST.db"
 
     # ===================
@@ -30,7 +33,7 @@ if __name__ == "__main__":
     # ===================
     ssvm = StructuredSVMSequencesFixedMS2(
         mol_feat_label_loss="iokr_fps__positive", mol_feat_retention_order="substructure_count",
-        mol_kernel="minmax", C=2, step_size="linesearch", batch_size=8, n_epochs=1)
+        mol_kernel="minmax", C=2, step_size="linesearch", batch_size=8, n_epochs=5, label_loss="tanimoto_loss")
 
     N = 24
     seq_sample = SequenceSample(
@@ -40,5 +43,7 @@ if __name__ == "__main__":
         N=N, L_min=10,
         L_max=15, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
 
-    ssvm.fit(seq_sample, n_init_per_example=5)
+    summary_writer = tf.summary.create_file_writer(os.path.join(tf_summary_base_dir, "%d" % np.random.randint(1000)))
+
+    ssvm.fit(seq_sample, n_init_per_example=5, summary_writer=summary_writer)
 

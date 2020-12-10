@@ -1325,7 +1325,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         else:
             raise ValueError("Invalid molecule kernel")
 
-    def fit(self, data: SequenceSample, n_init_per_example: int = 1):
+    def fit(self, data: SequenceSample, n_init_per_example: int = 1,
+            summary_writer: Optional[tf.summary.SummaryWriter] = None):
         """
         Train the SSVM given a dataset.
 
@@ -1373,18 +1374,60 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
                 # Get step-width
                 if self.step_size == "linesearch":
-                    gamma = self._get_step_size_linesearch(I_batch, y_I_hat, [TFG for _, TFG in res])
+                    step_size = self._get_step_size_linesearch(I_batch, y_I_hat, [TFG for _, TFG in res])
                 else:
-                    gamma = self._get_step_size_diminishing(n_iterations_total, N)
-                print(gamma)
+                    step_size = self._get_step_size_diminishing(n_iterations_total, N)
 
                 # Update the dual variables
-                is_new = [self.alphas_.update(i, y_i_hat, gamma) for i, y_i_hat in zip(I_batch, y_I_hat)]
+                is_new = [self.alphas_.update(i, y_i_hat, step_size) for i, y_i_hat in zip(I_batch, y_I_hat)]
+
+                self.write_log(n_iter=n_iterations_total,
+                               data_to_log={
+                                   "step_size": step_size,
+                                   "active_variables": self.alphas_.n_active()},
+                               summary_writer=summary_writer)
 
                 assert self._is_feasible_matrix(self.alphas_, self.C), \
                     "Dual variables after update are not feasible anymore."
 
+                n_iterations_total += 1
+
+            # Write out scores only after each epoch
+            self.write_log(n_iter=n_iterations_total,
+                           data_to_log={"training_ndcg_ohc": self.score(self.training_data_, stype="ndcg_ohc")},
+                           summary_writer=summary_writer)
+
         return self
+
+    @staticmethod
+    def write_log(n_iter: int, data_to_log: dict, summary_writer: Optional[tf.summary.SummaryWriter] = None):
+        """
+
+        :param summary_writer:
+        :return:
+        """
+        if summary_writer is None:
+            return
+
+        if data_to_log.get("step_size", None):
+            with summary_writer.as_default():
+                with tf.name_scope("Optimizer"):
+                    tf.summary.scalar("Step-Size", data=data_to_log["step_size"], step=n_iter)
+
+        if data_to_log.get("active_variables", None):
+            with summary_writer.as_default():
+                with tf.name_scope("Model"):
+                    tf.summary.scalar("Active dual variables", data=data_to_log["active_variables"], step=n_iter)
+
+        if data_to_log.get("training_ndcg_ll", None):
+            with summary_writer.as_default():
+                with tf.name_scope("Metrics (Training)"):
+                    tf.summary.scalar("NDCG (label loss)", data=data_to_log["training_ndcg_ll"], step=n_iter)
+
+        if data_to_log.get("training_ndcg_ohc", None):
+            with summary_writer.as_default():
+                with tf.name_scope("Metrics (Training)"):
+                    tf.summary.scalar("NDCG (one-hot-coding)", data=data_to_log["training_ndcg_ohc"], step=n_iter)
 
     def predict(self, sequence: Sequence, map: bool = False, Gs: Optional[SpanningTrees] = None) \
             -> Union[Tuple[str, ...], Dict[int, Dict[str, Union[int, np.ndarray, List[str]]]]]:
@@ -1594,10 +1637,11 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             ]
 
         # Calculate the NDCG averaged over the sequence
-        return np.mean([
-            ndcg_score(gt_relevance[s][np.newaxis, :], marginals[s]["score"][np.newaxis, :])
-            for s in marginals
-        ]).item()
+        scores = np.ones(len(marginals))
+        for s in marginals:
+            if len(marginals[s]["score"]) > 1:
+                scores[s] = ndcg_score(gt_relevance[s][np.newaxis, :], marginals[s]["score"][np.newaxis, :])
+        return scores.mean().item()
 
     def _get_step_size_linesearch(self, I_batch: List[int], y_I_hat: List[Tuple[str, ...]],
                                   TFG_I: List[TreeFactorGraph]) -> float:
