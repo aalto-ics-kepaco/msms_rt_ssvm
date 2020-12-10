@@ -1394,7 +1394,11 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
             # Write out scores only after each epoch
             self.write_log(n_iter=n_iterations_total,
-                           data_to_log={"training_ndcg_ohc": self.score(self.training_data_, stype="ndcg_ohc")},
+                           data_to_log={
+                               "training_ndcg_ohc": self.score(self.training_data_, self.training_graphs_,
+                                                               stype="ndcg_ohc"),
+                               "training_top1_map": self.score(self.training_data_, self.training_graphs_,
+                                                               stype="top1_map")},
                            summary_writer=summary_writer)
 
         return self
@@ -1429,6 +1433,11 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 with tf.name_scope("Metrics (Training)"):
                     tf.summary.scalar("NDCG (one-hot-coding)", data=data_to_log["training_ndcg_ohc"], step=n_iter)
 
+        if data_to_log.get("training_top1_map", None):
+            with summary_writer.as_default():
+                with tf.name_scope("Metrics (Training)"):
+                    tf.summary.scalar("Top-1 (MAP)", data=data_to_log["training_top1_map"], step=n_iter)
+
     def predict(self, sequence: Sequence, map: bool = False, Gs: Optional[SpanningTrees] = None) \
             -> Union[Tuple[str, ...], Dict[int, Dict[str, Union[int, np.ndarray, List[str]]]]]:
         """
@@ -1459,16 +1468,15 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         else:
             return self.max_marginals(sequence, Gs=Gs)
 
-    def score(self, data: SequenceSample, Gs: Optional[SpanningTrees] = None, stype: str = "top1_mm",
+    def score(self, data: SequenceSample, l_Gs: Optional[List[SpanningTrees]] = None, stype: str = "top1_mm",
               average: bool = True, **kwargs) -> Union[float, np.ndarray]:
         """
-        TODO: The passed graph related parameters are not used yet.
         TODO: We could calculate the scores here in parallel
 
         :param data: SequenceSample, Sample of (MS, RT)-sequence and associated data, e.g. candidate sets.
 
-        :param Gs: SpanningTrees or None, spanning trees (nx.Graphs) used to approximate the MRT associated with
-            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'self.n_trees_per_sequence')
+        :param l_Gs: list of SpanningTrees or None, spanning tree sets for all example sequences. Used to approximate the
+            MRFs. If None, a set of spanning trees is generated (see also 'self.n_trees_per_sequence') for each sequence.
 
         :param stype: string, indicating which scoring type to use:
 
@@ -1484,22 +1492,25 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         :return: scalar or array-like, requested score
         """
+        if l_Gs is None:
+            l_Gs = [None for _ in data]
+
         if stype == "top1_mm":
-            scores = [self.top1_score(sequence, Gs=Gs) for sequence in data]
+            scores = [self.top1_score(sequence, Gs=Gs) for sequence, Gs in zip(data, l_Gs)]
         elif stype == "top1_map":
-            scores = [self.top1_score(sequence, Gs=Gs, map=True) for sequence in data]
+            scores = [self.top1_score(sequence, Gs=Gs, map=True) for sequence, Gs in zip(data, l_Gs)]
         elif stype == "topk_mm":
             return_percentage = kwargs.get("return_percentage", True)
             max_k = kwargs.get("max_k", 50)
             scores = [
                 self.topk_score(
                     sequence, Gs=Gs, return_percentage=return_percentage, max_k=max_k,  pad_output=True)
-                for sequence in data
+                for sequence, Gs in zip(data, l_Gs)
             ]
         elif stype == "ndcg_ll":
-            scores = [self.ndcg_score(sequence, Gs=Gs, use_label_loss=True) for sequence in data]
+            scores = [self.ndcg_score(sequence, Gs=Gs, use_label_loss=True) for sequence, Gs in zip(data, l_Gs)]
         elif stype == "ndcg_ohc":
-            scores = [self.ndcg_score(sequence, Gs=Gs, use_label_loss=False) for sequence in data]
+            scores = [self.ndcg_score(sequence, Gs=Gs, use_label_loss=False) for sequence, Gs in zip(data, l_Gs)]
         else:
             raise ValueError("Invalid scoring type: '%s'." % stype)
 
@@ -1581,8 +1592,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         """
         if map:
             # Use most likely candidate assignment (MAP)
-            map_seq = self.predict(sequence, True, Gs=Gs)
-            top1 = np.mean([y_map_s == sequence.get_labels(s) for s, y_map_s in enumerate(map_seq)]).item()
+            map_seq = self.predict(sequence, map=True, Gs=Gs)
+            top1 = np.sum([y_map_s == sequence.get_labels(s) for s, y_map_s in enumerate(map_seq)]) * 100 / len(map_seq)
         else:
             # Use top ranked candidate based on the marginals
             top1 = self.topk_score(sequence, Gs=Gs, max_k=1, return_percentage=True)
