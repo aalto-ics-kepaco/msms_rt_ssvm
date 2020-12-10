@@ -1288,12 +1288,13 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     Structured Support Vector Machine (SSVM) for (MS, RT)-sequence classification.
     """
     def __init__(self, mol_feat_label_loss: str, mol_feat_retention_order: str,
-                 mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]],
+                 mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]],  n_trees_per_sequence: int = 1,
                  *args, **kwargs):
         """
         :param mol_feat_label_loss:
         :param mol_feat_retention_order:
         :param mol_kernel:
+        :param n_trees_per_sequence: scalar, number of spanning trees per sequence.
         :param args:
         :param kwargs:
         """
@@ -1301,6 +1302,9 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         self.mol_feat_label_loss = mol_feat_label_loss
         self.mol_feat_retention_order = mol_feat_retention_order
         self.mol_kernel = self.get_mol_kernel(mol_kernel)
+        self.n_trees_per_sequence = n_trees_per_sequence
+        if self.n_trees_per_sequence > 1:
+            raise ValueError("Currently only a single spanning tree per sequence is supported.")
 
         super().__init__(*args, **kwargs)
 
@@ -1321,7 +1325,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         else:
             raise ValueError("Invalid molecule kernel")
 
-    def fit(self, data: SequenceSample, n_init_per_example: int = 1, n_trees_per_sequence: int = 1):
+    def fit(self, data: SequenceSample, n_init_per_example: int = 1):
         """
         Train the SSVM given a dataset.
 
@@ -1330,8 +1334,6 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         :param n_init_per_example: scalar, number of initially active dual variables per example. That is, the number of
             active (potential) label sequences.
-
-        :param n_trees_per_sequence: scalar, number of spanning trees per sequence.
 
         :return: reference to it self.
         """
@@ -1343,7 +1345,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         assert self._is_feasible_matrix(self.alphas_, self.C), "Initial dual variables must be feasible."
 
         # Initialize the graphs for each sequence
-        self.training_graphs_ = [SpanningTrees(sequence, n_trees_per_sequence, i)
+        self.training_graphs_ = [SpanningTrees(sequence, self.n_trees_per_sequence, i)
                                  for i, sequence in enumerate(self.training_data_)]
 
         # Run over the data
@@ -1384,7 +1386,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         return self
 
-    def predict(self, sequence: Sequence, map: bool = False, G: Optional[SpanningTrees] = None, n_trees: int = 1) \
+    def predict(self, sequence: Sequence, map: bool = False, Gs: Optional[SpanningTrees] = None) \
             -> Union[Tuple[str, ...], Dict[int, Dict[str, Union[int, np.ndarray, List[str]]]]]:
         """
         Function to predict the marginal distribution of the candidate sets along the given (MS, RT)-sequence.
@@ -1396,8 +1398,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         :param map: boolean, indicating whether only the most likely candidate sequence should be returned instead of
             the marginals.
 
-        :param G: list of networkx.Graphs or None, list of tree-like graphs used to approximate the MRT associated with
-            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'n_trees')
+        :param Gs: SpanningTrees or None, spanning trees (nx.Graphs) used to approximate the MRT associated with
+            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'self.n_trees_per_sequence')
 
         :param n_trees: scalar, number of spanning trees used to approximate MRF projected on the sequence.
 
@@ -1410,11 +1412,11 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             A tuple of strings containing the most likely label sequence for the given input (map = True, see 'inference')
         """
         if map:
-            return self.inference(sequence, G=G, n_trees=n_trees, loss_augmented=False)
+            return self.inference(sequence, Gs=Gs, loss_augmented=False)
         else:
-            return self.max_marginals(sequence, G=G, n_trees=n_trees)
+            return self.max_marginals(sequence, Gs=Gs)
 
-    def score(self, data: SequenceSample, G: Optional[List[nx.Graph]] = None, n_trees: int = 1, stype: str = "top1_mm",
+    def score(self, data: SequenceSample, Gs: Optional[SpanningTrees] = None, stype: str = "top1_mm",
               average: bool = True, **kwargs) -> Union[float, np.ndarray]:
         """
         TODO: The passed graph related parameters are not used yet.
@@ -1422,10 +1424,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         :param data: SequenceSample, Sample of (MS, RT)-sequence and associated data, e.g. candidate sets.
 
-        :param G: list of networkx.Graphs or None, list of tree-like graphs used to approximate the MRT associated with
-            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'n_trees')
-
-        :param n_trees: scalar, number of spanning trees used to approximate MRF projected on the sequence.
+        :param Gs: SpanningTrees or None, spanning trees (nx.Graphs) used to approximate the MRT associated with
+            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'self.n_trees_per_sequence')
 
         :param stype: string, indicating which scoring type to use:
 
@@ -1442,21 +1442,21 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         :return: scalar or array-like, requested score
         """
         if stype == "top1_mm":
-            scores = [self.top1_score(sequence) for sequence in data]
+            scores = [self.top1_score(sequence, Gs=Gs) for sequence in data]
         elif stype == "top1_map":
-            scores = [self.top1_score(sequence, map=True) for sequence in data]
+            scores = [self.top1_score(sequence, Gs=Gs, map=True) for sequence in data]
         elif stype == "topk_mm":
             return_percentage = kwargs.get("return_percentage", True)
             max_k = kwargs.get("max_k", 50)
             scores = [
                 self.topk_score(
-                    sequence, G=None, n_trees=1, return_percentage=return_percentage, max_k=max_k,  pad_output=True)
+                    sequence, Gs=Gs, return_percentage=return_percentage, max_k=max_k,  pad_output=True)
                 for sequence in data
             ]
         elif stype == "ndcg_ll":
-            scores = [self.ndcg_score(sequence, use_label_loss=True) for sequence in data]
+            scores = [self.ndcg_score(sequence, Gs=Gs, use_label_loss=True) for sequence in data]
         elif stype == "ndcg_ohc":
-            scores = [self.ndcg_score(sequence, use_label_loss=False) for sequence in data]
+            scores = [self.ndcg_score(sequence, Gs=Gs, use_label_loss=False) for sequence in data]
         else:
             raise ValueError("Invalid scoring type: '%s'." % stype)
 
@@ -1468,9 +1468,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         return scores
 
-    def topk_score(self, sequence: LabeledSequence, G: Optional[List[nx.Graph]] = None, n_trees: int = 1,
-                   return_percentage: bool = True, max_k: Optional[int] = None, pad_output: bool = False) \
-            -> Union[int, float, np.ndarray]:
+    def topk_score(self, sequence: LabeledSequence, Gs: Optional[SpanningTrees] = None, return_percentage: bool = True,
+                   max_k: Optional[int] = None, pad_output: bool = False) -> Union[int, float, np.ndarray]:
         """
         Calculate top-k accuracy of the ranked candidate lists based on the max-marginals.
 
@@ -1479,10 +1478,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
 
-        :param G: list of networkx.Graphs or None, list of tree-like graphs used to approximate the MRT associated with
-            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'n_trees')
-
-        :param n_trees: scalar, number of spanning trees used to approximate MRF projected on the sequence.
+        :param Gs: SpanningTrees or None, spanning trees (nx.Graphs) used to approximate the MRT associated with
+            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'self.n_trees_per_sequence')
 
         :param return_percentage: boolean, indicating whether the percentage of correctly ranked candidates in top-k
             should be returned (True) or the absolute number (False).
@@ -1496,7 +1493,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             zero-based, i.e. at index 0 we have top-1. If max_k == 1, the output is a scalar.
         """
         # Calculate the marginals
-        marginals = self.predict(sequence, G=G, n_trees=n_trees, map=False)
+        marginals = self.predict(sequence, Gs=Gs, map=False)
 
         # Need to find the index of the correct label / molecular structure in the candidate sets to determine the top-k
         # accuracy.
@@ -1525,18 +1522,15 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         return topk
 
-    def top1_score(self, sequence: LabeledSequence, G: Optional[SpanningTrees] = None, n_trees: int = 1,
-                   map: bool = False) -> float:
+    def top1_score(self, sequence: LabeledSequence, Gs: Optional[SpanningTrees] = None, map: bool = False) -> float:
         """
         Calculate top-1 accuracy of the ranked candidate lists based on the max-marginals.
 
         :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
 
-        :param G: list of networkx.Graphs or None, list of tree-like graphs used to approximate the MRT associated with
-            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'n_trees')
-
-        :param n_trees: scalar, number of spanning trees used to approximate MRF projected on the sequence.
-
+        :param Gs: SpanningTrees or None, spanning trees (nx.Graphs) used to approximate the MRT associated with
+            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'self.n_trees_per_sequence')
+            
         :param map: boolean, indicating whether the top-1 accuracy should be calculated from the most likely candidate
             sequence (MAP estimate) (True) or the using the highest ranked candidates based on the marginals (False).
 
@@ -1544,16 +1538,16 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         """
         if map:
             # Use most likely candidate assignment (MAP)
-            map_seq = self.predict(sequence, True, G=G, n_trees=n_trees)
+            map_seq = self.predict(sequence, True, Gs=Gs)
             top1 = np.mean([y_map_s == sequence.get_labels(s) for s, y_map_s in enumerate(map_seq)]).item()
         else:
             # Use top ranked candidate based on the marginals
-            top1 = self.topk_score(sequence, G=G, n_trees=n_trees, max_k=1, return_percentage=True)
+            top1 = self.topk_score(sequence, Gs=Gs, max_k=1, return_percentage=True)
 
         return top1
 
-    def ndcg_score(self, sequence: LabeledSequence, G: Optional[List[nx.Graph]] = None, n_trees: int = 1,
-                   use_label_loss: bool = True) -> float:
+    def ndcg_score(self, sequence: LabeledSequence, Gs: Optional[SpanningTrees] = None, use_label_loss: bool = True) \
+            -> float:
         """
         Compute the Normalized Discounted Cumulative Gain (NDCG) for the given (MS, RT)-sequence.
 
@@ -1568,11 +1562,9 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
 
-        :param G: list of networkx.Graphs or None, list of tree-like graphs used to approximate the MRT associated with
-            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'n_trees')
-
-        :param n_trees: scalar, number of spanning trees used to approximate MRF projected on the sequence.
-
+        :param Gs: SpanningTrees or None, spanning trees (nx.Graphs) used to approximate the MRT associated with
+            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'self.n_trees_per_sequence')
+            
         :param use_label_loss: boolean, indicating whether the label-loss should be used to define the GT ranking, be
             using 1 - label_loss for each candidate as GT relevance value (True). If set to False, a one-hot-encoding
             vector with a one at the correct candidate and zero otherwise is used as GT relevance vector.
@@ -1585,7 +1577,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             return v
 
         # Calculate the marginals
-        marginals = self.predict(sequence, G=G, n_trees=n_trees, map=False)
+        marginals = self.predict(sequence, Gs=Gs, map=False)
 
         # Get the ground-truth relevance for the ranked lists
         if use_label_loss:
@@ -1800,61 +1792,50 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         return I - II
 
-    def inference(self, sequence: Union[Sequence, LabeledSequence], G: Optional[SpanningTrees] = None,
-                  loss_augmented: bool = False, n_trees: Optional[int] = None, return_graphical_model: bool = False) \
+    def inference(self, sequence: Union[Sequence, LabeledSequence], Gs: Optional[SpanningTrees] = None,
+                  loss_augmented: bool = False, return_graphical_model: bool = False) \
             -> Union[Tuple[str, ...], Tuple[Tuple[str, ...], TreeFactorGraph]]:
         """
         Infer the most likely label sequence for the given (MS, RT)-sequence.
 
         :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
 
-        :param G: list of networkx.Graphs or None, list of tree-like graphs used to approximate the MRT associated with
-            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'n_trees')
+        :param Gs: SpanningTrees or None, spanning trees (nx.Graphs) used to approximate the MRT associated with
+            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'self.n_trees_per_sequence')
 
         :param loss_augmented: boolean, indicating whether the node potentials should be augmented with the label loss.
             Set this option to True during model parameter estimation.
-
-        :param n_trees: scalar or None, number of spanning trees used to approximate the MRF.
 
         :param return_graphical_model: boolean, indicating whether the graphical model, e.g. the Tree-Factor-Graph, used
             to solve performance the inference should be returned.
 
         :return: tuple, length = L, most likely label sequence
         """
-        if G is None:
-            # Get a list of random spanning trees used to approximate the MRF associated with the provided sequence.
-            assert n_trees is not None
-
-            if n_trees > 1:
-                raise NotImplementedError("Currently only one tree per sequence allowed.")
-
-            G = SpanningTrees(sequence, n_trees)
+        if Gs is None:
+            Gs = SpanningTrees(sequence, self.n_trees_per_sequence)
 
         # Calculate the node- and edge-potentials
-        node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, G[0], loss_augmented)
+        node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, Gs[0], loss_augmented)
 
         # Find the MAP estimate
-        TFG, Z_max = self._inference(node_potentials, edge_potentials, G[0])
+        TFG, Z_max = self._inference(node_potentials, edge_potentials, Gs[0])
 
         # MAP returns a list of candidate indices, we need to convert them back to actual molecules identifier
-        y_hat = tuple(sequence.get_labelspace(s)[Z_max[s]] for s in G[0].nodes)
+        y_hat = tuple(sequence.get_labelspace(s)[Z_max[s]] for s in Gs[0].nodes)
 
         if return_graphical_model:
             return y_hat, TFG
         else:
             return y_hat
 
-    def max_marginals(self, sequence: Union[Sequence, LabeledSequence], G: Optional[SpanningTrees] = None,
-                      n_trees: Optional[int] = None):
+    def max_marginals(self, sequence: Union[Sequence, LabeledSequence], Gs: Optional[SpanningTrees] = None):
         """
         Calculate the max-marginals for all possible label assignments of the given (MS, RT)-sequence.
 
         :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
 
-        :param G: list of networkx.Graphs or None, list of tree-like graphs used to approximate the MRT associated with
-            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'n_trees')
-
-        :param n_trees: scalar or None, number of spanning trees used to approximate the MRF.
+        :param Gs: SpanningTrees or None, spanning trees (nx.Graphs) used to approximate the MRT associated with
+            the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'self.n_trees_per_sequence')
 
         :return: dictionary = {
             sequence_index: dictionary = {
@@ -1864,19 +1845,13 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             }
         } the dictionary is of length
         """
-        if G is None:
-            # Get a list of random spanning trees used to approximate the MRF associated with the provided sequence.
-            assert n_trees is not None
+        if Gs is None:
+            Gs = SpanningTrees(sequence, self.n_trees_per_sequence)
 
-            if n_trees > 1:
-                raise NotImplementedError("Currently only one tree per sequence allowed.")
-
-            G = SpanningTrees(sequence, n_trees)
-
-        node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, G[0])
+        node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, Gs[0])
 
         # Calculate the max-max_marginals
-        return self._max_marginals(sequence, node_potentials, edge_potentials, G[0], normalize=True)
+        return self._max_marginals(sequence, node_potentials, edge_potentials, Gs[0], normalize=True)
 
     def _get_node_and_edge_potentials(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph,
                                       loss_augmented: bool = False):

@@ -113,7 +113,7 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
             L_max=15, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
         self.ssvm.alphas_ = DualVariables(
             self.ssvm.C, label_space=self.ssvm.training_data_.get_labelspace(), num_init_active_vars=3)
-        self.ssvm.training_graphs_ = [SpanningTrees(sequence, n_trees=1, random_state=i)
+        self.ssvm.training_graphs_ = [SpanningTrees(sequence, random_state=i)
                                       for i, sequence in enumerate(self.ssvm.training_data_)]
 
     def test_get_lambda_delta(self):
@@ -247,12 +247,12 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
             # =========================
             # With loss augmentation
             # =========================
-            y_i_hat__la = self.ssvm.inference(self.ssvm.training_data_[i], G=None, n_trees=1, loss_augmented=True)
+            y_i_hat__la = self.ssvm.inference(self.ssvm.training_data_[i], Gs=None, loss_augmented=True)
 
             # =========================
             # Without loss augmentation
             # =========================
-            y_i_hat__wola = self.ssvm.inference(self.ssvm.training_data_[i], G=None, n_trees=1, loss_augmented=False)
+            y_i_hat__wola = self.ssvm.inference(self.ssvm.training_data_[i], Gs=None, loss_augmented=False)
 
             self.assertEqual(len(self.ssvm.training_data_[i]), len(y_i_hat__la))
             self.assertEqual(len(self.ssvm.training_data_[i]), len(y_i_hat__wola))
@@ -263,7 +263,7 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
 
     def test_max_marginals(self):
         for i in [0, 8, 3]:
-            marg = self.ssvm.max_marginals(self.ssvm.training_data_[i], G=None, n_trees=1)
+            marg = self.ssvm.max_marginals(self.ssvm.training_data_[i], Gs=None)
 
             self.assertEqual(len(self.ssvm.training_data_[i]), len(marg))
 
@@ -275,17 +275,17 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
     # FOR THE SCORING WE CURRENTLY ONLY TEST THE OUTPUT DIMENSIONS
     # ------------------------------------------------------------
     def test_topk_score(self):
-        topk_acc = self.ssvm.topk_score(self.ssvm.training_data_[3], G=None, n_trees=1, max_k=100)
+        topk_acc = self.ssvm.topk_score(self.ssvm.training_data_[3], Gs=None, max_k=100)
         self.assertTrue(len(topk_acc) < 100)
 
-        topk_acc = self.ssvm.topk_score(self.ssvm.training_data_[3], G=None, n_trees=1, max_k=100, pad_output=True)
+        topk_acc = self.ssvm.topk_score(self.ssvm.training_data_[3], Gs=None, max_k=100, pad_output=True)
         self.assertEqual(100, len(topk_acc))
 
     def test_top1_score(self):
-        top1_acc = self.ssvm.top1_score(self.ssvm.training_data_[3], G=None, n_trees=1)
+        top1_acc = self.ssvm.top1_score(self.ssvm.training_data_[3], Gs=None)
         self.assertTrue(np.isscalar(top1_acc))
 
-        top1_acc = self.ssvm.top1_score(self.ssvm.training_data_[3], G=None, n_trees=1, map=True)
+        top1_acc = self.ssvm.top1_score(self.ssvm.training_data_[3], Gs=None, map=True)
         self.assertTrue(np.isscalar(top1_acc))
 
     def test_ndcg_score(self):
