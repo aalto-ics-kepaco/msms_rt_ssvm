@@ -40,7 +40,7 @@ from tqdm import tqdm
 from msmsrt_scorer.lib.exact_solvers import TreeFactorGraph
 from msmsrt_scorer.lib.evaluation_tools import get_topk_performance_from_scores as get_topk_performance_from_marginals
 
-from ssvm.data_structures import SequenceSample, CandidateSetMetIdent, Sequence, LabeledSequence
+from ssvm.data_structures import SequenceSample, CandidateSetMetIdent, Sequence, LabeledSequence, SpanningTrees
 from ssvm.loss_functions import hamming_loss, tanimoto_loss
 from ssvm.evaluation_tools import get_topk_performance_csifingerid
 from ssvm.factor_graphs import get_random_spanning_tree
@@ -1343,7 +1343,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         assert self._is_feasible_matrix(self.alphas_, self.C), "Initial dual variables must be feasible."
 
         # Initialize the graphs for each sequence
-        self.training_graphs_ = self._get_graph_set(self.training_data_, n_trees_per_sequence)
+        self.training_graphs_ = [SpanningTrees(sequence, n_trees_per_sequence, i)
+                                 for i, sequence in enumerate(self.training_data_)]
 
         # Run over the data
         # - each epoch is a cycle through the full data
@@ -1362,7 +1363,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 print("\tStep: %d/%d" % (step + 1, len(_batches)))
 
                 # Find the most violating examples for the current batch
-                res = [self.inference(self.training_data_[i], [G[i] for G in self.training_graphs_],
+                res = [self.inference(self.training_data_[i], self.training_graphs_[i],
                                       loss_augmented=True, return_graphical_model=True)
                        for i in I_batch]
 
@@ -1383,7 +1384,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         return self
 
-    def predict(self, sequence: Sequence, map: bool = False, G: Optional[List[nx.Graph]] = None, n_trees: int = 1) \
+    def predict(self, sequence: Sequence, map: bool = False, G: Optional[SpanningTrees] = None, n_trees: int = 1) \
             -> Union[Tuple[str, ...], Dict[int, Dict[str, Union[int, np.ndarray, List[str]]]]]:
         """
         Function to predict the marginal distribution of the candidate sets along the given (MS, RT)-sequence.
@@ -1524,7 +1525,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         return topk
 
-    def top1_score(self, sequence: LabeledSequence, G: Optional[List[nx.Graph]] = None, n_trees: int = 1,
+    def top1_score(self, sequence: LabeledSequence, G: Optional[SpanningTrees] = None, n_trees: int = 1,
                    map: bool = False) -> float:
         """
         Calculate top-1 accuracy of the ranked candidate lists based on the max-marginals.
@@ -1654,8 +1655,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         # ================
         den = 0.0
 
-        l_sign_delta_t = [self.training_data_[i].get_sign_delta_t(self.training_graphs_[0][i]) for i in I_batch]
-        l_P = [self._get_P(self.training_graphs_[0][i]) for i in I_batch]
+        l_sign_delta_t = [self.training_data_[i].get_sign_delta_t(self.training_graphs_[i][0]) for i in I_batch]
+        l_P = [self._get_P(self.training_graphs_[i][0]) for i in I_batch]
 
         # Go over all i, j for which i = j
         for idx, i in enumerate(I_batch):
@@ -1737,7 +1738,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         # List of the retention time differences for all examples j over the spanning trees
         sign_delta = np.concatenate([
             # sign(delta t_j)
-            self.training_data_[j].get_sign_delta_t(self.training_graphs_[0][j]) for j in range(N)  # shape = (|E_j|, )
+            self.training_data_[j].get_sign_delta_t(self.training_graphs_[j][0]) for j in range(N)  # shape = (|E_j|, )
         ])
 
         # List of the ground truth molecular structures for all examples j
@@ -1747,7 +1748,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         ]
 
         lambda_delta = np.vstack([
-            self._get_lambda_delta(l_Y_gt_sequence[j], Y, self.training_graphs_[0][j], self.mol_kernel)
+            self._get_lambda_delta(l_Y_gt_sequence[j], Y, self.training_graphs_[j][0], self.mol_kernel)
             for j in range(N)  # shape = (|E_j|, n_mol), with n_mol = Y.shape[0]
         ])
 
@@ -1788,18 +1789,18 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         II = np.zeros((len(Y), ))  # shape = (n_molecules, )
         for j in range(N):
             lambda_delta = np.dstack(
-                [StructuredSVMSequencesFixedMS2._get_lambda_delta(Y_sequence, Y, self.training_graphs_[0][j],
+                [StructuredSVMSequencesFixedMS2._get_lambda_delta(Y_sequence, Y, self.training_graphs_[j][0],
                                                                   self.mol_kernel)
                  for Y_sequence in l_Y_act_sequence[j]])  # shape = (|E_j|, n_molecules, |S_j|)
 
             II += np.einsum("i,ikj,j",
-                            self.training_data_[j].get_sign_delta_t(self.training_graphs_[0][j]),
+                            self.training_data_[j].get_sign_delta_t(self.training_graphs_[j][0]),
                             lambda_delta,
                             l_A_Sj[j])
 
         return I - II
 
-    def inference(self, sequence: Union[Sequence, LabeledSequence], G: Optional[List[nx.Graph]] = None,
+    def inference(self, sequence: Union[Sequence, LabeledSequence], G: Optional[SpanningTrees] = None,
                   loss_augmented: bool = False, n_trees: Optional[int] = None, return_graphical_model: bool = False) \
             -> Union[Tuple[str, ...], Tuple[Tuple[str, ...], TreeFactorGraph]]:
         """
@@ -1827,7 +1828,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             if n_trees > 1:
                 raise NotImplementedError("Currently only one tree per sequence allowed.")
 
-            G = [get_random_spanning_tree(sequence, random_state=tree) for tree in range(n_trees)]
+            G = SpanningTrees(sequence, n_trees)
 
         # Calculate the node- and edge-potentials
         node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, G[0], loss_augmented)
@@ -1843,7 +1844,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         else:
             return y_hat
 
-    def max_marginals(self, sequence: Union[Sequence, LabeledSequence], G: Optional[List[nx.Graph]] = None,
+    def max_marginals(self, sequence: Union[Sequence, LabeledSequence], G: Optional[SpanningTrees] = None,
                       n_trees: Optional[int] = None):
         """
         Calculate the max-marginals for all possible label assignments of the given (MS, RT)-sequence.
@@ -1870,7 +1871,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             if n_trees > 1:
                 raise NotImplementedError("Currently only one tree per sequence allowed.")
 
-            G = [get_random_spanning_tree(sequence, random_state=tree) for tree in range(n_trees)]
+            G = SpanningTrees(sequence, n_trees)
 
         node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, G[0])
 

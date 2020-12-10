@@ -27,15 +27,11 @@ import networkx as nx
 import numpy as np
 import itertools as it
 
-from collections import OrderedDict
-from typing import Union, Dict, Callable, Optional
-from msmsrt_scorer.lib.exact_solvers import TreeFactorGraph
+from typing import Union, Optional
 from sklearn.utils import check_random_state
 
-from ssvm.data_structures import Sequence
 
-
-def get_random_spanning_tree(y: Sequence, random_state: Optional[Union[int, np.random.RandomState]] = None,
+def get_random_spanning_tree(y, random_state: Optional[Union[int, np.random.RandomState]] = None,
                              remove_edges_with_zero_rt_diff: bool = True):
     """
     Sample a random spanning tree from the full MRF.
@@ -87,46 +83,3 @@ def identity(x):
     :return: array-like, with same shape
     """
     return x
-
-
-class ChainFactorGraph(TreeFactorGraph):
-    def __init__(self, candidates: Union[OrderedDict, Dict], make_order_probs: Callable, D: float = 0.5,
-                 order_probs: Optional[Dict] = None, use_log_space: bool = True, norm_order_scores: bool = False):
-        """
-
-        :param candidates:
-        :param make_order_probs:
-        :param order_probs:
-        :param use_log_space:
-        :param D:
-        :param norm_order_scores:
-        """
-        super().__init__(candidates=candidates, make_order_probs=make_order_probs, order_probs=order_probs,
-                         use_log_space=use_log_space, D=D, norm_order_scores=norm_order_scores,
-                         var_conn_graph=self._get_chain_connectivity(candidates))
-
-    @staticmethod
-    def _get_chain_connectivity(candidates: Union[OrderedDict, Dict, Sequence]) -> nx.Graph:
-        """
-
-        :param candidates:
-
-        :return: networkx.Graph
-        """
-        var_conn_graph = nx.Graph()
-
-        # Add variable nodes
-        if isinstance(candidates, dict) or isinstance(candidates, OrderedDict):
-            var = list(candidates.keys())
-        elif isinstance(candidates, Sequence):
-            var = list(range(len(candidates)))
-        else:
-            raise ValueError("Invalid input type.")
-        for i in var:
-            var_conn_graph.add_node(i)
-
-        # Add edges connecting the variable nodes, i.e. pairs considered for the score integration
-        for idx in range(len(var) - 1):
-            var_conn_graph.add_edge(var[idx], var[idx + 1])
-
-        return var_conn_graph
