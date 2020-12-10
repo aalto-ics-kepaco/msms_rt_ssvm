@@ -122,6 +122,38 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         self.assertEqual((5103, 307), fps.shape)
         self.assertTrue(np.all(fps >= 0))
 
+    def test_get_molecule_feature_by_molecule_id__repeated_ids(self):
+        candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey")
+        molecule_ids = [
+            "CEJQCDWBMMEZFJ-NKFKGCMQSA-N",
+            "FGXWKSZFVQUSTL-UHFFFAOYSA-N",
+            "BFFTVFNQHIJUQT-MRXNPFEDSA-N",
+            "ATFVEXNQLNTOHV-CYBMUJFWSA-N",
+            "BFFTVFNQHIJUQT-INIZCTEOSA-N",
+            "CEJQCDWBMMEZFJ-NKFKGCMQSA-N",
+            "BFFTVFNQHIJUQT-UHFFFAOYSA-N",
+            "ATFVEXNQLNTOHV-ZDUSSCGKSA-N",
+            "BFFTVFNQHIJUQT-MRXNPFEDSA-N",
+            "CEJQCDWBMMEZFJ-UHFFFAOYSA-N",
+            "AZVUYIUQQIFCQK-UHFFFAOYSA-N",
+            "AZVUYIUQQIFCQK-UHFFFAOYSA-N"
+        ]
+
+        df_features = candidates.get_molecule_features_by_molecule_id(molecule_ids, "iokr_fps__positive", True)
+        feature_matrix = candidates.get_molecule_features_by_molecule_id(molecule_ids, "iokr_fps__positive", False)
+
+        np.testing.assert_equal((len(molecule_ids), 7936), feature_matrix.shape)
+        np.testing.assert_equal((len(molecule_ids), 7936), df_features.iloc[:, 1:].shape)
+        self.assertListEqual(molecule_ids, df_features["identifier"].to_list())
+
+        for rep in range(100):
+            rnd_idc = np.random.RandomState(rep).permutation(np.arange(len(molecule_ids)))
+
+            # Dataframe
+            df_features_shf = candidates.get_molecule_features_by_molecule_id(
+                [molecule_ids[i] for i in rnd_idc], "iokr_fps__positive", return_dataframe=True)
+            self.assertListEqual([molecule_ids[i] for i in rnd_idc], df_features_shf["identifier"].to_list())
+
     def test_get_molecule_feature_by_molecule_id(self):
         candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey")
         molecule_ids = [
@@ -135,6 +167,10 @@ class TestCandidateSQLiteDB(unittest.TestCase):
             "CEJQCDWBMMEZFJ-UHFFFAOYSA-N",
             "AZVUYIUQQIFCQK-UHFFFAOYSA-N"
         ]
+
+        # ---------------------------------
+        # BINARY FINGERPRINTS
+        # ---------------------------------
         fps_ref = [
             "26,33,44,45,47,48,65,86,89,212,232,234,243,244,247,337,338,342,358,363,364,365,370,420,445,448,458,460,462,463,466,468,469,470,473,474,479,481,483,486,488,489,490,493,494,496,500,501,503,504,505,508,510,511,512,514,516,517,520,521,522,525,526,527,528,530,531,533,536,538,539,540,541,542,544,545,546,547,548,576,577,578,585,586,587,588,590,591,592,594,595,613,719,721,722,726,728,729,754,755,756,757,761,762,768,831,832,833,834,835,837,859,860,861,862,870,884,908,914,916,918,920,921,927,931,933,934,938,941,946,947,951,952,953,955,960,962,963,965,966,967,972,973,979,982,992,994,1007,1010,1013,1017,1018,1022,1025,1026,1029,1040,1046,1048,1058,1060,1061,1063,1066,1071,1075,1077,1078,1079,1080,1082,1092,1095,1096,1097,1099,1100,1106,1114,1115,1116,1121,1122,1123,1125,1126,1128,1131,1132,1133,1136,1140,1145,1146,1148,1152,1154,1158,1160,1161,1167,1168,1169,1171,1172,1174,1175,1176,1179,1183,1184,1187,1189,1194,1204,1209,1210,1212,1216,1230,1232,1233,1236,1240,1241,1244,1250,1253,1254,1255,1259,1305,1326,1346,1368,1389,1409,1472,1703,1768,1769,1812,1815,1909,2076,2091,2109,2619,3037,3116,3258,3662,3730,3733,4420,4446,4628,4695,5111,5163,5177,5200,5204,5211,5212,5221,5222,5223,5228,5244,5253,5292,5340,5353,5355,5386,5397,5551,5802,6392,6404,6435,6467,6479,6594,6697,6702,6766,6787,6898,6901,6919,6929,6934,6985,7004,7011,7108,7116,7138,7150,7229,7235,7243,7294,7371,7386,7404,7550,7681,7716,7730,7786,7820,7836",
             "2,26,27,36,37,44,45,47,48,50,64,65,148,151,206,274,277,337,338,350,358,363,364,365,370,415,416,420,434,436,438,441,442,443,444,447,450,455,456,458,460,461,464,471,472,473,474,475,477,478,480,481,483,485,487,489,492,493,494,495,497,498,500,501,502,504,505,506,507,509,511,512,513,514,515,519,520,521,522,523,525,528,529,530,531,532,533,536,537,538,539,540,541,542,543,544,545,546,547,548,576,577,578,585,586,587,588,590,591,594,595,596,609,754,755,756,757,761,831,859,860,861,862,869,881,884,908,909,914,916,920,921,922,927,928,929,931,932,941,942,946,947,950,951,956,959,960,966,981,982,990,992,994,996,1006,1010,1016,1017,1018,1019,1022,1026,1028,1029,1033,1035,1037,1041,1046,1059,1063,1066,1092,1096,1100,1107,1108,1111,1112,1115,1116,1128,1132,1140,1142,1143,1146,1154,1155,1158,1160,1168,1171,1175,1178,1179,1184,1189,1190,1191,1194,1210,1213,1216,1232,1235,1236,1238,1239,1240,1244,1253,1254,1255,1256,1259,1260,1264,1265,1268,1284,1285,1286,1291,1354,1472,1491,1689,1768,1769,1773,1812,1815,1817,1853,1937,2118,2125,2140,2619,2664,3113,3195,3221,3733,4018,4144,4252,4304,4326,4357,4420,4446,4484,4496,4628,4695,4799,4873,4878,4885,4891,4914,4926,5013,5014,5111,5125,5126,5132,5138,5142,5163,5168,5172,5177,5179,5180,5183,5187,5189,5198,5200,5201,5204,5207,5208,5211,5214,5215,5221,5237,5239,5244,5253,5256,5257,5258,5259,5260,5261,5266,5271,5277,5353,5372,5378,5397,5408,5409,5419,5426,5427,5428,5430,5437,5442,5551,5754,5757,5766,5791,5797,5799,5800,5802,6062,6064,6141,6151,6166,6299,6300,6301,6314,6324,6340,6404,6406,6491,6516,6531,6535,6547,6607,6661,6702,6775,6841,6935,7001,7004,7011,7057,7068,7140,7159,7229,7235,7300,7331,7365,7404,7444,7458,7460,7491,7681,7730,7754,7826,7836,7860,7924",
@@ -160,8 +196,61 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         np.testing.assert_equal(feature_matrix, df_features.iloc[:, 1:].values)
         self.assertListEqual(molecule_ids, df_features["identifier"].to_list())
 
-        feature_matrix_rev = candidates.get_molecule_features_by_molecule_id(molecule_ids[::-1], "iokr_fps__positive")
-        self.assertFalse(np.array_equal(feature_matrix, feature_matrix_rev))
+        for rep in range(100):
+            rnd_idc = np.random.RandomState(rep).permutation(np.arange(len(molecule_ids)))
+
+            # Feature matrix
+            feature_matrix_shf = candidates.get_molecule_features_by_molecule_id([molecule_ids[i] for i in rnd_idc],
+                                                                                 "iokr_fps__positive")
+            np.testing.assert_array_equal(feature_matrix[rnd_idc], feature_matrix_shf)
+
+            # Dataframe
+            df_features_shf = candidates.get_molecule_features_by_molecule_id(
+                [molecule_ids[i] for i in rnd_idc], "iokr_fps__positive", return_dataframe=True)
+            np.testing.assert_equal(feature_matrix[rnd_idc], df_features_shf.iloc[:, 1:].values)
+            self.assertListEqual([molecule_ids[i] for i in rnd_idc], df_features_shf["identifier"].to_list())
+
+        # ---------------------------------
+        # COUNTING FINGERPRINTS
+        # ---------------------------------
+        fps_ref = [
+            "1: 3, 22: 1, 25: 1, 148: 2, 168: 2, 170: 1, 179: 2, 180: 2, 183: 4, 273: 18, 274: 5, 278: 2, 294: 15, 299: 2, 300: 2, 301: 5, 306: 8",
+            "0: 2, 1: 4, 84: 1, 87: 2, 142: 1, 210: 1, 213: 1, 273: 6, 274: 1, 286: 5, 294: 12, 299: 5, 300: 2, 301: 9, 306: 5",
+            "0: 4, 1: 1, 3: 1, 84: 1, 87: 2, 142: 1, 148: 1, 210: 1, 213: 1, 273: 6, 274: 2, 286: 4, 294: 12, 299: 7, 301: 10, 304: 1, 306: 6",
+            "0: 2, 1: 4, 84: 1, 87: 2, 142: 1, 210: 1, 213: 1, 273: 6, 274: 1, 286: 5, 294: 12, 299: 5, 300: 2, 301: 9, 306: 5",
+            "0: 1, 4: 2, 17: 2, 48: 1, 136: 3, 180: 1, 181: 1, 183: 2, 273: 21, 274: 2, 278: 1, 286: 7, 294: 9, 301: 9, 302: 1, 306: 14",
+            "0: 2, 1: 4, 84: 1, 87: 2, 142: 1, 210: 1, 213: 1, 273: 6, 274: 1, 286: 5, 294: 12, 299: 5, 300: 2, 301: 9, 306: 5",
+            "0: 4, 1: 1, 3: 1, 84: 1, 87: 2, 142: 1, 148: 1, 210: 1, 213: 1, 273: 6, 274: 2, 286: 4, 294: 12, 299: 7, 301: 10, 304: 1, 306: 6",
+            "0: 1, 4: 2, 17: 2, 48: 1, 136: 3, 180: 1, 181: 1, 183: 2, 273: 21, 274: 2, 278: 1, 286: 7, 294: 9, 301: 9, 302: 1, 306: 14",
+            "1: 3, 2: 1, 17: 2, 87: 2, 97: 2, 99: 2, 126: 2, 210: 1, 213: 1, 273: 6, 274: 1, 286: 1, 294: 13, 299: 6, 301: 10, 304: 1, 306: 7"
+        ]
+        fps_ref = [fp.split(",") for fp in fps_ref]
+        fps_mat_ref = np.zeros((len(fps_ref), 307))
+        for i in range(len(fps_ref)):
+            for fp in fps_ref[i]:
+                idx, cnt = fp.split(":")
+                fps_mat_ref[i, int(idx)] = int(cnt)
+
+        df_features = candidates.get_molecule_features_by_molecule_id(molecule_ids, "substructure_count", True)
+        feature_matrix = candidates.get_molecule_features_by_molecule_id(molecule_ids, "substructure_count", False)
+
+        np.testing.assert_equal(fps_mat_ref, feature_matrix)
+        np.testing.assert_equal(feature_matrix, df_features.iloc[:, 1:].values)
+        self.assertListEqual(molecule_ids, df_features["identifier"].to_list())
+
+        for rep in range(100):
+            rnd_idc = np.random.RandomState(rep).permutation(np.arange(len(molecule_ids)))
+
+            # Feature matrix
+            feature_matrix_shf = candidates.get_molecule_features_by_molecule_id([molecule_ids[i] for i in rnd_idc],
+                                                                                 "substructure_count")
+            np.testing.assert_array_equal(feature_matrix[rnd_idc], feature_matrix_shf)
+
+            # Dataframe
+            df_features_shf = candidates.get_molecule_features_by_molecule_id(
+                [molecule_ids[i] for i in rnd_idc], "substructure_count", return_dataframe=True)
+            np.testing.assert_equal(feature_matrix[rnd_idc], df_features_shf.iloc[:, 1:].values)
+            self.assertListEqual([molecule_ids[i] for i in rnd_idc], df_features_shf["identifier"].to_list())
 
     def test_all_outputs_are_sorted_equally(self):
         # ----------
@@ -180,6 +269,28 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         self.assertEqual(sorted(labspace), labspace)
         self.assertEqual(labspace, scores["identifier"].to_list())
         self.assertEqual(labspace, fps["identifier"].to_list())
+
+    def test_ensure_feature_is_available(self):
+        candidates = CandidateSQLiteDB(db_fn=DB_FN)
+
+        with self.assertRaises(ValueError):
+            candidates._ensure_feature_is_available("bla")
+            candidates._ensure_feature_is_available(None)
+            candidates._ensure_feature_is_available("")
+
+        candidates._ensure_feature_is_available("substructure_count")
+        candidates._ensure_feature_is_available("iokr_fps__positive")
+
+    def test_ensure_molecule_identifier_is_available(self):
+        candidates = CandidateSQLiteDB(db_fn=DB_FN)
+
+        with self.assertRaises(ValueError):
+            candidates._ensure_molecule_identifier_is_available("inchistr")
+            candidates._ensure_molecule_identifier_is_available(None)
+            candidates._ensure_molecule_identifier_is_available("")
+
+        candidates._ensure_molecule_identifier_is_available("inchi")
+        candidates._ensure_molecule_identifier_is_available("inchikey")
 
 
 class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):

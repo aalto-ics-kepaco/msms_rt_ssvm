@@ -353,9 +353,13 @@ class CandidateSQLiteDB(object):
         Raises an ValueError, if the requested molecular feature is not in the database.
 
         :param feature: string, identifier of the requested molecule feature.
+        :raises: ValueError
         """
-        if feature not in pd.read_sql_query("SELECT name FROM fingerprints_meta", self.db)["name"].to_list():
-            raise ValueError("Requested feature is not in the database: '%s'." % feature)
+        for row in self.db.execute("SELECT name FROM fingerprints_meta"):
+            if row[0] == feature:
+                return
+
+        raise ValueError("Requested feature is not in the database: '%s'." % feature)
 
     def _ensure_molecule_identifier_is_available(self, molecule_identifier: str):
         """
@@ -366,12 +370,12 @@ class CandidateSQLiteDB(object):
         if molecule_identifier not in pd.read_sql_query("SELECT * FROM molecules LIMIT 1", self.db).columns:
             raise ValueError("Molecule identifier '%s' is not available." % molecule_identifier)
 
-    def _get_molecule_feature_matrix(self, df_features: pd.DataFrame, features: str) -> np.ndarray:
+    def _get_molecule_feature_matrix(self, data: Union[pd.Series, List, Tuple], features: str) -> np.ndarray:
         """
         Function to parse the molecular features stored as strings in the candidate database and load them into a numpy
         array.
 
-        :param df_features: pandas.DataFrame, table with two columns (identifier, molecular_feature).
+        :param data: pandas.DataFrame, table with two columns (identifier, molecular_feature).
 
         :param features: string, identifier of the molecular feature. This information is needed to properly parse the
             feature string representation and store it in a numpy array.
@@ -379,16 +383,20 @@ class CandidateSQLiteDB(object):
         :return:
         """
         # Set up an output array
-        n = len(df_features)
+        n = len(data)
         d = self._get_feature_dimension(features)
         X = np.zeros((n, d))
 
         if features == "substructure_count":
-            for i, row in enumerate(df_features["molecular_feature"]):
-                _fp = eval("{" + row + "}")
-                X[i, list(_fp.keys())] = list(_fp.values())
+            for i, row in enumerate(data):
+                # _fp = eval("{" + row + "}")
+                # X[i, list(_fp.keys())] = list(_fp.values())
+
+                for _fp_str in row.split(","):
+                    _idx, _cnt = _fp_str.split(":")
+                    X[i, int(_idx)] = int(_cnt)
         else:
-            for i, row in enumerate(df_features["molecular_feature"]):
+            for i, row in enumerate(data):
                 _ids = list(map(int, row.split(",")))
                 X[i, _ids] = 1
 
@@ -424,13 +432,15 @@ class CandidateSQLiteDB(object):
         """
         self._ensure_feature_is_available(features)
 
-        df_features = pd.read_sql_query(
-            self._get_molecule_feature_query(spectrum, features, self._get_candidate_subset(spectrum)), self.db)
+        res = self.db.execute(
+            self._get_molecule_feature_query(spectrum, features, self._get_candidate_subset(spectrum))).fetchall()
 
-        feature_matrix = self._get_molecule_feature_matrix(df_features, features)
+        identifier, feature_rows = zip(*res)
+
+        feature_matrix = self._get_molecule_feature_matrix(feature_rows, features)
 
         if return_dataframe:
-            df_features = pd.concat((df_features["identifier"], pd.DataFrame(feature_matrix)), axis=1)
+            df_features = pd.concat((pd.DataFrame({"identifier": identifier}), pd.DataFrame(feature_matrix)), axis=1)
         else:
             df_features = feature_matrix
 
@@ -452,21 +462,38 @@ class CandidateSQLiteDB(object):
         """
         self._ensure_feature_is_available(features)
 
-        df_features = pd.read_sql_query(
+        # Query data from DB
+        _order_query_str = "\n".join(["WHEN '%s' THEN %d" % (mid, i) for i, mid in enumerate(molecule_ids, start=1)])
+
+        res = self.db.execute(
             "SELECT %s AS identifier, %s AS molecular_feature FROM molecules"
             "   INNER JOIN fingerprints_data fd ON fd.molecule = molecules.inchi"
-            "   WHERE identifier IN %s" % (self.molecule_identifier, features, self._in_sql(molecule_ids)),
-            self.db, index_col="identifier")
+            "   WHERE identifier IN %s"
+            "   ORDER BY CASE identifier"
+            "         %s"
+            "      END"
+            % (self.molecule_identifier, features, self._in_sql(molecule_ids), _order_query_str)).fetchall()
 
-        # Ensure feature rows have the same order as the _input_ molecule identifier
-        df_features = df_features.loc[molecule_ids].reset_index()
+        identifiers, feature_rows = zip(*res)
 
-        feature_matrix = self._get_molecule_feature_matrix(df_features, features)
+        # Parse feature strings into a matrix
+        feature_matrix = self._get_molecule_feature_matrix(feature_rows, features)
 
         if return_dataframe:
-            df_features = pd.concat((df_features["identifier"], pd.DataFrame(feature_matrix)), axis=1)
+            df_features = pd.DataFrame(feature_matrix, index=identifiers) \
+                .rename_axis("identifier") \
+                .loc[molecule_ids] \
+                .reset_index()
         else:
-            df_features = feature_matrix
+            # Use heuristic to check whether there are repeated elements in the 'molecule_ids' list. In such a case, the
+            # SQLite query only returns the features for unique molecules. We can use a pandas dataframe to fix that.
+            if len(feature_matrix) < len(molecule_ids):
+                try:
+                    df_features = pd.DataFrame(feature_matrix, index=identifiers).loc[molecule_ids].values
+                except KeyError as e:
+                    raise KeyError("The feature of the molecule with id = '%s' could not be loaded. " % e.args[0])
+            else:
+                df_features = feature_matrix
 
         return df_features
 
