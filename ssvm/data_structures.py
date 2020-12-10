@@ -243,7 +243,8 @@ class Molecule(object):
 
 
 class CandidateSQLiteDB(object):
-    def __init__(self, db_fn: str, cand_def: str = "fixed", molecule_identifier: str = "inchikey"):
+    def __init__(self, db_fn: str, cand_def: str = "fixed", molecule_identifier: str = "inchikey",
+                 in_memory: bool = False):
         """
         :param db_fn:
 
@@ -258,11 +259,17 @@ class CandidateSQLiteDB(object):
         # Open read-only database connection
         self.db = sqlite3.connect("file:" + self.db_fn + "?mode=ro", uri=True)
 
+        # Load the database into the RAM.
+        if in_memory:
+            self.db_mem = sqlite3.connect(":memory:")
+            self.db.backup(self.db_mem)
+            self.db.close()
+            self.db = self.db_mem
+
         if self.cand_def != "fixed":
             raise NotImplementedError("Currently only fixed candidate set definition supported.")
 
-        # TODO: Do we need to close the connection here?
-        # self._ensure_molecule_identifier_is_available(self.molecule_identifier)
+        self._ensure_molecule_identifier_is_available(self.molecule_identifier)
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         """
@@ -390,9 +397,6 @@ class CandidateSQLiteDB(object):
 
         if features == "substructure_count":
             for i, row in enumerate(data):
-                # _fp = eval("{" + row + "}")
-                # X[i, list(_fp.keys())] = list(_fp.values())
-
                 for _fp_str in row.split(","):
                     _idx, _cnt = _fp_str.split(":")
                     X[i, int(_idx)] = int(_cnt)
@@ -607,7 +611,8 @@ class RandomSubsetCandidateSQLiteDB(CandidateSQLiteDB):
                 n_cand = np.minimum(len(candidates_all), self.number_of_candidates)
 
             # Get a random subset
-            candidates_sub = check_random_state(self.random_state).choice(candidates_all, n_cand.astype(int), replace=False)
+            candidates_sub = check_random_state(self.random_state).choice(candidates_all, n_cand.astype(int),
+                                                                          replace=False)
 
             if self.include_correct_candidate:
                 molecule_id = spectrum.get("molecule_id")
