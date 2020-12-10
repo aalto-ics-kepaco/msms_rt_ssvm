@@ -122,6 +122,38 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         self.assertEqual((5103, 307), fps.shape)
         self.assertTrue(np.all(fps >= 0))
 
+    def test_get_molecule_feature_by_molecule_id__repeated_ids(self):
+        candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey")
+        molecule_ids = [
+            "CEJQCDWBMMEZFJ-NKFKGCMQSA-N",
+            "FGXWKSZFVQUSTL-UHFFFAOYSA-N",
+            "BFFTVFNQHIJUQT-MRXNPFEDSA-N",
+            "ATFVEXNQLNTOHV-CYBMUJFWSA-N",
+            "BFFTVFNQHIJUQT-INIZCTEOSA-N",
+            "CEJQCDWBMMEZFJ-NKFKGCMQSA-N",
+            "BFFTVFNQHIJUQT-UHFFFAOYSA-N",
+            "ATFVEXNQLNTOHV-ZDUSSCGKSA-N",
+            "BFFTVFNQHIJUQT-MRXNPFEDSA-N",
+            "CEJQCDWBMMEZFJ-UHFFFAOYSA-N",
+            "AZVUYIUQQIFCQK-UHFFFAOYSA-N",
+            "AZVUYIUQQIFCQK-UHFFFAOYSA-N"
+        ]
+
+        df_features = candidates.get_molecule_features_by_molecule_id(molecule_ids, "iokr_fps__positive", True)
+        feature_matrix = candidates.get_molecule_features_by_molecule_id(molecule_ids, "iokr_fps__positive", False)
+
+        np.testing.assert_equal((len(molecule_ids), 7936), feature_matrix.shape)
+        np.testing.assert_equal((len(molecule_ids), 7936), df_features.iloc[:, 1:].shape)
+        self.assertListEqual(molecule_ids, df_features["identifier"].to_list())
+
+        for rep in range(100):
+            rnd_idc = np.random.RandomState(rep).permutation(np.arange(len(molecule_ids)))
+
+            # Dataframe
+            df_features_shf = candidates.get_molecule_features_by_molecule_id(
+                [molecule_ids[i] for i in rnd_idc], "iokr_fps__positive", return_dataframe=True)
+            self.assertListEqual([molecule_ids[i] for i in rnd_idc], df_features_shf["identifier"].to_list())
+
     def test_get_molecule_feature_by_molecule_id(self):
         candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey")
         molecule_ids = [

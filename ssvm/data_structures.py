@@ -462,6 +462,7 @@ class CandidateSQLiteDB(object):
         """
         self._ensure_feature_is_available(features)
 
+        # Query data from DB
         _order_query_str = "\n".join(["WHEN '%s' THEN %d" % (mid, i) for i, mid in enumerate(molecule_ids, start=1)])
 
         res = self.db.execute(
@@ -473,14 +474,26 @@ class CandidateSQLiteDB(object):
             "      END"
             % (self.molecule_identifier, features, self._in_sql(molecule_ids), _order_query_str)).fetchall()
 
-        identifier, feature_rows = zip(*res)
+        identifiers, feature_rows = zip(*res)
 
+        # Parse feature strings into a matrix
         feature_matrix = self._get_molecule_feature_matrix(feature_rows, features)
 
         if return_dataframe:
-            df_features = pd.concat((pd.DataFrame({"identifier": identifier}), pd.DataFrame(feature_matrix)), axis=1)
+            df_features = pd.DataFrame(feature_matrix, index=identifiers) \
+                .rename_axis("identifier") \
+                .loc[molecule_ids] \
+                .reset_index()
         else:
-            df_features = feature_matrix
+            # Use heuristic to check whether there are repeated elements in the 'molecule_ids' list. In such a case, the
+            # SQLite query only returns the features for unique molecules. We can use a pandas dataframe to fix that.
+            if len(feature_matrix) < len(molecule_ids):
+                try:
+                    df_features = pd.DataFrame(feature_matrix, index=identifiers).loc[molecule_ids].values
+                except KeyError as e:
+                    raise KeyError("The feature of the molecule with id = '%s' could not be loaded. " % e.args[0])
+            else:
+                df_features = feature_matrix
 
         return df_features
 
