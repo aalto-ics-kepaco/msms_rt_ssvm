@@ -47,3 +47,6 @@ if __name__ == "__main__":
 
     ssvm.fit(seq_sample, n_init_per_example=5, summary_writer=summary_writer)
 
+    # TODO: We somehow should ensure that the database connection is always closed.
+    seq_sample.candidates.close()
+
