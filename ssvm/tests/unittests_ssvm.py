@@ -37,7 +37,7 @@ from scipy.sparse import csr_matrix
 from copy import deepcopy
 
 from ssvm.ssvm import _StructuredSVM, StructuredSVMMetIdent, DualVariables, StructuredSVMSequencesFixedMS2
-from ssvm.data_structures import CandidateSQLiteDB, SequenceSample, RandomSubsetCandidateSQLiteDB
+from ssvm.data_structures import CandidateSQLiteDB, SequenceSample, RandomSubsetCandidateSQLiteDB, SpanningTrees
 
 DB_FN = "/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_LATEST.db"
 
@@ -113,8 +113,8 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
             L_max=15, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
         self.ssvm.alphas_ = DualVariables(
             self.ssvm.C, label_space=self.ssvm.training_data_.get_labelspace(), num_init_active_vars=3)
-        self.ssvm.training_graphs_ = StructuredSVMSequencesFixedMS2._get_graph_set(
-            self.ssvm.training_data_, n_trees_per_sequence=1)
+        self.ssvm.training_graphs_ = [SpanningTrees(sequence, random_state=i)
+                                      for i, sequence in enumerate(self.ssvm.training_data_)]
 
     def test_get_lambda_delta(self):
         def mol_kernel(x, y):
@@ -151,7 +151,7 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
         print("Vec: %.3fs" % (rt_vec / n_rep))
 
     def test_I_rsvm_jfeat(self):
-        N_E = np.sum([len(self.ssvm.training_graphs_[0][j].edges) for j in range(self.N)])  # total number of edges
+        N_E = np.sum([len(self.ssvm.training_graphs_[j][0].edges) for j in range(self.N)])  # total number of edges
 
         rt_loop = 0.0
         rt_vec = 0.0
@@ -162,18 +162,18 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
             start = time.time()
             I_ref = np.zeros((len(Y_candidates), ))
             for j in range(self.N):
-                sign_delta_j = self.ssvm.training_data_[j].get_sign_delta_t(self.ssvm.training_graphs_[0][j])
+                sign_delta_j = self.ssvm.training_data_[j].get_sign_delta_t(self.ssvm.training_graphs_[j][0])
                 lambda_delta_j = self.ssvm._get_lambda_delta(
                     Y_sequence=self.ssvm.training_data_[j].get_molecule_features_for_labels(
                         self.ssvm.mol_feat_retention_order),
                     Y_candidates=Y_candidates,
-                    G=self.ssvm.training_graphs_[0][j],
+                    G=self.ssvm.training_graphs_[j][0],
                     mol_kernel=self.ssvm.mol_kernel
                 )
                 I_ref += self.ssvm.C / len(self.ssvm.training_data_) * (sign_delta_j @ lambda_delta_j)
 
-                # self.assertEqual((len(ssvm.training_graphs_[0][j].edges),), sign_delta_j.shape)
-                # self.assertEqual((len(ssvm.training_graphs_[0][j].edges), len(Y_candidates)), lambda_delta_j.shape)
+                # self.assertEqual((len(ssvm.training_graphs_[j][0].edges),), sign_delta_j.shape)
+                # self.assertEqual((len(ssvm.training_graphs_[j][0].edges), len(Y_candidates)), lambda_delta_j.shape)
 
             rt_loop += time.time() - start
 
@@ -199,11 +199,11 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
     def test_get_node_and_edge_potentials(self):
         i = 8
         npot, epot = self.ssvm._get_node_and_edge_potentials(self.ssvm.training_data_[i],
-                                                             self.ssvm.training_graphs_[0][i])
+                                                             self.ssvm.training_graphs_[i][0])
 
-        self.assertEqual(len(self.ssvm.training_graphs_[0][i]), len(npot))
+        self.assertEqual(len(self.ssvm.training_graphs_[i][0]), len(npot))
 
-        for s, t in self.ssvm.training_graphs_[0][i].edges:
+        for s, t in self.ssvm.training_graphs_[i][0].edges:
             self.assertIn(s, epot)
             self.assertIn(t, epot[s])
 
@@ -225,16 +225,14 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
             # With loss augmentation
             # =========================
             y_i_hat__la = self.ssvm.inference(
-                self.ssvm.training_data_[i],
-                [self.ssvm.training_graphs_[k][i] for k in range(len(self.ssvm.training_graphs_))],
+                self.ssvm.training_data_[i], self.ssvm.training_graphs_[i],
                 loss_augmented=True)
 
             # =========================
             # Without loss augmentation
             # =========================
             y_i_hat__wola = self.ssvm.inference(
-                self.ssvm.training_data_[i],
-                [self.ssvm.training_graphs_[k][i] for k in range(len(self.ssvm.training_graphs_))],
+                self.ssvm.training_data_[i], self.ssvm.training_graphs_[i],
                 loss_augmented=False)
 
             self.assertEqual(len(self.ssvm.training_data_[i]), len(y_i_hat__la))
@@ -249,12 +247,12 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
             # =========================
             # With loss augmentation
             # =========================
-            y_i_hat__la = self.ssvm.inference(self.ssvm.training_data_[i], G=None, n_trees=1, loss_augmented=True)
+            y_i_hat__la = self.ssvm.inference(self.ssvm.training_data_[i], Gs=None, loss_augmented=True)
 
             # =========================
             # Without loss augmentation
             # =========================
-            y_i_hat__wola = self.ssvm.inference(self.ssvm.training_data_[i], G=None, n_trees=1, loss_augmented=False)
+            y_i_hat__wola = self.ssvm.inference(self.ssvm.training_data_[i], Gs=None, loss_augmented=False)
 
             self.assertEqual(len(self.ssvm.training_data_[i]), len(y_i_hat__la))
             self.assertEqual(len(self.ssvm.training_data_[i]), len(y_i_hat__wola))
@@ -265,7 +263,7 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
 
     def test_max_marginals(self):
         for i in [0, 8, 3]:
-            marg = self.ssvm.max_marginals(self.ssvm.training_data_[i], G=None, n_trees=1)
+            marg = self.ssvm.max_marginals(self.ssvm.training_data_[i], Gs=None)
 
             self.assertEqual(len(self.ssvm.training_data_[i]), len(marg))
 
@@ -277,17 +275,17 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
     # FOR THE SCORING WE CURRENTLY ONLY TEST THE OUTPUT DIMENSIONS
     # ------------------------------------------------------------
     def test_topk_score(self):
-        topk_acc = self.ssvm.topk_score(self.ssvm.training_data_[3], G=None, n_trees=1, max_k=100)
+        topk_acc = self.ssvm.topk_score(self.ssvm.training_data_[3], Gs=None, max_k=100)
         self.assertTrue(len(topk_acc) < 100)
 
-        topk_acc = self.ssvm.topk_score(self.ssvm.training_data_[3], G=None, n_trees=1, max_k=100, pad_output=True)
+        topk_acc = self.ssvm.topk_score(self.ssvm.training_data_[3], Gs=None, max_k=100, pad_output=True)
         self.assertEqual(100, len(topk_acc))
 
     def test_top1_score(self):
-        top1_acc = self.ssvm.top1_score(self.ssvm.training_data_[3], G=None, n_trees=1)
+        top1_acc = self.ssvm.top1_score(self.ssvm.training_data_[3], Gs=None)
         self.assertTrue(np.isscalar(top1_acc))
 
-        top1_acc = self.ssvm.top1_score(self.ssvm.training_data_[3], G=None, n_trees=1, map=True)
+        top1_acc = self.ssvm.top1_score(self.ssvm.training_data_[3], Gs=None, map=True)
         self.assertTrue(np.isscalar(top1_acc))
 
     def test_ndcg_score(self):

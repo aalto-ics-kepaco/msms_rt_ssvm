@@ -41,6 +41,7 @@ from sklearn.preprocessing import MinMaxScaler
 # from sklearn.cluster import MiniBatchKMeans
 
 from ssvm.kernel_utils import tanimoto_kernel, generalized_tanimoto_kernel
+from ssvm.factor_graphs import get_random_spanning_tree
 
 from matchms.Spectrum import Spectrum
 
@@ -1125,6 +1126,27 @@ class SequenceSample(object):
         L_ms__j_ybar = self.lambda_ms(Psi_y__y, psi_y__j_ybar)  # shape=(L, 1)
 
         return K_ms @ (L_ms__j_tau - L_ms__j_ybar)
+
+
+class SpanningTrees(object):
+    def __init__(self, sequence: Sequence, n_trees: int = 1,
+                 random_state: Optional[Union[int, np.random.RandomState]] = None):
+        """
+        :param sequence:
+        :param n_trees:
+        :param random_state:
+        """
+        self.n_tress = n_trees
+        self.random_state = check_random_state(random_state)
+
+        self.trees = [get_random_spanning_tree(sequence, random_state=random_state) for _ in range(self.n_tress)]
+
+    def __getitem__(self, item) -> nx.Graph:
+        assert isinstance(item, int)
+        return self.trees[item]
+
+    def __len__(self):
+        return self.n_tress
 
 
 if __name__ == "__main__":
