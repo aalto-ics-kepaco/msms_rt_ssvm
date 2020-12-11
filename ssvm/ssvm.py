@@ -1385,41 +1385,45 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 else:
                     step_size = self._get_step_size_diminishing(n_iterations_total, N)
 
-                # Update the dual variables
-                is_new = [self.alphas_.update(i, y_i_hat, step_size) for i, y_i_hat in zip(I_batch, y_I_hat)]
+                print("\t%.4f" % step_size)
 
-                self.write_log(n_iter=n_iterations_total,
-                               data_to_log={
-                                   "step_size": step_size,
-                                   "active_variables": self.alphas_.n_active()},
-                               summary_writer=summary_writer)
+                # Update the dual variables
+                print("\tn_active=%d (before update)" % self.alphas_.n_active())
+                is_new = [self.alphas_.update(i, y_i_hat, step_size) for i, y_i_hat in zip(I_batch, y_I_hat)]
+                print(is_new)
+                print("\tn_active=%d (after update)" % self.alphas_.n_active())
+
+                if summary_writer is not None:
+                    self.write_log(n_iter=n_iterations_total,
+                                   data_to_log={
+                                       "step_size": step_size,
+                                       "active_variables": self.alphas_.n_active()},
+                                   summary_writer=summary_writer)
 
                 assert self._is_feasible_matrix(self.alphas_, self.C), \
                     "Dual variables after update are not feasible anymore."
 
                 n_iterations_total += 1
 
-            # Write out scores only after each epoch
-            self.write_log(n_iter=n_iterations_total,
-                           data_to_log={
-                               "training_ndcg_ohc": self.score(self.training_data_, self.training_graphs_,
-                                                               stype="ndcg_ohc"),
-                               "training_top1_map": self.score(self.training_data_, self.training_graphs_,
-                                                               stype="top1_map")},
-                           summary_writer=summary_writer)
+            if summary_writer is not None:
+                # Write out scores only after each epoch
+                self.write_log(n_iter=n_iterations_total,
+                               data_to_log={
+                                   "training_ndcg_ohc": self.score(self.training_data_, self.training_graphs_,
+                                                                   stype="ndcg_ohc"),
+                                   "training_top1_map": self.score(self.training_data_, self.training_graphs_,
+                                                                   stype="top1_map")},
+                               summary_writer=summary_writer)
 
         return self
 
     @staticmethod
-    def write_log(n_iter: int, data_to_log: dict, summary_writer: Optional[tf.summary.SummaryWriter] = None):
+    def write_log(n_iter: int, data_to_log: dict, summary_writer: tf.summary.SummaryWriter):
         """
 
         :param summary_writer:
         :return:
         """
-        if summary_writer is None:
-            return
-
         if data_to_log.get("step_size", None):
             with summary_writer.as_default():
                 with tf.name_scope("Optimizer"):
@@ -1810,6 +1814,49 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         # C / N * < sign_delta , lambda_delta >, shape = (n_molecules, )
         return self.C * (sign_delta @ lambda_delta) / N
 
+    # def predict_molecule_preference_values_OLD(self, Y: np.ndarray) -> np.ndarray:
+    #     """
+    #     :param Y: array-like, shape = (n_molecules, n_features), molecular feature vectors to calculate the preference
+    #         values for.
+    #
+    #     :return: array-like, shape = (n_molecules, ), preference values for all molecules.
+    #     """
+    #     I = self._I_jfeat_rsvm(Y)
+    #
+    #     # Note: L_i = |E_j|
+    #     N = len(self.training_data_)
+    #
+    #     # List of the molecular structures belonging to the active examples, i.e. a(i, y) > 0
+    #     l_Y_act_sequence = []  # type: List[List[np.ndarray]]  # length = (N, )
+    #     l_A_Sj = []
+    #     for j in range(N):
+    #         Sj, A_Sj = self.alphas_.get_blocks(j)
+    #         _, Sj = zip(*Sj)  # type: Tuple[Tuple[str, ...]]  # length = number of active sequences for example j
+    #         l_A_Sj.append(np.array(A_Sj))
+    #
+    #         # Sj: active labels, i.e. all y in Sigma_j for which a(j, y) > 0
+    #         # A_Sj: dual values, array-like with shape = (|S_j|, )
+    #
+    #         l_Y_act_sequence.append([
+    #             self.training_data_.candidates.get_molecule_features_by_molecule_id(Sj_k, self.mol_feat_retention_order)
+    #             # array-like, shape = (|E_j|, n_features)
+    #             for Sj_k in Sj   # type: List[np.ndarray]  # length = |S_j|
+    #         ])
+    #
+    #     II = np.zeros((len(Y), ))  # shape = (n_molecules, )
+    #     for j in range(N):
+    #         lambda_delta = np.dstack(
+    #             [StructuredSVMSequencesFixedMS2._get_lambda_delta_OLD(Y_sequence, Y, self.training_graphs_[j][0],
+    #                                                                   self.mol_kernel)
+    #              for Y_sequence in l_Y_act_sequence[j]])  # shape = (|E_j|, n_molecules, |S_j|)
+    #
+    #         II += np.einsum("i,ikj,j",
+    #                         self.training_data_[j].get_sign_delta_t(self.training_graphs_[j][0]),
+    #                         lambda_delta,
+    #                         l_A_Sj[j])
+    #
+    #     return I - II
+
     def predict_molecule_preference_values(self, Y: np.ndarray) -> np.ndarray:
         """
         :param Y: array-like, shape = (n_molecules, n_features), molecular feature vectors to calculate the preference
@@ -1823,7 +1870,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         N = len(self.training_data_)
 
         # List of the molecular structures belonging to the active examples, i.e. a(i, y) > 0
-        l_Y_act_sequence = []  # type: List[List[np.ndarray]]  # length = (N, )
+        l_Y_act_sequence = [None for _ in range(N)]  # length = (N, )
         l_A_Sj = []
         for j in range(N):
             Sj, A_Sj = self.alphas_.get_blocks(j)
@@ -1833,20 +1880,23 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             # Sj: active labels, i.e. all y in Sigma_j for which a(j, y) > 0
             # A_Sj: dual values, array-like with shape = (|S_j|, )
 
-            l_Y_act_sequence.append([
-                self.training_data_.candidates.get_molecule_features_by_molecule_id(Sj_k, self.mol_feat_retention_order)
-                # array-like, shape = (|E_j|, n_features)
-                for Sj_k in Sj   # type: List[np.ndarray]  # length = |S_j|
-            ])
+            l_Y_act_sequence[j] = self.training_data_.candidates.get_molecule_features_by_molecule_id(
+                list(it.chain(*Sj)), self.mol_feat_retention_order)
 
         II = np.zeros((len(Y), ))  # shape = (n_molecules, )
         for j in range(N):
-            lambda_delta = np.dstack(
-                [StructuredSVMSequencesFixedMS2._get_lambda_delta(Y_sequence, Y, self.training_graphs_[j][0],
-                                                                  self.mol_kernel)
-                 for Y_sequence in l_Y_act_sequence[j]])  # shape = (|E_j|, n_molecules, |S_j|)
+            lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta(
+                l_Y_act_sequence[j], Y, self.training_graphs_[j][0], self.mol_kernel)
 
-            II += np.einsum("i,ikj,j",
+            # Bring output to shape = (|S_j|, |E_j|, n_molecules)
+            lambda_delta = lambda_delta.reshape(
+                (
+                    self.alphas_.n_active(j),
+                    self.training_graphs_[j].get_n_edges(),
+                    len(Y)
+                ))
+
+            II += np.einsum("j,ijk,i",
                             self.training_data_[j].get_sign_delta_t(self.training_graphs_[j][0]),
                             lambda_delta,
                             l_A_Sj[j])
@@ -2021,8 +2071,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         return TFG, Z_max
 
     @staticmethod
-    def _get_lambda_delta(Y_sequence: np.ndarray, Y_candidates: np.ndarray, G: nx.Graph,
-                          mol_kernel: Callable[[np.ndarray, np.ndarray], np.ndarray]) -> np.ndarray:
+    def _get_lambda_delta_OLD(Y_sequence: np.ndarray, Y_candidates: np.ndarray, G: nx.Graph,
+                              mol_kernel: Callable[[np.ndarray, np.ndarray], np.ndarray]) -> np.ndarray:
         """
         Calculate the 'Lambda_Delta(y, y_s)' term, with shape = (L - 1, ) for all y_s in Y_candidates.
 
@@ -2045,3 +2095,39 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         bS, bT = zip(*G.edges)  # each of length |E| = L - 1
 
         return Ky[list(bS)] - Ky[list(bT)]
+
+    @staticmethod
+    def _get_lambda_delta(Y_sequence: np.ndarray, Y_candidates: np.ndarray, G: nx.Graph,
+                          mol_kernel: Callable[[np.ndarray, np.ndarray], np.ndarray]) -> np.ndarray:
+        """
+        Calculate the 'Lambda_Delta(y, y_s)' term, with shape = ((L - 1) * |S|, ) for all y_s in Y_candidates.
+
+        :param Y_sequence: array-like, shape = (L * |S|, n_features), molecule features associated with the
+
+        :param Y_candidates: array-like, shape = (n_candidates, n_features), feature matrix
+
+        :param G: networkx.Graph, spanning tree defined over the MRF associated with the label sequence.
+
+        :param mol_kernel: callable, function that takes in two feature row-matrices as input and outputs the kernel
+            similarity matrix.
+
+        :return: array-shape = ((L - 1) * |S|, n_molecules)
+        """
+        L = len(G.nodes)
+        assert L > 1, "There must be at least two nodes in the graph."
+        n_E = len(G.edges)
+        assert n_E > 0, "There must be at least one edge in the graph."
+        assert (len(Y_sequence) % L) == 0
+        n_S = len(Y_sequence) // L
+
+        Ky = mol_kernel(Y_sequence, Y_candidates)  # shape = (L * |S|, n_candidates)
+
+        bS, bT = zip(*G.edges)  # each of length |E| = L - 1
+
+        if n_S > 1:
+            corr = (np.arange(n_S) * L)[:, np.newaxis]
+            out = Ky[(corr + np.array(bS)).flatten()] - Ky[(corr + np.array(bT)).flatten()]
+        else:
+            out = Ky[list(bS)] - Ky[list(bT)]
+
+        return out

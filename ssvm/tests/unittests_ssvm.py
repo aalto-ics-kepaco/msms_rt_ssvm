@@ -140,7 +140,7 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
             rt_loop += time.time() - start
 
             start = time.time()
-            lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta(Y_sequence, Y_candidates, G, mol_kernel)
+            lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta_OLD(Y_sequence, Y_candidates, G, mol_kernel)
             rt_vec += time.time() - start
 
             self.assertEqual(lambda_delta_ref.shape, lambda_delta.shape)
@@ -149,6 +149,76 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
         print("== get_lambda_delta ==")
         print("Loop: %.3fs" % (rt_loop / n_rep))
         print("Vec: %.3fs" % (rt_vec / n_rep))
+
+    def test_get_lambda_delta_NEW(self):
+        def mol_kernel(x, y):
+            return x @ y.T
+
+        rt_old = 0.0
+        rt_new = 0.0
+
+        n_rep = 15
+        for rep in range(n_rep):
+            n_features = 231
+            n_molecules = 501
+            L = 101
+            G = nx.generators.trees.random_tree(L, seed=(rep + 3))
+
+            Y_candidates = np.random.RandomState(rep + 6).rand(n_molecules, n_features)
+
+            l_Y_sequence = []
+            for nS in [1, 2, 3, 4, 5]:
+                # print("Number of active sequences: %d" % nS)
+
+                l_Y_sequence.append(np.random.RandomState((nS * rep) + 5).rand(L, n_features))
+
+                start = time.time()
+                lambda_delta_ref = np.dstack(
+                    [
+                        StructuredSVMSequencesFixedMS2._get_lambda_delta_OLD(
+                            Y_sequence, Y_candidates, G, mol_kernel)
+                        for Y_sequence in l_Y_sequence
+                    ])
+                rt_old += time.time() - start
+                self.assertEqual((L - 1, len(Y_candidates), nS), lambda_delta_ref.shape)
+
+                start = time.time()
+                lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta(
+                    np.vstack(l_Y_sequence), Y_candidates, G, mol_kernel)
+                self.assertEqual(((L - 1) * nS, len(Y_candidates)), lambda_delta.shape)
+
+                # np.testing.assert_equal(
+                #     np.vstack(
+                #         [
+                #             StructuredSVMSequencesFixedMS2._get_lambda_delta_OLD(
+                #                 Y_sequence, Y_candidates, G, mol_kernel)
+                #             for Y_sequence in l_Y_sequence
+                #         ]),
+                #     lambda_delta
+                # )
+                #
+
+                # Bring output to shape = (|E_j|, |S_j|, n_molecules)
+                lambda_delta = lambda_delta.reshape(
+                    (
+                        nS,
+                        L - 1,
+                        len(Y_candidates),
+                    ))
+                self.assertEqual((nS, L - 1, len(Y_candidates)), lambda_delta.shape)
+                rt_new += time.time() - start
+
+                for nSi in range(nS):
+                    # print(lambda_delta_ref[:, :, nSi].shape)
+                    # print(lambda_delta[nSi, :, :].shape)
+                    # print(np.round(lambda_delta_ref[:10, :10, nSi], 2))
+                    # print(np.round(lambda_delta[nSi, :10, :10], 2))
+
+                    np.testing.assert_allclose(lambda_delta_ref[:, :, nSi], lambda_delta[nSi, :, :])
+
+        print("== get_lambda_delta ==")
+        print("Old: %.3fs" % (rt_old / n_rep))
+        print("New: %.3fs" % (rt_new / n_rep))
 
     def test_I_rsvm_jfeat(self):
         N_E = np.sum([len(self.ssvm.training_graphs_[j][0].edges) for j in range(self.N)])  # total number of edges
