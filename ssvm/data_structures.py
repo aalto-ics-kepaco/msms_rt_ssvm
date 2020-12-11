@@ -1143,6 +1143,8 @@ class SpanningTrees(object):
         """
         self.n_tress = n_trees
         self.random_state = check_random_state(random_state)
+        self.n_nodes = len(sequence)
+        self.n_edges = self.n_nodes - 1
 
         self.trees = [get_random_spanning_tree(sequence, random_state=random_state) for _ in range(self.n_tress)]
 
@@ -1152,6 +1154,12 @@ class SpanningTrees(object):
 
     def __len__(self):
         return self.n_tress
+
+    def get_n_nodes(self):
+        return self.n_nodes
+
+    def get_n_edges(self):
+        return self.n_edges
 
 
 if __name__ == "__main__":
