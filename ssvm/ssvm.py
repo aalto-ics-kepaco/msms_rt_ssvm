@@ -1382,6 +1382,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             print("Epoch: %d/%d" % (epoch + 1, self.n_epochs))
 
             _batches = list(mit.chunked(random_state.permutation(np.arange(N)), self.batch_size))
+            updates_made = False
             for step, I_batch in enumerate(_batches):
                 print("\tStep: %d/%d" % (step + 1, len(_batches)))
 
@@ -1397,26 +1398,27 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                     step_size = self._get_step_size_linesearch(I_batch, y_I_hat, [TFG for _, TFG in res])
                 else:
                     step_size = self._get_step_size_diminishing(n_iterations_total, N)
-
                 print("\t%.4f" % step_size)
 
                 # Update the dual variables
-                print("\tn_active=%d (before update)" % self.alphas_.n_active())
-                is_new = [self.alphas_.update(i, y_i_hat, step_size) for i, y_i_hat in zip(I_batch, y_I_hat)]
-                print(is_new)
-                print("\tn_active=%d (after update)" % self.alphas_.n_active())
-
-                assert self._is_feasible_matrix(self.alphas_, self.C), \
-                    "Dual variables after update are not feasible anymore."
-
                 n_iterations_total += 1
+                print("\tn_active=%d (before update)" % self.alphas_.n_active())
 
-                if summary_writer is not None:
-                    self.write_log(n_iter=n_iterations_total,
-                                   data_to_log={
-                                       "step_size": step_size,
-                                       "active_variables": self.alphas_.n_active()},
-                                   summary_writer=summary_writer)
+                if step_size > 0:
+                    is_new = [self.alphas_.update(i, y_i_hat, step_size) for i, y_i_hat in zip(I_batch, y_I_hat)]
+                    print(is_new)
+                    print("\tn_active=%d (after update)" % self.alphas_.n_active())
+                    updates_made = True
+
+                    assert self._is_feasible_matrix(self.alphas_, self.C), \
+                        "Dual variables after update are not feasible anymore."
+
+                    if summary_writer is not None:
+                        self.write_log(n_iter=n_iterations_total,
+                                       data_to_log={
+                                           "step_size": step_size,
+                                           "active_variables": self.alphas_.n_active()},
+                                       summary_writer=summary_writer)
 
             if summary_writer is not None:
                 # Write out scores only after each epoch
@@ -1427,6 +1429,9 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                                    "training_top1_map": self.score(self.training_data_, self.training_graphs_,
                                                                    stype="top1_map")},
                                summary_writer=summary_writer)
+
+            if not updates_made:
+                break
 
         return self
 
@@ -1700,6 +1705,10 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         # Difference of the dual vectors: s - a
         s_minus_a = s - self.alphas_  # type: DualVariables
+
+        if s_minus_a.get_blocks(I_batch) == ([], []):
+            # The best update direction found is equal to the current solution (model). No update needed.
+            return -1
 
         # ================
         # Nominator
