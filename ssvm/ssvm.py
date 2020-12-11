@@ -1820,15 +1820,14 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         l_A_Sj = []
         for j in range(N):
             Sj, A_Sj = self.alphas_.get_blocks(j)
-            _, Sj = zip(*Sj)  # type: List[Tuple[str, ...]]  # length = number of active sequences for example j
+            _, Sj = zip(*Sj)  # type: Tuple[Tuple[str, ...]]  # length = number of active sequences for example j
             l_A_Sj.append(np.array(A_Sj))
 
             # Sj: active labels, i.e. all y in Sigma_j for which a(j, y) > 0
             # A_Sj: dual values, array-like with shape = (|S_j|, )
 
             l_Y_act_sequence.append([
-                self.training_data_.candidates.get_molecule_features_by_molecule_id(
-                    list(Sj_k), self.mol_feat_retention_order)  # type: np.ndarray
+                self.training_data_.candidates.get_molecule_features_by_molecule_id(Sj_k, self.mol_feat_retention_order)
                 # array-like, shape = (|E_j|, n_features)
                 for Sj_k in Sj   # type: List[np.ndarray]  # length = |S_j|
             ])

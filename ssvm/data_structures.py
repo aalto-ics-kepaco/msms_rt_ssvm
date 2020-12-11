@@ -487,14 +487,14 @@ class CandidateSQLiteDB(object):
         if return_dataframe:
             df_features = pd.DataFrame(feature_matrix, index=identifiers) \
                 .rename_axis("identifier") \
-                .loc[molecule_ids] \
+                .loc[list(molecule_ids)] \
                 .reset_index()
         else:
             # Use heuristic to check whether there are repeated elements in the 'molecule_ids' list. In such a case, the
             # SQLite query only returns the features for unique molecules. We can use a pandas dataframe to fix that.
             if len(feature_matrix) < len(molecule_ids):
                 try:
-                    df_features = pd.DataFrame(feature_matrix, index=identifiers).loc[molecule_ids].values
+                    df_features = pd.DataFrame(feature_matrix, index=identifiers).loc[list(molecule_ids)].values
                 except KeyError as e:
                     raise KeyError("The feature of the molecule with id = '%s' could not be loaded. " % e.args[0])
             else:
