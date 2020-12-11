@@ -33,7 +33,8 @@ if __name__ == "__main__":
     # ===================
     ssvm = StructuredSVMSequencesFixedMS2(
         mol_feat_label_loss="iokr_fps__positive", mol_feat_retention_order="substructure_count",
-        mol_kernel="minmax", C=2, step_size="linesearch", batch_size=8, n_epochs=5, label_loss="tanimoto_loss")
+        mol_kernel="minmax", C=2, step_size="linesearch", batch_size=8, n_epochs=7, label_loss="tanimoto_loss",
+        random_state=1993, retention_order_weight=1)
 
     N = 24
     seq_sample = SequenceSample(

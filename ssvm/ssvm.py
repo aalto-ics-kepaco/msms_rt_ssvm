@@ -1296,7 +1296,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     """
     def __init__(self, mol_feat_label_loss: str, mol_feat_retention_order: str,
                  mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]],  n_trees_per_sequence: int = 1,
-                 *args, **kwargs):
+                 retention_order_weight=0.5, *args, **kwargs):
         """
         :param mol_feat_label_loss:
         :param mol_feat_retention_order:
@@ -1310,6 +1310,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         self.mol_feat_retention_order = mol_feat_retention_order
         self.mol_kernel = self.get_mol_kernel(mol_kernel)
         self.n_trees_per_sequence = n_trees_per_sequence
+        self.retention_order_weight = retention_order_weight
         if self.n_trees_per_sequence > 1:
             raise ValueError("Currently only a single spanning tree per sequence is supported.")
 
@@ -1365,6 +1366,18 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         random_state = check_random_state(self.random_state)
         n_iterations_total = 0
+
+        if summary_writer is not None:
+            # Write out scores only after each epoch
+            self.write_log(n_iter=n_iterations_total,
+                           data_to_log={
+                               "active_variables": self.alphas_.n_active(),
+                               "training_ndcg_ohc": self.score(self.training_data_, self.training_graphs_,
+                                                               stype="ndcg_ohc"),
+                               "training_top1_map": self.score(self.training_data_, self.training_graphs_,
+                                                               stype="top1_map")},
+                           summary_writer=summary_writer)
+
         for epoch in range(self.n_epochs):
             print("Epoch: %d/%d" % (epoch + 1, self.n_epochs))
 
@@ -1393,17 +1406,17 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 print(is_new)
                 print("\tn_active=%d (after update)" % self.alphas_.n_active())
 
+                assert self._is_feasible_matrix(self.alphas_, self.C), \
+                    "Dual variables after update are not feasible anymore."
+
+                n_iterations_total += 1
+
                 if summary_writer is not None:
                     self.write_log(n_iter=n_iterations_total,
                                    data_to_log={
                                        "step_size": step_size,
                                        "active_variables": self.alphas_.n_active()},
                                    summary_writer=summary_writer)
-
-                assert self._is_feasible_matrix(self.alphas_, self.C), \
-                    "Dual variables after update are not feasible anymore."
-
-                n_iterations_total += 1
 
             if summary_writer is not None:
                 # Write out scores only after each epoch
@@ -1929,7 +1942,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, Gs[0], loss_augmented)
 
         # Find the MAP estimate
-        TFG, Z_max = self._inference(node_potentials, edge_potentials, Gs[0])
+        TFG, Z_max = self._inference(node_potentials, edge_potentials, Gs[0],
+                                     retention_order_weight=self.retention_order_weight)
 
         # MAP returns a list of candidate indices, we need to convert them back to actual molecules identifier
         y_hat = tuple(sequence.get_labelspace(s)[Z_max[s]] for s in Gs[0].nodes)
@@ -1962,7 +1976,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, Gs[0])
 
         # Calculate the max-max_marginals
-        return self._max_marginals(sequence, node_potentials, edge_potentials, Gs[0], normalize=True)
+        return self._max_marginals(sequence, node_potentials, edge_potentials, Gs[0], normalize=True,
+                                   retention_order_weight=self.retention_order_weight)
 
     def _get_node_and_edge_potentials(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph,
                                       loss_augmented: bool = False):
@@ -2045,27 +2060,27 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
     @staticmethod
     def _max_marginals(sequence: Union[Sequence, LabeledSequence], node_potentials: OrderedDict, edge_potentials: Dict,
-                       G: nx.Graph, normalize=True):
+                       G: nx.Graph, normalize=True, retention_order_weight: float = 0.5):
         """
         Max-max_marginals
         """
         # Calculate the normalized max-max_marginals
         marg = TreeFactorGraph(candidates=node_potentials, var_conn_graph=G, make_order_probs=None,
-                               order_probs=edge_potentials) \
+                               order_probs=edge_potentials, D=retention_order_weight) \
             .max_product() \
             .get_max_marginals(normalize)
 
         return {s: {"label": sequence.get_labelspace(s), "score": marg[s], "n_cand": len(marg[s])} for s in G.nodes}
 
     @staticmethod
-    def _inference(node_potentials: OrderedDict, edge_potentials: Dict, G: nx.Graph) \
+    def _inference(node_potentials: OrderedDict, edge_potentials: Dict, G: nx.Graph, retention_order_weight: float = 0.5) \
             -> Tuple[TreeFactorGraph, List[List[int]]]:
         """
         MAP inference
         """
         # MAP inference (find most likely label sequence) for the given node- and edge-potentials
         TFG = TreeFactorGraph(candidates=node_potentials, var_conn_graph=G, make_order_probs=None,
-                              order_probs=edge_potentials)
+                              order_probs=edge_potentials, D=retention_order_weight)
         Z_max, _ = TFG.MAP_only()
 
         return TFG, Z_max
