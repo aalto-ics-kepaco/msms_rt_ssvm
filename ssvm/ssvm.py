@@ -24,6 +24,7 @@
 #
 ####
 import numpy as np
+import itertools as it
 import more_itertools as mit
 import tensorflow as tf
 import networkx as nx
@@ -44,7 +45,8 @@ from ssvm.data_structures import SequenceSample, CandidateSetMetIdent, Sequence,
 from ssvm.loss_functions import hamming_loss, tanimoto_loss
 from ssvm.evaluation_tools import get_topk_performance_csifingerid
 from ssvm.factor_graphs import get_random_spanning_tree
-from ssvm.kernel_utils import generalized_tanimoto_kernel, tanimoto_kernel
+from ssvm.kernel_utils import generalized_tanimoto_kernel_OLD as generalized_tanimoto_kernel
+from ssvm.kernel_utils import tanimoto_kernel
 
 
 DUALVARIABLES_T = TypeVar('DUALVARIABLES_T', bound='DualVariables')
@@ -280,7 +282,7 @@ class DualVariables(object):
         else:
             raise ValueError("Invalid sparse matrix type: '%s'. Choices are 'csr' and 'csc'.")
 
-    def n_active(self) -> int:
+    def n_active(self, i: Optional[int] = None) -> int:
         """
         Numer of active dual variables.
 
@@ -288,7 +290,10 @@ class DualVariables(object):
         """
         self.assert_is_initialized()
 
-        return self._alphas.shape[1]
+        if i is None:
+            return self._alphas.getnnz()
+        else:
+            return self._alphas[i].getnnz()
 
     def get_iy_for_col(self, c: int) -> Tuple[int, Tuple]:
         """
@@ -329,8 +334,10 @@ class DualVariables(object):
         a = []
         for _i in i:
             for y_seq in self._y2col[_i]:
-                iy.append((_i, y_seq))
-                a.append(self.get_dual_variable(_i, y_seq))
+                _a = self._alphas[_i, self._y2col[_i][y_seq]]
+                if _a != 0:
+                    iy.append((_i, y_seq))
+                    a.append(_a)
 
         return iy, a
 

@@ -423,6 +423,67 @@ class TestDualVariables(unittest.TestCase):
                         self.assertIn(y_seq, list(it.product(*cand_ids[i])))
                         col += 1
 
+    def test_n_active(self):
+        # ----------------------------------------------------
+        cand_ids = [
+            [
+                ["M1", "M2", "M19", "M10"]
+            ],
+            [
+                ["M7", "M9", "M8"]
+            ],
+            [
+                ["M72", "M11"]
+            ],
+            [
+                ["M12", "M13", "M3", "M4", "M22"]
+            ]
+        ]
+        C = 2.0
+        gamma = 0.46
+
+        alphas = DualVariables(C=C, label_space=cand_ids, num_init_active_vars=2, random_state=10910)
+        print(alphas._iy)
+        # Active variables
+        # [(0, ('M19',)), (0, ('M10',)),
+        #  (1, ('M8',)), (1, ('M7',)),
+        #  (2, ('M72',)), (2, ('M11',)),
+        #  (3, ('M4',)), (3, ('M3',))]
+
+        self.assertEqual(8, alphas.n_active())  # Number of active variables must not change
+        self.assertEqual(2, alphas.n_active(0))
+        self.assertEqual(2, alphas.n_active(1))
+        self.assertEqual(2, alphas.n_active(2))
+        self.assertEqual(2, alphas.n_active(3))
+
+        alphas.update(0, ("M19",), gamma)
+        self.assertEqual(8, alphas.n_active())
+        self.assertEqual(2, alphas.n_active(0))
+        self.assertEqual(2, alphas.n_active(1))
+        self.assertEqual(2, alphas.n_active(2))
+        self.assertEqual(2, alphas.n_active(3))
+
+        alphas.update(0, ("M1",), gamma)
+        self.assertEqual(9, alphas.n_active())
+        self.assertEqual(3, alphas.n_active(0))
+        self.assertEqual(2, alphas.n_active(1))
+        self.assertEqual(2, alphas.n_active(2))
+        self.assertEqual(2, alphas.n_active(3))
+
+        alphas.update(2, ("M11",), gamma)
+        self.assertEqual(9, alphas.n_active())
+        self.assertEqual(3, alphas.n_active(0))
+        self.assertEqual(2, alphas.n_active(1))
+        self.assertEqual(2, alphas.n_active(2))
+        self.assertEqual(2, alphas.n_active(3))
+
+        alphas.update(1, ("M9",), gamma)
+        self.assertEqual(10, alphas.n_active())
+        self.assertEqual(3, alphas.n_active(0))
+        self.assertEqual(3, alphas.n_active(1))
+        self.assertEqual(2, alphas.n_active(2))
+        self.assertEqual(2, alphas.n_active(3))
+
     def test_update(self):
         # ----------------------------------------------------
         cand_ids = [
@@ -485,6 +546,10 @@ class TestDualVariables(unittest.TestCase):
 
         self.assertTrue(alphas.update(3, ("M12",), gamma))
         self.assertEqual(9, alphas.n_active())
+        self.assertEqual(2, alphas.n_active(0))
+        self.assertEqual(2, alphas.n_active(1))
+        self.assertEqual(2, alphas.n_active(2))
+        self.assertEqual(3, alphas.n_active(3))
         self.assertEqual((1 - gamma) * val_old_M12 + gamma * C / N, alphas.get_dual_variable(3, ("M12",)))
         self.assertEqual((1 - gamma) * val_old_M13 + gamma * 0, alphas.get_dual_variable(3, ("M13",)))
         self.assertEqual((1 - gamma) * val_old_M3 + gamma * 0, alphas.get_dual_variable(3, ("M3",)))
@@ -492,6 +557,78 @@ class TestDualVariables(unittest.TestCase):
         self.assertEqual((1 - gamma) * val_old_M22 + gamma * 0, alphas.get_dual_variable(3, ("M22",)))
 
         self.assertEqual((3, ("M12",)), alphas.get_iy_for_col(8))
+
+    def test_update_gamma_eq_one(self):
+        # ----------------------------------------------------
+        cand_ids = [
+            [
+                ["M1", "M2", "M19", "M10"]
+            ],
+            [
+                ["M7", "M9", "M8"]
+            ],
+            [
+                ["M72", "M11"]
+            ],
+            [
+                ["M12", "M13", "M3", "M4", "M22"]
+            ]
+        ]
+        N = len(cand_ids)
+        C = 2.0
+        gamma = 1.0
+
+        alphas = DualVariables(C=C, label_space=cand_ids, num_init_active_vars=2, random_state=10910)
+        print(alphas._iy)
+        # Active variables
+        # [(0, ('M19',)), (0, ('M10',)),
+        #  (1, ('M8',)), (1, ('M7',)),
+        #  (2, ('M72',)), (2, ('M11',)),
+        #  (3, ('M4',)), (3, ('M3',))]
+
+        # ---- Update an active dual variable ----
+        val_old_M8 = alphas.get_dual_variable(1, ("M8",))
+        val_old_M7 = alphas.get_dual_variable(1, ("M7",))
+        val_old_M9 = alphas.get_dual_variable(1, ("M9",))
+
+        self.assertEqual(C / (N * 2), val_old_M8)
+        self.assertEqual(0, val_old_M9)
+        self.assertEqual(C / (N * 2), val_old_M7)
+
+        self.assertFalse(alphas.update(1, ("M8",), gamma))
+        self.assertEqual(7, alphas.n_active())
+        self.assertEqual(2, alphas.n_active(0))
+        self.assertEqual(1, alphas.n_active(1))
+        self.assertEqual(2, alphas.n_active(2))
+        self.assertEqual(2, alphas.n_active(3))
+        self.assertEqual(C / N, alphas.get_dual_variable(1, ("M8",)))
+        self.assertEqual(0, alphas.get_dual_variable(1, ("M7",)))
+        self.assertEqual(0, alphas.get_dual_variable(1, ("M9",)))
+
+        # ---- Update an inactive dual variable ----
+        val_old_M12 = alphas.get_dual_variable(3, ("M12",))
+        val_old_M13 = alphas.get_dual_variable(3, ("M13",))
+        val_old_M3 = alphas.get_dual_variable(3, ("M3",))
+        val_old_M4 = alphas.get_dual_variable(3, ("M4",))
+        val_old_M22 = alphas.get_dual_variable(3, ("M22",))
+
+        self.assertEqual(0, val_old_M12)
+        self.assertEqual(0, val_old_M13)
+        self.assertEqual(C / (N * 2), val_old_M3)
+        self.assertEqual(C / (N * 2), val_old_M4)
+        self.assertEqual(0, val_old_M22)
+
+        self.assertTrue(alphas.update(3, ("M12",), gamma))
+        self.assertEqual(6, alphas.n_active())
+        self.assertEqual(2, alphas.n_active(0))
+        self.assertEqual(1, alphas.n_active(1))
+        self.assertEqual(2, alphas.n_active(2))
+        self.assertEqual(1, alphas.n_active(3))
+        self.assertEqual(C / N, alphas.get_dual_variable(3, ("M12",)))
+        self.assertEqual(0, alphas.get_dual_variable(3, ("M13",)))
+        self.assertEqual(0, alphas.get_dual_variable(3, ("M3",)))
+        self.assertEqual(0, alphas.get_dual_variable(3, ("M4",)))
+        self.assertEqual(0, alphas.get_dual_variable(3, ("M22",)))
 
     def test_eq_dual_domain(self):
         cand_ids_1a = [
