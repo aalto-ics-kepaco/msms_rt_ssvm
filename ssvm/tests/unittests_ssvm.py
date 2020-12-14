@@ -140,7 +140,7 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
             rt_loop += time.time() - start
 
             start = time.time()
-            lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta(Y_sequence, Y_candidates, G, mol_kernel)
+            lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta_OLD(Y_sequence, Y_candidates, G, mol_kernel)
             rt_vec += time.time() - start
 
             self.assertEqual(lambda_delta_ref.shape, lambda_delta.shape)
@@ -149,6 +149,76 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
         print("== get_lambda_delta ==")
         print("Loop: %.3fs" % (rt_loop / n_rep))
         print("Vec: %.3fs" % (rt_vec / n_rep))
+
+    def test_get_lambda_delta_NEW(self):
+        def mol_kernel(x, y):
+            return x @ y.T
+
+        rt_old = 0.0
+        rt_new = 0.0
+
+        n_rep = 15
+        for rep in range(n_rep):
+            n_features = 231
+            n_molecules = 501
+            L = 101
+            G = nx.generators.trees.random_tree(L, seed=(rep + 3))
+
+            Y_candidates = np.random.RandomState(rep + 6).rand(n_molecules, n_features)
+
+            l_Y_sequence = []
+            for nS in [1, 2, 3, 4, 5]:
+                # print("Number of active sequences: %d" % nS)
+
+                l_Y_sequence.append(np.random.RandomState((nS * rep) + 5).rand(L, n_features))
+
+                start = time.time()
+                lambda_delta_ref = np.dstack(
+                    [
+                        StructuredSVMSequencesFixedMS2._get_lambda_delta_OLD(
+                            Y_sequence, Y_candidates, G, mol_kernel)
+                        for Y_sequence in l_Y_sequence
+                    ])
+                rt_old += time.time() - start
+                self.assertEqual((L - 1, len(Y_candidates), nS), lambda_delta_ref.shape)
+
+                start = time.time()
+                lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta(
+                    np.vstack(l_Y_sequence), Y_candidates, G, mol_kernel)
+                self.assertEqual(((L - 1) * nS, len(Y_candidates)), lambda_delta.shape)
+
+                # np.testing.assert_equal(
+                #     np.vstack(
+                #         [
+                #             StructuredSVMSequencesFixedMS2._get_lambda_delta_OLD(
+                #                 Y_sequence, Y_candidates, G, mol_kernel)
+                #             for Y_sequence in l_Y_sequence
+                #         ]),
+                #     lambda_delta
+                # )
+                #
+
+                # Bring output to shape = (|E_j|, |S_j|, n_molecules)
+                lambda_delta = lambda_delta.reshape(
+                    (
+                        nS,
+                        L - 1,
+                        len(Y_candidates),
+                    ))
+                self.assertEqual((nS, L - 1, len(Y_candidates)), lambda_delta.shape)
+                rt_new += time.time() - start
+
+                for nSi in range(nS):
+                    # print(lambda_delta_ref[:, :, nSi].shape)
+                    # print(lambda_delta[nSi, :, :].shape)
+                    # print(np.round(lambda_delta_ref[:10, :10, nSi], 2))
+                    # print(np.round(lambda_delta[nSi, :10, :10], 2))
+
+                    np.testing.assert_allclose(lambda_delta_ref[:, :, nSi], lambda_delta[nSi, :, :])
+
+        print("== get_lambda_delta ==")
+        print("Old: %.3fs" % (rt_old / n_rep))
+        print("New: %.3fs" % (rt_new / n_rep))
 
     def test_I_rsvm_jfeat(self):
         N_E = np.sum([len(self.ssvm.training_graphs_[j][0].edges) for j in range(self.N)])  # total number of edges
@@ -423,6 +493,67 @@ class TestDualVariables(unittest.TestCase):
                         self.assertIn(y_seq, list(it.product(*cand_ids[i])))
                         col += 1
 
+    def test_n_active(self):
+        # ----------------------------------------------------
+        cand_ids = [
+            [
+                ["M1", "M2", "M19", "M10"]
+            ],
+            [
+                ["M7", "M9", "M8"]
+            ],
+            [
+                ["M72", "M11"]
+            ],
+            [
+                ["M12", "M13", "M3", "M4", "M22"]
+            ]
+        ]
+        C = 2.0
+        gamma = 0.46
+
+        alphas = DualVariables(C=C, label_space=cand_ids, num_init_active_vars=2, random_state=10910)
+        print(alphas._iy)
+        # Active variables
+        # [(0, ('M19',)), (0, ('M10',)),
+        #  (1, ('M8',)), (1, ('M7',)),
+        #  (2, ('M72',)), (2, ('M11',)),
+        #  (3, ('M4',)), (3, ('M3',))]
+
+        self.assertEqual(8, alphas.n_active())  # Number of active variables must not change
+        self.assertEqual(2, alphas.n_active(0))
+        self.assertEqual(2, alphas.n_active(1))
+        self.assertEqual(2, alphas.n_active(2))
+        self.assertEqual(2, alphas.n_active(3))
+
+        alphas.update(0, ("M19",), gamma)
+        self.assertEqual(8, alphas.n_active())
+        self.assertEqual(2, alphas.n_active(0))
+        self.assertEqual(2, alphas.n_active(1))
+        self.assertEqual(2, alphas.n_active(2))
+        self.assertEqual(2, alphas.n_active(3))
+
+        alphas.update(0, ("M1",), gamma)
+        self.assertEqual(9, alphas.n_active())
+        self.assertEqual(3, alphas.n_active(0))
+        self.assertEqual(2, alphas.n_active(1))
+        self.assertEqual(2, alphas.n_active(2))
+        self.assertEqual(2, alphas.n_active(3))
+
+        alphas.update(2, ("M11",), gamma)
+        self.assertEqual(9, alphas.n_active())
+        self.assertEqual(3, alphas.n_active(0))
+        self.assertEqual(2, alphas.n_active(1))
+        self.assertEqual(2, alphas.n_active(2))
+        self.assertEqual(2, alphas.n_active(3))
+
+        alphas.update(1, ("M9",), gamma)
+        self.assertEqual(10, alphas.n_active())
+        self.assertEqual(3, alphas.n_active(0))
+        self.assertEqual(3, alphas.n_active(1))
+        self.assertEqual(2, alphas.n_active(2))
+        self.assertEqual(2, alphas.n_active(3))
+
     def test_update(self):
         # ----------------------------------------------------
         cand_ids = [
@@ -485,6 +616,10 @@ class TestDualVariables(unittest.TestCase):
 
         self.assertTrue(alphas.update(3, ("M12",), gamma))
         self.assertEqual(9, alphas.n_active())
+        self.assertEqual(2, alphas.n_active(0))
+        self.assertEqual(2, alphas.n_active(1))
+        self.assertEqual(2, alphas.n_active(2))
+        self.assertEqual(3, alphas.n_active(3))
         self.assertEqual((1 - gamma) * val_old_M12 + gamma * C / N, alphas.get_dual_variable(3, ("M12",)))
         self.assertEqual((1 - gamma) * val_old_M13 + gamma * 0, alphas.get_dual_variable(3, ("M13",)))
         self.assertEqual((1 - gamma) * val_old_M3 + gamma * 0, alphas.get_dual_variable(3, ("M3",)))
@@ -492,6 +627,78 @@ class TestDualVariables(unittest.TestCase):
         self.assertEqual((1 - gamma) * val_old_M22 + gamma * 0, alphas.get_dual_variable(3, ("M22",)))
 
         self.assertEqual((3, ("M12",)), alphas.get_iy_for_col(8))
+
+    def test_update_gamma_eq_one(self):
+        # ----------------------------------------------------
+        cand_ids = [
+            [
+                ["M1", "M2", "M19", "M10"]
+            ],
+            [
+                ["M7", "M9", "M8"]
+            ],
+            [
+                ["M72", "M11"]
+            ],
+            [
+                ["M12", "M13", "M3", "M4", "M22"]
+            ]
+        ]
+        N = len(cand_ids)
+        C = 2.0
+        gamma = 1.0
+
+        alphas = DualVariables(C=C, label_space=cand_ids, num_init_active_vars=2, random_state=10910)
+        print(alphas._iy)
+        # Active variables
+        # [(0, ('M19',)), (0, ('M10',)),
+        #  (1, ('M8',)), (1, ('M7',)),
+        #  (2, ('M72',)), (2, ('M11',)),
+        #  (3, ('M4',)), (3, ('M3',))]
+
+        # ---- Update an active dual variable ----
+        val_old_M8 = alphas.get_dual_variable(1, ("M8",))
+        val_old_M7 = alphas.get_dual_variable(1, ("M7",))
+        val_old_M9 = alphas.get_dual_variable(1, ("M9",))
+
+        self.assertEqual(C / (N * 2), val_old_M8)
+        self.assertEqual(0, val_old_M9)
+        self.assertEqual(C / (N * 2), val_old_M7)
+
+        self.assertFalse(alphas.update(1, ("M8",), gamma))
+        self.assertEqual(7, alphas.n_active())
+        self.assertEqual(2, alphas.n_active(0))
+        self.assertEqual(1, alphas.n_active(1))
+        self.assertEqual(2, alphas.n_active(2))
+        self.assertEqual(2, alphas.n_active(3))
+        self.assertEqual(C / N, alphas.get_dual_variable(1, ("M8",)))
+        self.assertEqual(0, alphas.get_dual_variable(1, ("M7",)))
+        self.assertEqual(0, alphas.get_dual_variable(1, ("M9",)))
+
+        # ---- Update an inactive dual variable ----
+        val_old_M12 = alphas.get_dual_variable(3, ("M12",))
+        val_old_M13 = alphas.get_dual_variable(3, ("M13",))
+        val_old_M3 = alphas.get_dual_variable(3, ("M3",))
+        val_old_M4 = alphas.get_dual_variable(3, ("M4",))
+        val_old_M22 = alphas.get_dual_variable(3, ("M22",))
+
+        self.assertEqual(0, val_old_M12)
+        self.assertEqual(0, val_old_M13)
+        self.assertEqual(C / (N * 2), val_old_M3)
+        self.assertEqual(C / (N * 2), val_old_M4)
+        self.assertEqual(0, val_old_M22)
+
+        self.assertTrue(alphas.update(3, ("M12",), gamma))
+        self.assertEqual(6, alphas.n_active())
+        self.assertEqual(2, alphas.n_active(0))
+        self.assertEqual(1, alphas.n_active(1))
+        self.assertEqual(2, alphas.n_active(2))
+        self.assertEqual(1, alphas.n_active(3))
+        self.assertEqual(C / N, alphas.get_dual_variable(3, ("M12",)))
+        self.assertEqual(0, alphas.get_dual_variable(3, ("M13",)))
+        self.assertEqual(0, alphas.get_dual_variable(3, ("M3",)))
+        self.assertEqual(0, alphas.get_dual_variable(3, ("M4",)))
+        self.assertEqual(0, alphas.get_dual_variable(3, ("M22",)))
 
     def test_eq_dual_domain(self):
         cand_ids_1a = [
