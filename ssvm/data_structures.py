@@ -30,6 +30,7 @@ import numpy as np
 import pandas as pd
 import networkx as nx
 
+from functools import lru_cache
 from collections import OrderedDict
 from scipy.io import loadmat
 from typing import List, Tuple, Union, Dict, Optional, Callable
@@ -396,6 +397,9 @@ class CandidateSQLiteDB(object):
         if features == "substructure_count":
             for i, row in enumerate(data):
                 for _fp_str in row.split(","):
+                    # _tmp = _fp_str.split(":")
+                    # if len(_tmp) > 1:
+                    #     _idx, _cnt = _tmp
                     _idx, _cnt = _fp_str.split(":")
                     X[i, int(_idx)] = int(_cnt)
         else:
@@ -449,6 +453,7 @@ class CandidateSQLiteDB(object):
 
         return df_features
 
+    @lru_cache(maxsize=None)
     def get_molecule_features_by_molecule_id(self, molecule_ids: Union[List[str], Tuple[str, ...]], features: str,
                                              return_dataframe: bool = False) -> Union[pd.DataFrame, np.ndarray]:
         """
@@ -895,7 +900,7 @@ class LabeledSequence(Sequence):
         :param features:
         :return:
         """
-        return self.candidates.get_molecule_features_by_molecule_id(self.labels, features)
+        return self.candidates.get_molecule_features_by_molecule_id(tuple(self.labels), features)
 
 
 class SequenceSample(object):
@@ -956,7 +961,7 @@ class SequenceSample(object):
             LOGGER.info("Dataset '%s' contains '%d' spectra." % (k, v))
 
         # Generate (MS, RT)-sequences
-        self._sampled_sequences = self._sample_sequences()
+        self._sampled_sequences, self._sampled_datasets = self._sample_sequences()
 
     def __len__(self):
         """
@@ -969,6 +974,15 @@ class SequenceSample(object):
 
     def __getitem__(self, item):
         return self._sampled_sequences[item]
+
+    def __eq__(self, other):
+        if self.labels != other.labels:
+            return False
+
+        if self.spectra != other.spectra:
+            return False
+
+        return True
 
     def _sample_sequences(self):
         """
@@ -987,9 +1001,11 @@ class SequenceSample(object):
         """
         rs = check_random_state(self.random_state)  # type: np.random.RandomState
 
-        spl_seqs = []
+        sequences = []
+        datasets = []
         for i, ds in enumerate(rs.choice(self._datasets, self.N)):
-            seq_idc = rs.choice(self._dataset2idx[ds], self._L[i], replace=False)
+            seq_idc = rs.choice(self._dataset2idx[ds], np.minimum(self._L[i], self._n_spec_per_dataset[ds]),
+                                replace=False)
             seq_spectra = [self.spectra[sig] for sig in seq_idc]
             seq_labels = [self.labels[sig] for sig in seq_idc]
 
@@ -1001,10 +1017,11 @@ class SequenceSample(object):
                 seq_spectra, seq_labels = zip(*sorted(zip(seq_spectra, seq_labels),
                                                       key=lambda s: s[0].get("retention_time")))
 
-            spl_seqs.append(LabeledSequence(seq_spectra, seq_labels, candidates=self.candidates,
-                                            ms2scorer=self.ms2scorer))
+            sequences.append(LabeledSequence(seq_spectra, seq_labels, candidates=self.candidates,
+                                             ms2scorer=self.ms2scorer))
+            datasets.append(ds)
 
-        return spl_seqs
+        return sequences, datasets
 
     def get_train_test_split(self, cv=4):
         """
