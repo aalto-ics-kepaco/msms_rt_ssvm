@@ -32,15 +32,13 @@ import networkx as nx
 
 from collections import OrderedDict
 from scipy.io import loadmat
-from typing import List, Tuple, Union, Dict, Optional, Callable, Iterable
-from networkx.classes.graph import EdgeView
+from typing import List, Tuple, Union, Dict, Optional, Callable
 
-from sklearn.model_selection import GroupKFold
+from sklearn.model_selection import GroupKFold, BaseCrossValidator
 from sklearn.utils.validation import check_random_state
 from sklearn.preprocessing import MinMaxScaler
-# from sklearn.cluster import MiniBatchKMeans
 
-from ssvm.kernel_utils import tanimoto_kernel, generalized_tanimoto_kernel
+from ssvm.kernel_utils import tanimoto_kernel
 from ssvm.factor_graphs import get_random_spanning_tree
 
 from matchms.Spectrum import Spectrum
@@ -1008,13 +1006,13 @@ class SequenceSample(object):
 
         return spl_seqs
 
-    def get_train_test_split(self, n_splits=4):
+    def get_train_test_split(self, cv=4):
         """
         75% training and 25% test split.
         """
-        return next(self.get_train_test_generator(n_splits=n_splits))
+        return next(self.get_train_test_generator(cv=cv))
 
-    def get_train_test_generator(self, n_splits=4):
+    def get_train_test_generator(self, cv: Union[BaseCrossValidator, int] = 5):
         """
         Split the spectra ids into training and test sets. Thereby, all spectra belonging to the same molecular
         structure (regardless of their Massbank sub-dataset membership) are either in the test or training.
@@ -1022,7 +1020,7 @@ class SequenceSample(object):
         Internally the scikit-learn function "GroupKFold" is used to split the data. As groups we use the molecular
         identifiers.
 
-        :param n_splits: scalar, number of cross-validation splits.
+        :param cv: scikit-learn cross-validation generator
 
         :yields:
             train : ndarray
@@ -1031,8 +1029,13 @@ class SequenceSample(object):
             test : ndarray
                 The testing set indices for that split.
         """
-        for train, test in GroupKFold(n_splits=n_splits).split(self.spectra, groups=self.labels):
-            N_test = self.N // n_splits
+        if isinstance(cv, int):
+            cv = GroupKFold(n_splits=5)
+        else:
+            assert isinstance(cv, BaseCrossValidator)
+
+        for train, test in cv.split(self.spectra, groups=self.labels):
+            N_test = self.N // cv.get_n_splits()
             N_train = self.N - N_test
 
             # Get training and test subsets of the spectra ids. Spectra belonging to the same molecular structure are
@@ -1068,69 +1071,6 @@ class SequenceSample(object):
             labelspace = self.__getitem__(idx).get_labelspace()
 
         return labelspace
-
-    def as_Xy_input(self):
-        x, rt, y = zip(*self._sampled_sequences)
-        return x, y
-
-
-    def get_gt_labels(self, i: int) -> tuple:
-        return tuple(self.spl_seqs[i][2][sigma] for sigma in range(self.L))
-
-    def jointKernelMS(self, j_tau, i_sigma, y_j, y_i):
-        """
-
-        :param j:
-        :param i:
-        :param y_j:
-        :param y_i:
-        :return:
-        """
-        j, tau = j_tau
-        assert tau is None  # HINT: We handle all tau at ones.
-        i, sigma = i_sigma
-
-        # TODO: Build fast index data-structure here.
-        spec_ids_j = self.spl_seqs[j][0]  # spectra ids belonging to sequence j
-        k_idx_j = [self.specid_2_ind[spec_id] for spec_id in spec_ids_j]  # spectra kernel columns belonging to seq. j
-
-        spec_id_i_sigma = self.spl_seqs[i][0][sigma]
-        k_idx_i_sigma = self.specid_2_ind[spec_id_i_sigma]
-
-        K_ms = self.kappa_ms[k_idx_i_sigma][k_idx_j]  # shape=(1, L)
-
-        self._get_mol_rep_MS(self.spl_seqs[i][2][sigma])  # y_sigma
-
-    def delta_jointKernelMS(self, j_tau, i_sigma, y__j_ybar):
-        """
-
-        :param j_tau:
-        :param i_sigma:
-        :param y__j_ybar:
-        :return:
-        """
-        j, tau = j_tau
-        i, sigma = i_sigma
-
-        # TODO: Build fast index data-structure here.
-        spec_ids_j = self.spl_seqs[j][0]  # spectra ids belonging to sequence j
-        k_idx_j = [self.specid_2_ind[spec_id] for spec_id in spec_ids_j]  # spectra kernel columns belonging to seq. j
-
-        spec_ids_i = self.spl_seqs[i][0][sigma]
-        k_ids_i = self.specid_2_ind[spec_ids_i]
-
-        K_ms = self.kappa_ms[k_ids_i][k_idx_j]  # shape=(1, L)
-
-        y__j_tau = self.get_gt_labels(j)[tau]
-        psi_y__j_tau = self._get_mol_rep_MS(y__j_tau)
-        psi_y__j_ybar = self._get_mol_rep_MS(y__j_ybar)
-
-        Psi_y__y = self._get_mol_rep_MS(self.get_labelspace(i)[sigma])
-
-        L_ms__j_tau = self.lambda_ms(Psi_y__y, psi_y__j_tau)  # shape=(L, 1)
-        L_ms__j_ybar = self.lambda_ms(Psi_y__y, psi_y__j_ybar)  # shape=(L, 1)
-
-        return K_ms @ (L_ms__j_tau - L_ms__j_ybar)
 
 
 class SpanningTrees(object):
