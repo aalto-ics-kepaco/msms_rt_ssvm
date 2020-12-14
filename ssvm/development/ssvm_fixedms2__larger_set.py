@@ -36,15 +36,16 @@ if __name__ == "__main__":
         mol_kernel="minmax_fast", C=2, step_size="linesearch", batch_size=8, n_epochs=7, label_loss="tanimoto_loss",
         random_state=1993, retention_order_weight=0.5)
 
-    N = 24
+    N = 500
     seq_sample = SequenceSample(
         spectra, labels,
-        RandomSubsetCandidateSQLiteDB(db_fn=DB_FN, molecule_identifier="inchi", random_state=192,
+        RandomSubsetCandidateSQLiteDB(db_fn=DB_FN, molecule_identifier="inchi", random_state=2,
                                       number_of_candidates=50, include_correct_candidate=True),
         N=N, L_min=10,
-        L_max=15, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
+        L_max=20, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
 
-    summary_writer = tf.summary.create_file_writer(os.path.join(tf_summary_base_dir, "%d" % np.random.randint(1000)))
+    summary_writer = tf.summary.create_file_writer(os.path.join(tf_summary_base_dir, "larger_set",
+                                                                "%d" % np.random.randint(1000)))
 
     ssvm.fit(seq_sample, n_init_per_example=5, summary_writer=None)
 
