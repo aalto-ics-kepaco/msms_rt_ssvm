@@ -33,7 +33,7 @@ if __name__ == "__main__":
     # ===================
     ssvm = StructuredSVMSequencesFixedMS2(
         mol_feat_label_loss="iokr_fps__positive", mol_feat_retention_order="substructure_count",
-        mol_kernel="minmax_fast", C=2, step_size="linesearch", batch_size=8, n_epochs=7, label_loss="tanimoto_loss",
+        mol_kernel="minmax", C=2, step_size="linesearch", batch_size=8, n_epochs=7, label_loss="tanimoto_loss",
         random_state=1993, retention_order_weight=0.5)
 
     N = 500
@@ -47,7 +47,7 @@ if __name__ == "__main__":
     summary_writer = tf.summary.create_file_writer(os.path.join(tf_summary_base_dir, "larger_set",
                                                                 "%d" % np.random.randint(1000)))
 
-    ssvm.fit(seq_sample, n_init_per_example=5, summary_writer=None)
+    ssvm.fit(seq_sample, n_init_per_example=3, summary_writer=None)
 
     # TODO: We somehow should ensure that the database connection is always closed.
     seq_sample.candidates.close()

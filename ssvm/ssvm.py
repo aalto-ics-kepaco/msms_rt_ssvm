@@ -37,6 +37,7 @@ from sklearn.model_selection import GroupKFold
 from sklearn.metrics import ndcg_score
 from scipy.sparse import csc_matrix, lil_matrix, csr_matrix
 from tqdm import tqdm
+from functools import lru_cache
 
 from msmsrt_scorer.lib.exact_solvers import TreeFactorGraph
 from msmsrt_scorer.lib.evaluation_tools import get_topk_performance_from_scores as get_topk_performance_from_marginals
@@ -46,7 +47,7 @@ from ssvm.loss_functions import hamming_loss, tanimoto_loss
 from ssvm.evaluation_tools import get_topk_performance_csifingerid
 from ssvm.factor_graphs import get_random_spanning_tree
 from ssvm.kernel_utils import generalized_tanimoto_kernel_OLD as generalized_tanimoto_kernel
-from ssvm.kernel_utils import tanimoto_kernel
+from ssvm.kernel_utils import tanimoto_kernel, minmax_kernel
 
 
 DUALVARIABLES_T = TypeVar('DUALVARIABLES_T', bound='DualVariables')
@@ -1330,6 +1331,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             return tanimoto_kernel
         elif mol_kernel == "minmax":
             return generalized_tanimoto_kernel
+        elif mol_kernel == "minmax_numba":
+            return lambda X, Y: minmax_kernel(X, Y, use_numba=True, shallow_input_check=True)
         else:
             raise ValueError("Invalid molecule kernel")
 
@@ -1419,6 +1422,10 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                                            "step_size": step_size,
                                            "active_variables": self.alphas_.n_active()},
                                        summary_writer=summary_writer)
+
+                print(self.training_data_.candidates.get_molecule_features_by_molecule_id.cache_info())
+
+                return self
 
             if summary_writer is not None:
                 # Write out scores only after each epoch
@@ -1728,7 +1735,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
                 # Load the molecular features for the active sequence y
                 l_mol_features[idx][y] = self.training_data_.candidates.get_molecule_features_by_molecule_id(
-                    list(y), self.mol_feat_retention_order)
+                    tuple(y), self.mol_feat_retention_order)
 
         # ================
         # Denominator
@@ -1903,7 +1910,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             # A_Sj: dual values, array-like with shape = (|S_j|, )
 
             l_Y_act_sequence[j] = self.training_data_.candidates.get_molecule_features_by_molecule_id(
-                list(it.chain(*Sj)), self.mol_feat_retention_order)
+                tuple(it.chain(*Sj)), self.mol_feat_retention_order)
 
         II = np.zeros((len(Y), ))  # shape = (n_molecules, )
         for j in range(N):

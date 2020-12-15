@@ -28,8 +28,10 @@ import numpy as np
 import scipy.sparse as sp
 import itertools as it
 
+from numba import jit, prange
 from sklearn.metrics.pairwise import manhattan_distances, pairwise_distances
 from joblib import delayed, Parallel
+from scipy.spatial._distance_wrap import cdist_cityblock_double_wrap
 
 """
 Kernel functions here are optimized to work on matrix inputs. 
@@ -94,7 +96,7 @@ def check_input(X, Y, datatype=None, shallow=False):
     return X, Y, is_sparse
 
 
-def minmax_kernel(X, Y=None, shallow_input_check=False, n_jobs=4):
+def minmax_kernel(X, Y=None, shallow_input_check=False, n_jobs=4, use_numba=True):
     """
     Calculates the minmax kernel value for two sets of examples
     represented by their feature vectors.
@@ -104,6 +106,7 @@ def minmax_kernel(X, Y=None, shallow_input_check=False, n_jobs=4):
     :param shallow_input_check: boolean, indicating whether checks regarding features values, e.g. >= 0, should be
         skipped.
     :param n_jobs: scalar, number of jobs used for the kernel calculation from sparse input
+    :param use_numba:
 
     :return: array-like, shape = (n_samples_A, n_samples_B), kernel matrix
              with minmax kernel values:
@@ -117,7 +120,12 @@ def minmax_kernel(X, Y=None, shallow_input_check=False, n_jobs=4):
     if is_sparse:
         K_mm = _min_max_sparse_csr(X, Y, n_jobs=n_jobs)
     else:
-        K_mm = _min_max_dense(X, Y)
+        if use_numba:
+            # K_mm = _minmax_kernel_1__numba(X, Y)
+            # K_mm = _minmax_kernel_2__numba(X, Y)
+            K_mm = _minmax_kernel_1_linalg_norm__numba(X.astype(float), Y.astype(float))
+        else:
+            K_mm = _min_max_dense(X, Y)
 
     return K_mm
 
@@ -217,7 +225,7 @@ def tanimoto_kernel(X, Y=None, shallow_input_check=False):
     return K_tan
 
 
-def generalized_tanimoto_kernel(X, Y=None, shallow_input_check=False, n_jobs=1):
+def generalized_tanimoto_kernel(X, Y=None, shallow_input_check=False, n_jobs=4):
     """
     Generalized tanimoto kernel function
 
@@ -261,3 +269,273 @@ def generalized_tanimoto_kernel_OLD(X, Y=None, shallow_input_check=False):
     K_gtan = (XL1 + YL1.T - XmYL1) / (XL1 + YL1.T + XmYL1)
 
     return K_gtan
+
+
+# --------------------------
+# Implementation using Numba
+# --------------------------
+@jit(nopython=True, parallel=True)
+def _minmax_kernel_1__numba(X, Y):
+    """
+    MinMax-Kernel implementation for dense feature vectors.
+    """
+    XL1 = np.sum(X, axis=1).reshape(-1, 1)
+    YL1 = np.sum(Y, axis=1).reshape(-1, 1)
+
+    XL1pYL1t = XL1 + YL1.T
+
+    XmYL1 = np.empty_like(XL1pYL1t)
+    for i in prange(len(Y)):
+        XmYL1[:, i] = np.sum(np.abs(X - Y[i]), axis=1)
+
+    K_mm = (XL1pYL1t - XmYL1) / (XL1pYL1t + XmYL1)
+
+    return K_mm
+
+
+@jit(nopython=True, parallel=True)
+def _minmax_kernel_1_linalg_norm__numba(X, Y):
+    """
+    MinMax-Kernel implementation for dense feature vectors.
+    """
+    n_A = len(X)
+    n_B = len(Y)
+
+    XL1 = np.sum(X, axis=1).reshape(-1, 1)
+    YL1 = np.sum(Y, axis=1).reshape(-1, 1)
+
+    XL1pYL1t = XL1 + YL1.T
+
+    XmYL1 = np.empty_like(XL1pYL1t)
+    for idx in prange(n_A * n_B):
+        i = idx // n_B
+        j = idx % n_B
+        XmYL1[i, j] = np.linalg.norm(X[i] - Y[j], ord=1)
+
+    K_mm = (XL1pYL1t - XmYL1) / (XL1pYL1t + XmYL1)
+
+    return K_mm
+
+
+@jit(nopython=True, parallel=True)
+def minmax_kernel_1_over_X__numba(X, Y):
+    """
+    MinMax-Kernel implementation for dense feature vectors.
+    """
+    XL1 = np.sum(X, axis=1).reshape(-1, 1)
+    YL1 = np.sum(Y, axis=1).reshape(-1, 1)
+
+    XL1pYL1t = XL1 + YL1.T
+
+    XmYL1 = np.empty_like(XL1pYL1t)
+    for i in prange(len(X)):
+        XmYL1[i, :] = np.sum(np.abs(X[i] - Y), axis=1)
+
+    K_mm = (XL1pYL1t - XmYL1) / (XL1pYL1t + XmYL1)
+
+    return K_mm
+
+
+def minmax_kernel_1__without_numba(X, Y):
+    """
+    MinMax-Kernel implementation for dense feature vectors.
+    """
+    XL1 = np.sum(X, axis=1).reshape(-1, 1)
+    YL1 = np.sum(Y, axis=1).reshape(-1, 1)
+
+    XL1pYL1t = XL1 + YL1.T
+
+    XmYL1 = np.empty_like(XL1pYL1t)
+    for i in range(len(Y)):
+        XmYL1[:, i] = np.sum(np.abs(X - Y[i]), axis=1)
+
+    K_mm = (XL1pYL1t - XmYL1) / (XL1pYL1t + XmYL1)
+
+    return K_mm
+
+
+def _minmax_kernel_1_linalg_norm__without_numba(X, Y):
+    """
+    MinMax-Kernel implementation for dense feature vectors.
+    """
+    XL1 = np.sum(X, axis=1).reshape(-1, 1)
+    YL1 = np.sum(Y, axis=1).reshape(-1, 1)
+
+    XL1pYL1t = XL1 + YL1.T
+
+    XmYL1 = np.empty_like(XL1pYL1t)
+    for i in range(len(Y)):
+        XmYL1[:, i] = np.linalg.norm(X - Y[i], ord=1)
+
+    K_mm = (XL1pYL1t - XmYL1) / (XL1pYL1t + XmYL1)
+
+    return K_mm
+
+
+def minmax_kernel_1_over_X__without_numba(X, Y):
+    """
+    MinMax-Kernel implementation for dense feature vectors.
+    """
+    XL1 = np.sum(X, axis=1).reshape(-1, 1)
+    YL1 = np.sum(Y, axis=1).reshape(-1, 1)
+
+    XL1pYL1t = XL1 + YL1.T
+
+    XmYL1 = np.empty_like(XL1pYL1t)
+    for i in range(len(X)):
+        XmYL1[i, :] = np.sum(np.abs(X[i] - Y), axis=1)
+
+    K_mm = (XL1pYL1t - XmYL1) / (XL1pYL1t + XmYL1)
+
+    return K_mm
+
+
+@jit(nopython=True, parallel=True)
+def _minmax_kernel_2__numba(X, Y):
+    """
+    MinMax-Kernel implementation for dense feature vectors.
+    """
+    n_A, n_B, d = X.shape[0], Y.shape[0], X.shape[1]
+
+    min_K = np.zeros((n_A, n_B))
+    max_K = np.zeros((n_A, n_B))
+
+    X = np.asfortranarray(X)
+    Y = np.asfortranarray(Y)
+
+    # Find non-zero feature dimensions
+    nonz = np.where(np.bitwise_or(np.sum(X, axis=0) > 0, np.sum(Y, axis=0) > 0))[0]
+
+    for s in nonz:  # loop if the feature dimensions
+        c_s_A = X[:, s].reshape(-1, 1)
+        c_s_B = Y[:, s].reshape(-1, 1)
+
+        min_K += np.minimum(c_s_A, c_s_B.T)
+        max_K += np.maximum(c_s_A, c_s_B.T)
+
+        # s1 = c_s_A + c_s_B.T
+        # s2 = np.abs(c_s_A - c_s_B.T)
+        #
+        # min_K += (s1 - s2)
+        # max_K += (s1 + s2)
+
+    return min_K / max_K
+
+
+def minmax_kernel_2__without_numba(X, Y):
+    """
+    MinMax-Kernel implementation for dense feature vectors.
+    """
+    n_A, n_B = X.shape[0], Y.shape[0]
+
+    min_K = np.zeros((n_A, n_B))
+    max_K = np.zeros((n_A, n_B))
+
+    for s in range(X.shape[1]):  # loop if the feature dimensions
+        c_s_A = X[:, s].reshape(-1, 1)
+        c_s_B = Y[:, s].reshape(-1, 1)
+
+        # Check for empty features dimension
+        if np.all(c_s_A == 0) and np.all(c_s_B == 0):
+            continue
+
+        min_K += np.minimum(c_s_A, c_s_B.T)
+        max_K += np.maximum(c_s_A, c_s_B.T)
+
+    return min_K / max_K
+# --------------------------
+
+
+if __name__ == "__main__":
+    import time
+
+    n_rep = 25
+
+    # Data size specifications
+    n_A = 501
+    n_B = 1003
+    d = 307
+
+    X_A = np.random.RandomState(5943).randint(0, 200, size=(n_A, d)).astype(float)
+    X_B = np.random.RandomState(842).randint(0, 200, size=(n_B, d)).astype(float)
+
+    t_1_n = 0.0
+    t_1_oX_n = 0.0
+    t_2_n = 0.0
+    t_1_wn = 0.0
+    t_1_oX_wn = 0.0
+    t_2_wn = 0.0
+    t_3_la_n = 0.0
+    t_3_la_wn = 0.0
+    t_4_gen = 0.0
+
+    # compile
+    _minmax_kernel_1__numba(X_A, X_B)
+    _minmax_kernel_1_linalg_norm__numba(X_A, X_B)
+    minmax_kernel_1_over_X__numba(X_A, X_B)
+    _minmax_kernel_2__numba(X_A, X_B)
+    # _minmax_kernel_2__numba.parallel_diagnostics(level=4)
+
+    print("RUN - Alg 1 (with numba)")
+    for _ in range(n_rep):
+        start = time.time()
+        _minmax_kernel_1__numba(X_A, X_B)
+        t_1_n += (time.time() - start)
+
+    print("RUN - Alg 1 over X (with numba)")
+    for _ in range(n_rep):
+        start = time.time()
+        minmax_kernel_1_over_X__numba(X_A, X_B)
+        t_1_oX_n += (time.time() - start)
+
+    print("RUN - Alg 2 (with numba)")
+    for _ in range(n_rep):
+        start = time.time()
+        _minmax_kernel_2__numba(X_A, X_B)
+        t_2_n += (time.time() - start)
+
+    print("RUN - Alg 3 (linalg norm with numba)")
+    for _ in range(n_rep):
+        start = time.time()
+        _minmax_kernel_1_linalg_norm__numba(X_A, X_B)
+        t_3_la_n += (time.time() - start)
+
+    print("RUN - Alg 1 (without numba)")
+    for _ in range(n_rep):
+        start = time.time()
+        minmax_kernel_1__without_numba(X_A, X_B)
+        t_1_wn += (time.time() - start)
+
+    print("RUN - Alg 1 over X (without numba)")
+    for _ in range(n_rep):
+        start = time.time()
+        minmax_kernel_1_over_X__without_numba(X_A, X_B)
+        t_1_oX_wn += (time.time() - start)
+
+    print("RUN - Alg 2 (without numba)")
+    for _ in range(n_rep):
+        start = time.time()
+        minmax_kernel_2__without_numba(X_A, X_B)
+        t_2_wn += (time.time() - start)
+
+    print("RUN - Alg 3 (linalg norm without numba)")
+    for _ in range(n_rep):
+        start = time.time()
+        _minmax_kernel_1_linalg_norm__without_numba(X_A, X_B)
+        t_3_la_wn += (time.time() - start)
+
+    print("RUN - Alg 4 (cdist)")
+    for _ in range(n_rep):
+        start = time.time()
+        generalized_tanimoto_kernel_OLD(X_A, X_B, shallow_input_check=True)
+        t_4_gen += (time.time() - start)
+
+    print("Alg 1 (with numba): %.3fs" % (t_1_n / n_rep))
+    print("Alg 1 over X (with numba): %.3fs" % (t_1_oX_n / n_rep))
+    print("Alg 2 (with numba): %.3fs" % (t_2_n / n_rep))
+    print("Alg 3 (linalg norm with numba): %.3fs" % (t_3_la_n / n_rep))
+    print("Alg 1 (without numba): %.3fs" % (t_1_wn / n_rep))
+    print("Alg 1 over X (without numba): %.3fs" % (t_1_oX_wn / n_rep))
+    print("Alg 2 (without numba): %.3fs" % (t_2_wn / n_rep))
+    print("Alg 3 (linalg norm without numba): %.3fs" % (t_3_la_wn / n_rep))
+    print("Alg 4 (cdist): %.3fs" % (t_4_gen / n_rep))
