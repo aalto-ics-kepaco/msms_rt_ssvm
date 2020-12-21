@@ -33,7 +33,7 @@ if __name__ == "__main__":
     # ===================
     ssvm = StructuredSVMSequencesFixedMS2(
         mol_feat_label_loss="iokr_fps__positive", mol_feat_retention_order="substructure_count",
-        mol_kernel="minmax", C=2, step_size="linesearch", batch_size=8, n_epochs=7, label_loss="tanimoto_loss",
+        mol_kernel="minmax_numba", C=2, step_size="linesearch", batch_size=8, n_epochs=7, label_loss="tanimoto_loss",
         random_state=1993, retention_order_weight=0.5)
 
     N = 500
@@ -42,7 +42,7 @@ if __name__ == "__main__":
         RandomSubsetCandidateSQLiteDB(db_fn=DB_FN, molecule_identifier="inchi", random_state=2,
                                       number_of_candidates=50, include_correct_candidate=True),
         N=N, L_min=10,
-        L_max=20, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
+        L_max=35, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
 
     summary_writer = tf.summary.create_file_writer(os.path.join(tf_summary_base_dir, "larger_set",
                                                                 "%d" % np.random.randint(1000)))
