@@ -1434,7 +1434,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
                 print(self.training_data_.candidates.get_molecule_features_by_molecule_id.cache_info())
 
-                return self
+                # return self
 
             if summary_writer is not None:
                 # Write out scores only after each epoch
