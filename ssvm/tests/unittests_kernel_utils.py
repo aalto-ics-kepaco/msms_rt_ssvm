@@ -32,7 +32,8 @@ import time
 from scipy.sparse import csr_matrix
 
 from ssvm.kernel_utils import minmax_kernel, tanimoto_kernel, check_input
-from ssvm.kernel_utils import generalized_tanimoto_kernel, generalized_tanimoto_kernel_OLD
+from ssvm.kernel_utils import generalized_tanimoto_kernel
+from ssvm.kernel_utils import generalized_tanimoto_kernel_FAST
 
 
 class TestCheckInput(unittest.TestCase):
@@ -228,6 +229,350 @@ class TestMinMaxKernel(unittest.TestCase):
         assert (np.max(K) <= 1.)
         assert (np.min(K) >= 0.)
 
+
+class TestMinMaxKernelFAST(unittest.TestCase):
+    @staticmethod
+    def _minmax_kernel_slow(X, Y=None):
+            if Y is None:
+                Y = X
+
+            n_A, n_B = X.shape[0], Y.shape[0]
+            d = X.shape[1]
+            assert d == Y.shape[1]
+
+            K = np.zeros((n_A, n_B))
+
+            for i in range(n_A):
+                for j in range(n_B):
+                    min_s = 0
+                    max_s = 0
+                    for s in range(d):
+                        min_s += np.minimum(X[i, s], Y[j, s])
+                        max_s += np.maximum(X[i, s], Y[j, s])
+                    K[i, j] = min_s / max_s
+
+            # for (i, j) in it.product(range(n_A), range(n_B)):
+            #     K[i, j] = np.sum(np.minimum(X[i], Y[j])) / np.sum(np.maximum(X[i], Y[j]))
+
+            return K
+
+    def test_corner_cases(self):
+        # Empty features
+        # ---------------------------------------------
+        __X_A = np.array([[0, 1, 2, 0], [1, 0, 0, 0], [3, 4, 0, 0]])
+        __X_B = np.array([[0, 0, 1, 0], [3, 1, 0, 0]])
+
+        __K = generalized_tanimoto_kernel_FAST(__X_A, __X_B)
+        np.testing.assert_equal(__K.shape, (3, 2))
+        assert (np.max(__K) <= 1.), "Kernel values must be <= 1"
+        assert (np.min(__K) >= 0.), "Kernel values must be >= 0"
+        np.testing.assert_equal(__K[0, 1], 1. / 6.)
+        np.testing.assert_equal(__K[1, 0], 0.)
+        np.testing.assert_equal(__K[1, 1], 1. / 4.)
+        np.testing.assert_equal(__K[2, 1], 4. / 7.)
+
+        # Empty features on larger random set
+        # ---------------------------------------------
+        n_A = 92
+        n_B = 29
+        d = 103
+        X_A = np.random.RandomState(59).randint(0, 90, size=(n_A, d))
+        X_B = np.random.RandomState(8443).randint(0, 43, size=(n_B, d))
+
+        X_A[:, 12] = 0
+        X_A[:, 10] = 0
+        X_A[:, 54] = 0
+
+        X_B[:, 12] = 0
+        X_B[:, 10] = 0
+        X_B[:, 21] = 0
+
+        __K = generalized_tanimoto_kernel_FAST(X_A, X_A)
+        np.testing.assert_array_equal(__K, self._minmax_kernel_slow(X_A))
+        assert (np.max(__K) <= 1.), "Kernel values must be <= 1"
+        assert (np.min(__K) >= 0.), "Kernel values must be >= 0"
+        assert all(np.diag(__K) == 1.0)
+
+        __K = generalized_tanimoto_kernel_FAST(X_A, X_B)
+        np.testing.assert_array_equal(__K, self._minmax_kernel_slow(X_A, X_B))
+        assert (np.max(__K) <= 1.), "Kernel values must be <= 1"
+        assert (np.min(__K) >= 0.), "Kernel values must be >= 0"
+
+    def test_on_small_data(self):
+        # ---------------------------------------------
+        __X_A = np.array([[0, 1, 2], [1, 0, 0], [3, 4, 0]])
+        __X_B = np.array([[0, 0, 1], [3, 1, 0]])
+
+        __K = generalized_tanimoto_kernel_FAST(__X_A, __X_A)
+        np.testing.assert_array_equal(np.diag(__K), np.ones((3,)))
+        np.testing.assert_equal(__K.shape, (3, 3))
+        assert (np.max(__K) <= 1.), "Kernel values must be <= 1"
+        assert (np.min(__K) >= 0.), "Kernel values must be >= 0"
+        np.testing.assert_equal(__K[0, 1], 0.)
+        np.testing.assert_equal(__K[1, 0], 0.)
+        np.testing.assert_equal(__K[0, 2], 1. / 9.)
+        np.testing.assert_equal(__K[2, 0], 1. / 9.)
+        np.testing.assert_equal(__K[1, 2], 1. / 7.)
+        np.testing.assert_equal(__K[2, 1], 1. / 7.)
+
+        __K = generalized_tanimoto_kernel_FAST(__X_A, __X_B)
+        np.testing.assert_equal(__K.shape, (3, 2))
+        assert (np.max(__K) <= 1.), "Kernel values must be <= 1"
+        assert (np.min(__K) >= 0.), "Kernel values must be >= 0"
+        np.testing.assert_equal(__K[0, 1], 1. / 6.)
+        np.testing.assert_equal(__K[1, 0], 0.)
+        np.testing.assert_equal(__K[1, 1], 1. / 4.)
+        np.testing.assert_equal(__K[2, 1], 4. / 7.)
+
+    def test_on_larger_random_data(self):
+        n_A = 45
+        n_B = 21
+        d = 121
+        X_A = np.random.RandomState(5943).randint(0, 43, size=(n_A, d))
+        X_B = np.random.RandomState(842).randint(0, 43, size=(n_B, d))
+
+        # Symmetric kernel
+        K = generalized_tanimoto_kernel_FAST(X_A, X_A)
+        np.testing.assert_array_equal(K, self._minmax_kernel_slow(X_A))
+        np.testing.assert_array_equal(np.diag(K), np.ones((n_A,)))
+        assert (np.max(K) <= 1.)
+        assert (np.min(K) >= 0.)
+
+        # Non-symmetric kernel
+        K = generalized_tanimoto_kernel_FAST(X_A, X_B)
+        np.testing.assert_array_equal(K, self._minmax_kernel_slow(X_A, X_B))
+        assert (np.max(K) <= 1.)
+        assert (np.min(K) >= 0.)
+
+
+class TestMinMaxKernelNumba(unittest.TestCase):
+    @staticmethod
+    def _minmax_kernel_slow(X, Y=None):
+            if Y is None:
+                Y = X
+
+            n_A, n_B = X.shape[0], Y.shape[0]
+            d = X.shape[1]
+            assert d == Y.shape[1]
+
+            K = np.zeros((n_A, n_B))
+
+            for i in range(n_A):
+                for j in range(n_B):
+                    min_s = 0
+                    max_s = 0
+                    for s in range(d):
+                        min_s += np.minimum(X[i, s], Y[j, s])
+                        max_s += np.maximum(X[i, s], Y[j, s])
+                    K[i, j] = min_s / max_s
+
+            # for (i, j) in it.product(range(n_A), range(n_B)):
+            #     K[i, j] = np.sum(np.minimum(X[i], Y[j])) / np.sum(np.maximum(X[i], Y[j]))
+
+            return K
+
+    def test_corner_cases(self):
+        # Empty features
+        # ---------------------------------------------
+        __X_A = np.array([[0, 1, 2, 0], [1, 0, 0, 0], [3, 4, 0, 0]])
+        __X_B = np.array([[0, 0, 1, 0], [3, 1, 0, 0]])
+
+        __K = minmax_kernel(__X_A, __X_B, use_numba=True)
+        np.testing.assert_equal(__K.shape, (3, 2))
+        assert (np.max(__K) <= 1.), "Kernel values must be <= 1"
+        assert (np.min(__K) >= 0.), "Kernel values must be >= 0"
+        np.testing.assert_equal(__K[0, 1], 1. / 6.)
+        np.testing.assert_equal(__K[1, 0], 0.)
+        np.testing.assert_equal(__K[1, 1], 1. / 4.)
+        np.testing.assert_equal(__K[2, 1], 4. / 7.)
+
+        # Empty features on larger random set
+        # ---------------------------------------------
+        n_A = 92
+        n_B = 29
+        d = 103
+        X_A = np.random.RandomState(59).randint(0, 90, size=(n_A, d))
+        X_B = np.random.RandomState(8443).randint(0, 43, size=(n_B, d))
+
+        X_A[:, 12] = 0
+        X_A[:, 10] = 0
+        X_A[:, 54] = 0
+
+        X_B[:, 12] = 0
+        X_B[:, 10] = 0
+        X_B[:, 21] = 0
+
+        __K = minmax_kernel(X_A, use_numba=True)
+        np.testing.assert_array_equal(__K, self._minmax_kernel_slow(X_A))
+        assert (np.max(__K) <= 1.), "Kernel values must be <= 1"
+        assert (np.min(__K) >= 0.), "Kernel values must be >= 0"
+        assert all(np.diag(__K) == 1.0)
+
+        __K = minmax_kernel(X_A, X_B, use_numba=True)
+        np.testing.assert_array_equal(__K, self._minmax_kernel_slow(X_A, X_B))
+        assert (np.max(__K) <= 1.), "Kernel values must be <= 1"
+        assert (np.min(__K) >= 0.), "Kernel values must be >= 0"
+
+    def test_on_small_data(self):
+        # ---------------------------------------------
+        __X_A = np.array([[0, 1, 2], [1, 0, 0], [3, 4, 0]])
+        __X_B = np.array([[0, 0, 1], [3, 1, 0]])
+
+        __K = minmax_kernel(__X_A, use_numba=True)
+        np.testing.assert_array_equal(np.diag(__K), np.ones((3,)))
+        np.testing.assert_equal(__K.shape, (3, 3))
+        assert (np.max(__K) <= 1.), "Kernel values must be <= 1"
+        assert (np.min(__K) >= 0.), "Kernel values must be >= 0"
+        np.testing.assert_equal(__K[0, 1], 0.)
+        np.testing.assert_equal(__K[1, 0], 0.)
+        np.testing.assert_equal(__K[0, 2], 1. / 9.)
+        np.testing.assert_equal(__K[2, 0], 1. / 9.)
+        np.testing.assert_equal(__K[1, 2], 1. / 7.)
+        np.testing.assert_equal(__K[2, 1], 1. / 7.)
+
+        __K = minmax_kernel(__X_A, __X_B, use_numba=True)
+        np.testing.assert_equal(__K.shape, (3, 2))
+        assert (np.max(__K) <= 1.), "Kernel values must be <= 1"
+        assert (np.min(__K) >= 0.), "Kernel values must be >= 0"
+        np.testing.assert_equal(__K[0, 1], 1. / 6.)
+        np.testing.assert_equal(__K[1, 0], 0.)
+        np.testing.assert_equal(__K[1, 1], 1. / 4.)
+        np.testing.assert_equal(__K[2, 1], 4. / 7.)
+
+    def test_on_larger_random_data(self):
+        n_A = 45
+        n_B = 21
+        d = 121
+        X_A = np.random.RandomState(5943).randint(0, 43, size=(n_A, d))
+        X_B = np.random.RandomState(842).randint(0, 43, size=(n_B, d))
+
+        # Symmetric kernel
+        K = minmax_kernel(X_A, use_numba=True)
+        np.testing.assert_array_equal(K, self._minmax_kernel_slow(X_A))
+        np.testing.assert_array_equal(np.diag(K), np.ones((n_A,)))
+        assert (np.max(K) <= 1.)
+        assert (np.min(K) >= 0.)
+
+        # Non-symmetric kernel
+        K = minmax_kernel(X_A, X_B, use_numba=True)
+        np.testing.assert_array_equal(K, self._minmax_kernel_slow(X_A, X_B))
+        assert (np.max(K) <= 1.)
+        assert (np.min(K) >= 0.)
+
+
+# class TestMinMaxKernelFast(unittest.TestCase):
+#     @staticmethod
+#     def _minmax_kernel_slow(X, Y=None):
+#             if Y is None:
+#                 Y = X
+#
+#             n_A, n_B = X.shape[0], Y.shape[0]
+#             d = X.shape[1]
+#             assert d == Y.shape[1]
+#
+#             K = np.zeros((n_A, n_B))
+#
+#             for i in range(n_A):
+#                 for j in range(n_B):
+#                     min_s = 0
+#                     max_s = 0
+#                     for s in range(d):
+#                         min_s += np.minimum(X[i, s], Y[j, s])
+#                         max_s += np.maximum(X[i, s], Y[j, s])
+#                     K[i, j] = min_s / max_s
+#
+#             # for (i, j) in it.product(range(n_A), range(n_B)):
+#             #     K[i, j] = np.sum(np.minimum(X[i], Y[j])) / np.sum(np.maximum(X[i], Y[j]))
+#
+#             return K
+#
+#     def test_corner_cases(self):
+#         # Empty features
+#         # ---------------------------------------------
+#         __X_A = np.array([[0, 1, 2, 0], [1, 0, 0, 0], [3, 4, 0, 0]])
+#         __X_B = np.array([[0, 0, 1, 0], [3, 1, 0, 0]])
+#
+#         __K = minmax_kernel_fast(__X_A, __X_B)
+#         np.testing.assert_equal(__K.shape, (3, 2))
+#         assert (np.max(__K) <= 1.), "Kernel values must be <= 1"
+#         assert (np.min(__K) >= 0.), "Kernel values must be >= 0"
+#         np.testing.assert_equal(__K[0, 1], 1. / 6.)
+#         np.testing.assert_equal(__K[1, 0], 0.)
+#         np.testing.assert_equal(__K[1, 1], 1. / 4.)
+#         np.testing.assert_equal(__K[2, 1], 4. / 7.)
+#
+#         # Empty features on larger random set
+#         # ---------------------------------------------
+#         n_A = 92
+#         n_B = 29
+#         d = 103
+#         X_A = np.random.RandomState(59).randint(0, 90, size=(n_A, d))
+#         X_B = np.random.RandomState(8443).randint(0, 43, size=(n_B, d))
+#
+#         X_A[:, 12] = 0
+#         X_A[:, 10] = 0
+#         X_A[:, 54] = 0
+#
+#         X_B[:, 12] = 0
+#         X_B[:, 10] = 0
+#         X_B[:, 21] = 0
+#
+#         __K = minmax_kernel_fast(X_A)
+#         np.testing.assert_array_equal(__K, self._minmax_kernel_slow(X_A))
+#         assert (np.max(__K) <= 1.), "Kernel values must be <= 1"
+#         assert (np.min(__K) >= 0.), "Kernel values must be >= 0"
+#         assert all(np.diag(__K) == 1.0)
+#
+#         __K = minmax_kernel_fast(X_A, X_B)
+#         np.testing.assert_array_equal(__K, self._minmax_kernel_slow(X_A, X_B))
+#         assert (np.max(__K) <= 1.), "Kernel values must be <= 1"
+#         assert (np.min(__K) >= 0.), "Kernel values must be >= 0"
+#
+#     def test_on_small_data(self):
+#         # ---------------------------------------------
+#         __X_A = np.array([[0, 1, 2], [1, 0, 0], [3, 4, 0]])
+#         __X_B = np.array([[0, 0, 1], [3, 1, 0]])
+#
+#         __K = minmax_kernel_fast(__X_A)
+#         np.testing.assert_array_equal(np.diag(__K), np.ones((3,)))
+#         np.testing.assert_equal(__K.shape, (3, 3))
+#         assert (np.max(__K) <= 1.), "Kernel values must be <= 1"
+#         assert (np.min(__K) >= 0.), "Kernel values must be >= 0"
+#         np.testing.assert_equal(__K[0, 1], 0.)
+#         np.testing.assert_equal(__K[1, 0], 0.)
+#         np.testing.assert_equal(__K[0, 2], 1. / 9.)
+#         np.testing.assert_equal(__K[2, 0], 1. / 9.)
+#         np.testing.assert_equal(__K[1, 2], 1. / 7.)
+#         np.testing.assert_equal(__K[2, 1], 1. / 7.)
+#
+#         __K = minmax_kernel_fast(__X_A, __X_B)
+#         np.testing.assert_equal(__K.shape, (3, 2))
+#         assert (np.max(__K) <= 1.), "Kernel values must be <= 1"
+#         assert (np.min(__K) >= 0.), "Kernel values must be >= 0"
+#         np.testing.assert_equal(__K[0, 1], 1. / 6.)
+#         np.testing.assert_equal(__K[1, 0], 0.)
+#         np.testing.assert_equal(__K[1, 1], 1. / 4.)
+#         np.testing.assert_equal(__K[2, 1], 4. / 7.)
+#
+#     def test_on_larger_random_data(self):
+#         n_A = 45
+#         n_B = 21
+#         d = 121
+#         X_A = np.random.RandomState(5943).randint(0, 43, size=(n_A, d))
+#         X_B = np.random.RandomState(842).randint(0, 43, size=(n_B, d))
+#
+#         # Symmetric kernel
+#         K = minmax_kernel_fast(X_A)
+#         np.testing.assert_array_equal(K, self._minmax_kernel_slow(X_A))
+#         np.testing.assert_array_equal(np.diag(K), np.ones((n_A,)))
+#         assert (np.max(K) <= 1.)
+#         assert (np.min(K) >= 0.)
+#
+#         # Non-symmetric kernel
+#         K = minmax_kernel_fast(X_A, X_B)
+#         np.testing.assert_array_equal(K, self._minmax_kernel_slow(X_A, X_B))
+#         assert (np.max(K) <= 1.)
+#         assert (np.min(K) >= 0.)
 
 class TestTanimotoKernel(unittest.TestCase):
     def test_on_small_data(self):
