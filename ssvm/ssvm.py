@@ -2012,8 +2012,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         return self._max_marginals(sequence, node_potentials, edge_potentials, Gs[0], normalize=True,
                                    retention_order_weight=self.retention_order_weight)
 
-    def _get_node_and_edge_potentials(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph,
-                                      loss_augmented: bool = False):
+    def _get_node_and_edge_potentials_OLD(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph,
+                                          loss_augmented: bool = False):
         """
 
         :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
@@ -2065,7 +2065,71 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         return node_potentials, edge_potentials
 
-    def _get_edge_potentials(self, rt_s: float, rt_t: float, Y_s: np.ndarray, Y_t: np.ndarray):
+    def _get_node_and_edge_potentials(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph,
+                                      loss_augmented: bool = False):
+        """
+
+        :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
+
+        :param G: networkx.Graph, random spanning tree of the MRF defined over the (MS, RT)-sequence.
+
+        :param loss_augmented: boolean, indicating whether the node potentials should be augmented with the label loss.
+            Set this option to True during model parameter estimation.
+
+        :return: tuple (
+            OrderedDict: key = nodes of G, values {"log_score": node scores, "n_cand": size of the label space},
+            nested dictionary: key = nodes of G, (nested) key = nodes of G (<- edges): (nested) values: transition
+                matrices
+        )
+        """
+        # Calculate the node potentials. If needed, augment the MS scores with the label loss
+        node_potentials = OrderedDict()
+        for s in G.nodes:  # V
+            _score = np.array(sequence.get_ms2_scores(s))  # S(x_i, y) with shape (n_candidates_s, )
+
+            if loss_augmented:
+                _score += sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s) / len(sequence)
+                # Delta_i(y)
+
+            node_potentials[s] = {"log_score": _score, "n_cand": len(_score)}
+
+        # Load the candidate features for all nodes
+        l_Y = [sequence.get_molecule_features_for_candidates(self.mol_feat_retention_order, s) for s in G.nodes]
+        pref_scores = self.predict_molecule_preference_values(np.vstack(l_Y))
+
+        # Get a map from the node to the corresponding candidate feature vector indices
+        cs_n_Y = np.cumsum([0] + [len(Y) for Y in l_Y])
+        node_2_idc = [slice(cs_n_Y[l], cs_n_Y[l + 1]) for l in range(len(l_Y))]
+
+        # Calculate the edge potentials
+        edge_potentials = OrderedDict()
+        for s, t in G.edges:
+            if s not in edge_potentials:
+                edge_potentials[s] = OrderedDict()
+
+            edge_potentials[s][t] = {
+                "log_score": self._get_edge_potentials(
+                    # Retention times
+                    sequence.get_retention_time(s),
+                    sequence.get_retention_time(t),
+                    # Pre-computed preference scores
+                    pref_scores_s=pref_scores[node_2_idc[s]],
+                    pref_scores_t=pref_scores[node_2_idc[t]]
+                )
+            }
+
+            # As we do not know in which direction the edges are traversed during the message passing, we need to add
+            # the transition matrices for both directions, i.e. s -> t and t -> s.
+            if t not in edge_potentials:
+                edge_potentials[t] = OrderedDict()
+
+            edge_potentials[t][s] = {"log_score": edge_potentials[s][t]["log_score"].T}
+
+        return node_potentials, edge_potentials
+
+    def _get_edge_potentials(self, rt_s: float, rt_t: float,
+                             Y_s: Optional[np.ndarray] = None, Y_t: Optional[np.ndarray] = None,
+                             pref_scores_s: Optional[np.ndarray] = None, pref_scores_t: Optional[np.ndarray] = None):
         """
         Predict the transition matrix M (n_cand_s x n_cand_t) for the edge = (s, t) with:
 
@@ -2083,11 +2147,19 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         :return: array-like, shape = (n_cand_s, n_cand_t), transition matrix for edge (s, t)
         """
-        pref_scores_s = self.predict_molecule_preference_values(Y_s)
-        # shape = (n_mol_s, )
+        if pref_scores_s is None:
+            if Y_s is None:
+                raise ValueError("Candidate features must be provided.")
 
-        pref_scores_t = self.predict_molecule_preference_values(Y_t)
-        # shape = (n_mol_t, )
+            pref_scores_s = self.predict_molecule_preference_values(Y_s)
+            # shape = (n_mol_s, )
+
+        if pref_scores_t is None:
+            if Y_t is None:
+                raise ValueError("Candidate features must be provided.")
+
+            pref_scores_t = self.predict_molecule_preference_values(Y_t)
+            # shape = (n_mol_t, )
 
         return np.sign(rt_s - rt_t) * (pref_scores_s[:, np.newaxis] - pref_scores_t[np.newaxis, :])
 
