@@ -474,10 +474,12 @@ class CandidateSQLiteDB(object):
         # Query data from DB
         _order_query_str = "\n".join(["WHEN '%s' THEN %d" % (mid, i) for i, mid in enumerate(molecule_ids, start=1)])
 
+        # TODO: Test the grouping by identifier ...
         res = self.db.execute(
             "SELECT %s AS identifier, %s AS molecular_feature FROM molecules"
             "   INNER JOIN fingerprints_data fd ON fd.molecule = molecules.inchi"
             "   WHERE identifier IN %s"
+            "   GROUP BY identifier"
             "   ORDER BY CASE identifier"
             "         %s"
             "      END"
@@ -1024,7 +1026,7 @@ class SequenceSample(object):
 
         return sequences, datasets
 
-    def get_train_test_split(self, cv=4):
+    def get_train_test_split(self, cv=5):
         """
         75% training and 25% test split.
         """
@@ -1048,7 +1050,7 @@ class SequenceSample(object):
                 The testing set indices for that split.
         """
         if isinstance(cv, int):
-            cv = GroupKFold(n_splits=5)
+            cv = GroupKFold(n_splits=cv)
         else:
             assert isinstance(cv, BaseCrossValidator)
 
