@@ -28,6 +28,7 @@ import itertools as it
 import more_itertools as mit
 import tensorflow as tf
 import networkx as nx
+import time
 
 from collections import OrderedDict
 from copy import deepcopy
@@ -37,7 +38,7 @@ from sklearn.model_selection import GroupKFold
 from sklearn.metrics import ndcg_score
 from scipy.sparse import csc_matrix, lil_matrix, csr_matrix
 from tqdm import tqdm
-from functools import lru_cache
+from joblib.parallel import Parallel, delayed
 
 from msmsrt_scorer.lib.exact_solvers import TreeFactorGraph
 from msmsrt_scorer.lib.evaluation_tools import get_topk_performance_from_scores as get_topk_performance_from_marginals
@@ -46,8 +47,7 @@ from ssvm.data_structures import SequenceSample, CandidateSetMetIdent, Sequence,
 from ssvm.loss_functions import hamming_loss, tanimoto_loss
 from ssvm.evaluation_tools import get_topk_performance_csifingerid
 from ssvm.factor_graphs import get_random_spanning_tree
-from ssvm.kernel_utils import generalized_tanimoto_kernel_OLD as generalized_tanimoto_kernel
-from ssvm.kernel_utils import tanimoto_kernel, minmax_kernel
+from ssvm.kernel_utils import tanimoto_kernel, _minmax_kernel_1__numba, generalized_tanimoto_kernel_FAST
 
 
 DUALVARIABLES_T = TypeVar('DUALVARIABLES_T', bound='DualVariables')
@@ -1330,9 +1330,10 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         elif mol_kernel == "tanimoto":
             return tanimoto_kernel
         elif mol_kernel == "minmax":
-            return generalized_tanimoto_kernel
+            return generalized_tanimoto_kernel_FAST
         elif mol_kernel == "minmax_numba":
-            return lambda X, Y: minmax_kernel(X, Y, use_numba=True, shallow_input_check=True)
+            return _minmax_kernel_1__numba
+            # return lambda X, Y: minmax_kernel(X, Y, use_numba=True, shallow_input_check=True)
         else:
             raise ValueError("Invalid molecule kernel")
 
@@ -1350,6 +1351,9 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         :return: reference to it self.
         """
         self.training_data_ = data
+        self.training_data_info_ = {}
+        self.training_data_info_["d_features_rt_order"] = \
+            data.candidates._get_feature_dimension(self.mol_feat_retention_order)
 
         # Set up the dual initial dual vector
         self.alphas_ = DualVariables(C=self.C, label_space=self.training_data_.get_labelspace(),
@@ -1359,6 +1363,11 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         # Initialize the graphs for each sequence
         self.training_graphs_ = [SpanningTrees(sequence, self.n_trees_per_sequence, i)
                                  for i, sequence in enumerate(self.training_data_)]
+        self.training_graphs_info_ = {}
+        self.training_graphs_info_["n_edges"] = [sptree.n_edges for sptree in self.training_graphs_]
+        self.training_graphs_info_["n_edges_total"] = sum(self.training_graphs_info_["n_edges"])
+
+        # self.training_graphs_statistics_ = [self.training_graphs_]
 
         # Run over the data
         # - each epoch is a cycle through the full data
@@ -1833,7 +1842,6 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             self.training_data_[j].get_molecule_features_for_labels(self.mol_feat_retention_order) for j in range(N)
             # shape = (|E_j|, n_features)
         ]
-
         lambda_delta = np.vstack([
             self._get_lambda_delta(l_Y_gt_sequence[j], Y, self.training_graphs_[j][0], self.mol_kernel)
             for j in range(N)  # shape = (|E_j|, n_mol), with n_mol = Y.shape[0]
@@ -1900,11 +1908,11 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         # List of the molecular structures belonging to the active examples, i.e. a(i, y) > 0
         l_Y_act_sequence = [None for _ in range(N)]  # length = (N, )
-        l_A_Sj = []
+        l_A_Sj = [None for _ in range(N)]
         for j in range(N):
             Sj, A_Sj = self.alphas_.get_blocks(j)
             _, Sj = zip(*Sj)  # type: Tuple[Tuple[str, ...]]  # length = number of active sequences for example j
-            l_A_Sj.append(np.array(A_Sj))
+            l_A_Sj[j] = np.array(A_Sj)
 
             # Sj: active labels, i.e. all y in Sigma_j for which a(j, y) > 0
             # A_Sj: dual values, array-like with shape = (|S_j|, )
@@ -1912,25 +1920,34 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             l_Y_act_sequence[j] = self.training_data_.candidates.get_molecule_features_by_molecule_id(
                 tuple(it.chain(*Sj)), self.mol_feat_retention_order)
 
-        II = np.zeros((len(Y), ))  # shape = (n_molecules, )
+        # print("lambda_delta")
+        l_lambda_delta = Parallel(n_jobs=4, prefer="threads")(  # prefer="threads"
+            delayed(StructuredSVMSequencesFixedMS2._get_lambda_delta)(
+                l_Y_act_sequence[j], Y, self.training_graphs_[j][0], self.mol_kernel
+            ) for j in range(N))
+
+        II = np.zeros((len(Y), N))  # shape = (n_molecules, )
         for j in range(N):
-            lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta(
-                l_Y_act_sequence[j], Y, self.training_graphs_[j][0], self.mol_kernel)
+            # print("lambda_delta")
+            # lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta(
+            #     l_Y_act_sequence[j], Y, self.training_graphs_[j][0], self.mol_kernel)
 
             # Bring output to shape = (|S_j|, |E_j|, n_molecules)
-            lambda_delta = lambda_delta.reshape(
+            # print("reshape")
+            lambda_delta = l_lambda_delta[j].reshape(
                 (
                     self.alphas_.n_active(j),
                     self.training_graphs_[j].get_n_edges(),
                     len(Y)
                 ))
 
-            II += np.einsum("j,ijk,i",
-                            self.training_data_[j].get_sign_delta_t(self.training_graphs_[j][0]),
-                            lambda_delta,
-                            l_A_Sj[j])
+            # print("einsum")
+            II[:, j] = np.einsum("j,ijk,i",
+                                 self.training_data_[j].get_sign_delta_t(self.training_graphs_[j][0]),
+                                 lambda_delta,
+                                 l_A_Sj[j])
 
-        return I - II
+        return I - np.sum(II, axis=1)
 
     def inference(self, sequence: Union[Sequence, LabeledSequence], Gs: Optional[SpanningTrees] = None,
                   loss_augmented: bool = False, return_graphical_model: bool = False) \
@@ -2145,10 +2162,10 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         :return: array-shape = ((L - 1) * |S|, n_molecules)
         """
         L = len(G.nodes)
-        assert L > 1, "There must be at least two nodes in the graph."
-        n_E = len(G.edges)
-        assert n_E > 0, "There must be at least one edge in the graph."
-        assert (len(Y_sequence) % L) == 0
+        # assert L > 1, "There must be at least two nodes in the graph."
+        # n_E = len(G.edges)
+        # assert n_E > 0, "There must be at least one edge in the graph."
+        # assert (len(Y_sequence) % L) == 0
         n_S = len(Y_sequence) // L
 
         Ky = mol_kernel(Y_sequence, Y_candidates)  # shape = (L * |S|, n_candidates)
