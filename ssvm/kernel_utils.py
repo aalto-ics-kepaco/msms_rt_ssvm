@@ -27,11 +27,13 @@
 import numpy as np
 import scipy.sparse as sp
 import itertools as it
+import more_itertools as mit
 
 from numba import jit, prange
 from sklearn.metrics.pairwise import manhattan_distances, pairwise_distances
 from joblib import delayed, Parallel
 from scipy.spatial.distance import cdist
+from scipy.spatial._distance_wrap import cdist_cityblock_double_wrap
 from scipy.linalg import norm
 
 """
@@ -122,9 +124,9 @@ def minmax_kernel(X, Y=None, shallow_input_check=False, n_jobs=4, use_numba=True
         K_mm = _min_max_sparse_csr(X, Y, n_jobs=n_jobs)
     else:
         if use_numba:
-            # K_mm = _minmax_kernel_1__numba(X, Y)
+            K_mm = _minmax_kernel_1__numba(X, Y)
             # K_mm = _minmax_kernel_2__numba(X, Y)
-            K_mm = _minmax_kernel_3_linalg_norm__numba(X.astype(float), Y.astype(float))
+            # K_mm = _minmax_kernel_3_linalg_norm__numba(X.astype(float), Y.astype(float))
         else:
             K_mm = _min_max_dense(X, Y)
 
@@ -284,14 +286,51 @@ def generalized_tanimoto_kernel_FAST(X, Y):
     :param Y:
     :return:
     """
-    XL1 = norm(X, ord=1, axis=1, check_finite=False)[:, np.newaxis]
-    YL1 = norm(Y, ord=1, axis=1, check_finite=False)[:, np.newaxis]
-    XmYL1 = cdist(X, Y, 'cityblock')
+    # XL1 = norm(X, ord=1, axis=1, check_finite=False)[:, np.newaxis]
+    # YL1 = norm(Y, ord=1, axis=1, check_finite=False)[:, np.newaxis]
+    # XmYL1 = cdist(X, Y, 'cityblock')
+
+    XL1 = np.core.add.reduce(np.abs(X), axis=1)[:, np.newaxis]
+    YL1 = np.core.add.reduce(np.abs(Y), axis=1)[:, np.newaxis]
+    XmYL1 = np.empty((X.shape[0], Y.shape[0]), dtype=np.double)
+    cdist_cityblock_double_wrap(np.array(X, order="c", dtype=np.double),
+                                np.array(Y, order="c", dtype=np.double), XmYL1)
 
     XL1pYL1t = XL1 + YL1.T
     K_gtan = (XL1pYL1t - XmYL1) / (XL1pYL1t + XmYL1)
 
     return K_gtan
+
+
+def generalized_tanimoto_kernel_VERYFAST(X, Y, n_jobs=4):
+    """
+    Generalized tanimoto kernel function
+
+    :param X:
+    :param Y:
+    :return:
+    """
+
+    XL1 = np.core.add.reduce(np.abs(X), axis=1)[:, np.newaxis]
+    YL1 = np.core.add.reduce(np.abs(Y), axis=1)[:, np.newaxis]
+
+    if n_jobs == 1:
+        XmYL1 = np.empty((X.shape[0], Y.shape[0]), dtype=np.double)
+        cdist_cityblock_double_wrap(np.array(X, order="c", dtype=np.double),
+                                    np.array(Y, order="c", dtype=np.double), XmYL1)
+    else:
+        chunks = list(mit.chunked(range(Y.shape[0]), 4))
+        X = np.array(X, order="c", dtype=np.double)
+        XmYL1 = [np.empty((X.shape[0], Y[list(Is)].shape[0]), dtype=np.double) for Is in chunks]
+        Parallel(n_jobs=4, prefer="threads")(
+            delayed(cdist_cityblock_double_wrap)(
+                X,
+                np.array(Y[list(Is)], order="c", dtype=np.double),
+                XmYL1[k]
+            ) for k, Is in enumerate(chunks))
+        XmYL1 = np.hstack(XmYL1)
+
+    return (XL1 + YL1.T - XmYL1) / (XL1 + YL1.T + XmYL1)
 
 
 # --------------------------
@@ -328,7 +367,7 @@ def minmax_kernel_1_over_X__numba(X, Y):
 
     XmYL1 = np.empty_like(XL1pYL1t)
     for i in prange(len(X)):
-        XmYL1[i, :] = np.sum(np.abs(X[i] - Y), axis=1)
+        XmYL1[i] = np.sum(np.abs(X[i] - Y), axis=1)
 
     K_mm = (XL1pYL1t - XmYL1) / (XL1pYL1t + XmYL1)
 
@@ -533,8 +572,7 @@ def _minmax_kernel_3_linalg_norm__without_numba(X, Y):
     return K_mm
 # --------------------------
 
-
-if __name__ == "__main__":
+def run_time():
     import time
 
     n_rep = 25
@@ -579,41 +617,41 @@ if __name__ == "__main__":
         minmax_kernel_1_over_X__numba(X_A, X_B)
         t_1_oX_n += (time.time() - start)
 
-    # print("RUN - Alg 2 (with numba)")
-    # for _ in range(n_rep):
-    #     start = time.time()
-    #     _minmax_kernel_2__numba(X_A, X_B)
-    #     t_2_n += (time.time() - start)
-    #
-    # print("RUN - Alg 3 (linalg norm with numba)")
-    # for _ in range(n_rep):
-    #     start = time.time()
-    #     _minmax_kernel_3_linalg_norm__numba(X_A, X_B)
-    #     t_3_la_n += (time.time() - start)
-    #
-    # print("RUN - Alg 1 (without numba)")
-    # for _ in range(n_rep):
-    #     start = time.time()
-    #     minmax_kernel_1__without_numba(X_A, X_B)
-    #     t_1_wn += (time.time() - start)
-    #
-    # print("RUN - Alg 1 over X (without numba)")
-    # for _ in range(n_rep):
-    #     start = time.time()
-    #     minmax_kernel_1_over_X__without_numba(X_A, X_B)
-    #     t_1_oX_wn += (time.time() - start)
-    #
-    # print("RUN - Alg 2 (without numba)")
-    # for _ in range(n_rep):
-    #     start = time.time()
-    #     minmax_kernel_2__without_numba(X_A, X_B)
-    #     t_2_wn += (time.time() - start)
-    #
-    # print("RUN - Alg 3 (linalg norm without numba)")
-    # for _ in range(n_rep):
-    #     start = time.time()
-    #     _minmax_kernel_3_linalg_norm__without_numba(X_A, X_B)
-    #     t_3_la_wn += (time.time() - start)
+    print("RUN - Alg 2 (with numba)")
+    for _ in range(n_rep):
+        start = time.time()
+        _minmax_kernel_2__numba(X_A, X_B)
+        t_2_n += (time.time() - start)
+
+    print("RUN - Alg 3 (linalg norm with numba)")
+    for _ in range(n_rep):
+        start = time.time()
+        _minmax_kernel_3_linalg_norm__numba(X_A, X_B)
+        t_3_la_n += (time.time() - start)
+
+    print("RUN - Alg 1 (without numba)")
+    for _ in range(n_rep):
+        start = time.time()
+        minmax_kernel_1__without_numba(X_A, X_B)
+        t_1_wn += (time.time() - start)
+
+    print("RUN - Alg 1 over X (without numba)")
+    for _ in range(n_rep):
+        start = time.time()
+        minmax_kernel_1_over_X__without_numba(X_A, X_B)
+        t_1_oX_wn += (time.time() - start)
+
+    print("RUN - Alg 2 (without numba)")
+    for _ in range(n_rep):
+        start = time.time()
+        minmax_kernel_2__without_numba(X_A, X_B)
+        t_2_wn += (time.time() - start)
+
+    print("RUN - Alg 3 (linalg norm without numba)")
+    for _ in range(n_rep):
+        start = time.time()
+        _minmax_kernel_3_linalg_norm__without_numba(X_A, X_B)
+        t_3_la_wn += (time.time() - start)
 
     print("RUN - Alg 4 (cdist)")
     for _ in range(n_rep):
@@ -644,3 +682,35 @@ if __name__ == "__main__":
     print("Alg 4 (cdist): %.3fs" % (t_4_gen / n_rep))
     print("Alg 4 (cdist FAST): %.3fs" % (t_4_gen_fast / n_rep))
     print("Alg 6 (sparse version of Alg 2): %.3fs" % (t_6_n / n_rep))
+
+
+if __name__ == "__main__":
+    import time
+
+    n_rep = 5
+
+    # Data size specifications
+    n_A = 20
+    n_B = 100
+    d = 307
+
+    X_A = np.random.RandomState(5943).randint(0, 200, size=(n_A, d)).astype(float)
+    X_B = np.random.RandomState(842).randint(0, 200, size=(n_B, d)).astype(float)
+
+    t_nj1 = 0.0
+    t_nj4 = 0.0
+
+    print("RUN - VERYFAST (n_jobs = 1)")
+    for _ in range(n_rep):
+        start = time.time()
+        generalized_tanimoto_kernel_VERYFAST(X_A, X_B, n_jobs=1)
+        t_nj1 += (time.time() - start)
+
+    print("RUN - VERYFAST (n_jobs = 4)")
+    for _ in range(n_rep):
+        start = time.time()
+        generalized_tanimoto_kernel_VERYFAST(X_A, X_B, n_jobs=4)
+        t_nj4 += (time.time() - start)
+
+    print("VERYFAST (n_jobs = 1): %.3fs" % (t_nj1 / n_rep))
+    print("VERYFAST (n_jobs = 4): %.3fs" % (t_nj4 / n_rep))
