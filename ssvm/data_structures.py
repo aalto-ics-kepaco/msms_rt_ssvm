@@ -425,6 +425,7 @@ class CandidateSQLiteDB(object):
         """
         return len(self.get_labelspace(spectrum))
 
+    # TODO: Use the lru_cache here!
     def get_molecule_features(self, spectrum: Spectrum, features: str, return_dataframe: bool = False) \
             -> Union[np.ndarray, pd.DataFrame]:
         """
