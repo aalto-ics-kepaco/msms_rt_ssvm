@@ -334,6 +334,15 @@ def run_time():
         print(_run_time(n_A, n_B, d, n_rep))
 
 
+def run_time_n_vs_m():
+    n_rep = 25
+    n_A = 100
+
+    for fac in [1, 2, 5, 10, 50, 100, 1000]:
+        print(fac)
+        print(_run_time(n_A, fac * n_A, 307, n_rep))
+
+
 def _run_time(n_A, n_B, d, n_rep):
     # Create random data
     X_A = np.random.RandomState(5943).randint(0, 200, size=(n_A, d))
@@ -381,4 +390,4 @@ if __name__ == "__main__":
     import time
     import pandas as pd
 
-    run_time()
+    run_time_n_vs_m()
