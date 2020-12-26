@@ -1333,7 +1333,6 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             return generalized_tanimoto_kernel_FAST
         elif mol_kernel == "minmax_numba":
             return minmax_kernel_1__numba
-            # return lambda X, Y: minmax_kernel(X, Y, use_numba=True, shallow_input_check=True)
         else:
             raise ValueError("Invalid molecule kernel")
 
@@ -1433,8 +1432,6 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                                        summary_writer=summary_writer)
 
                 print(self.training_data_.candidates.get_molecule_features_by_molecule_id.cache_info())
-
-                # return self
 
             if summary_writer is not None:
                 # Write out scores only after each epoch

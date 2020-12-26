@@ -3,14 +3,27 @@ import os
 import pandas as pd
 import numpy as np
 import tensorflow as tf
+import time
 
 from matchms.Spectrum import Spectrum
 
 from ssvm.data_structures import RandomSubsetCandidateSQLiteDB, SequenceSample
 from ssvm.ssvm import StructuredSVMSequencesFixedMS2
 
+
+def run(mol_kernel, seq_sample):
+    # ===================
+    # Setup a SSVM
+    # ===================
+    ssvm = StructuredSVMSequencesFixedMS2(
+        mol_feat_label_loss="iokr_fps__positive", mol_feat_retention_order="substructure_count",
+        mol_kernel=mol_kernel, C=2, step_size="linesearch", batch_size=8, n_epochs=3, label_loss="tanimoto_loss",
+        random_state=1993, retention_order_weight=0.5)
+
+    ssvm.fit(seq_sample, n_init_per_example=5)
+
+
 if __name__ == "__main__":
-    tf_summary_base_dir = "/home/bach/Documents/doctoral/projects/rt_msms_ssvm/src/ssvm/development/logs"
     DB_FN = "/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_LATEST.db"
 
     # ===================
@@ -28,15 +41,7 @@ if __name__ == "__main__":
 
     db.close()
 
-    # ===================
-    # Setup a SSVM
-    # ===================
-    ssvm = StructuredSVMSequencesFixedMS2(
-        mol_feat_label_loss="iokr_fps__positive", mol_feat_retention_order="substructure_count",
-        mol_kernel="minmax", C=2, step_size="linesearch", batch_size=8, n_epochs=3, label_loss="tanimoto_loss",
-        random_state=1993, retention_order_weight=0.5)
-
-    N = 24
+    N = 96
     seq_sample = SequenceSample(
         spectra, labels,
         RandomSubsetCandidateSQLiteDB(db_fn=DB_FN, molecule_identifier="inchi", random_state=192,
@@ -44,10 +49,24 @@ if __name__ == "__main__":
         N=N, L_min=10,
         L_max=15, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
 
-    summary_writer = tf.summary.create_file_writer(os.path.join(tf_summary_base_dir, "%d" % np.random.randint(1000)))
+    n_rep = 5
+    t_np = 0.0
+    t_numba = 0.0
 
-    ssvm.fit(seq_sample, n_init_per_example=5, summary_writer=None)
+    print("Numpy")
+    for _ in range(n_rep):
+        t = time.time()
+        run("minmax", seq_sample)
+        t_np += (time.time() - t)
+
+    print("Numba")
+    for _ in range(n_rep):
+        t = time.time()
+        run("minmax_numba", seq_sample)
+        t_numba += (time.time() - t)
+
+    print("Numpy: %.3fs" % (t_np / n_rep))
+    print("Numba: %.3fs" % (t_numba / n_rep))
 
     # TODO: We somehow should ensure that the database connection is always closed.
     seq_sample.candidates.close()
-
