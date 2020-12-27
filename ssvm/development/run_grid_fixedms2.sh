@@ -6,7 +6,6 @@
 # -- SBATCH --array=0-44
 #SBATCH --array=11
 
-module load anaconda
 
 PROJECTDIR="/scratch/cs/kepaco/bache1/projects/rt_msms_ssvm/"
 DB_DIR="$PROJECTDIR/_CASMI_DB/"
@@ -14,6 +13,8 @@ DB_FN="DB_LATEST.db"
 LOGDIR="$PROJECTDIR/src/ssvm/development/logs_triton/fixedms2"
 SCRIPTPATH="$PROJECTDIR/src/ssvm/development/ssvm_fixedms2__parameter_grid.py"
 
+module load anaconda
+conda active "ssvm"
 
 # Create temporary output directory for results on local disk of node
 LOCAL_DB_DIR="/tmp/$SLURM_JOB_ID"
