@@ -6,17 +6,21 @@ import tensorflow as tf
 import itertools as it
 import argparse
 
-
 from tensorboard.plugins.hparams import api as hp
 from matchms.Spectrum import Spectrum
+from sklearn.model_selection import GroupShuffleSplit
 
-from ssvm.data_structures import RandomSubsetCandidateSQLiteDB, SequenceSample
+from ssvm.data_structures import RandomSubsetCandidateSQLiteDB, CandidateSQLiteDB, SequenceSample
 from ssvm.ssvm import StructuredSVMSequencesFixedMS2
 
-HP_C = hp.HParam("C", hp.Discrete([1, 2, 8, 32]))
+HP_C = hp.HParam("C", hp.Discrete([1, 2, 8, 32, 128]))
 HP_BATCH_SIZE = hp.HParam("batch_size", hp.Discrete([4, 8, 16]))
-HP_NUM_INIT_ACT_VAR = hp.HParam("num_init_act_var", hp.Discrete([3, 6, 9]))
-HP_GRID = list(it.product(HP_C.domain.values, HP_BATCH_SIZE.domain.values, HP_NUM_INIT_ACT_VAR.domain.values))
+HP_NUM_INIT_ACT_VAR = hp.HParam("num_init_act_var", hp.Discrete([6]))
+HP_RT_WEIGHT = hp.HParam("rt_weight", hp.Discrete([0.0, 0.5, 1.0]))
+HP_GRID = list(it.product(HP_C.domain.values,
+                          HP_BATCH_SIZE.domain.values,
+                          HP_NUM_INIT_ACT_VAR.domain.values,
+                          HP_RT_WEIGHT.domain.values))
 N_TOTAL_PAR_TUP = len(HP_GRID)
 
 
@@ -33,24 +37,36 @@ def get_argument_parser() -> argparse.ArgumentParser:
                             default="/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_LATEST.db")
     arg_parser.add_argument("--output_dir", type=str,
                             help="Base directory to store the Tensorboard logging files, train and test splits, ...",
-                            default="./logs")
-    arg_parser.add_argument("--n_samples", type=float, default=500,
-                            help="Number of training examples to use for the evaluation")
+                            default="./logs/fixedms2")
+    arg_parser.add_argument("--n_samples_train", type=int, default=250,
+                            help="Number of training sample sequences.")
+    arg_parser.add_argument("--n_samples_test", type=int, default=200,
+                            help="Number of test sample sequences.")
     arg_parser.add_argument("--n_epochs", type=int, default=5)
     arg_parser.add_argument("--max_n_train_candidates", type=int, default=100)
     arg_parser.add_argument("--stepsize", type=str, default="linesearch")
+    arg_parser.add_argument("--ms2scorer", type=str, default="MetFrag_2.4.5__8afe4a14")
 
     return arg_parser
 
 
 if __name__ == "__main__":
-    tf_summary_base_dir = "/home/bach/Documents/doctoral/projects/rt_msms_ssvm/src/ssvm/development/logs"
-    DB_FN = "/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_LATEST.db"
+    # ===================
+    # Parse arguments
+    # ===================
+    args = get_argument_parser().parse_args()
+
+    hparams = {
+        HP_C: HP_GRID[args.param_tuple_index][0],
+        HP_BATCH_SIZE: HP_GRID[args.param_tuple_index][1],
+        HP_NUM_INIT_ACT_VAR: HP_GRID[args.param_tuple_index][2],
+        HP_RT_WEIGHT: HP_GRID[args.param_tuple_index][3]
+    }
 
     # ===================
     # Get list of Spectra
     # ===================
-    db = sqlite3.connect("file:" + DB_FN + "?mode=ro", uri=True)
+    db = sqlite3.connect("file:" + args.db_fn + "?mode=ro", uri=True)
 
     # Read in spectra and labels
     res = pd.read_sql_query("SELECT spectrum, inchikey1 as molecule, rt, challenge FROM challenges_spectra "
@@ -63,32 +79,70 @@ if __name__ == "__main__":
 
     db.close()
 
+    # ======================
+    # Get training sequences
+    # ======================
+    train, test = next(GroupShuffleSplit(test_size=0.2, random_state=10).split(np.arange(len(spectra)), groups=labels))
+
+    training_sequences = SequenceSample(
+        [spectra[idx] for idx in train], [labels[idx] for idx in train],
+        RandomSubsetCandidateSQLiteDB(db_fn=args.db_fn, molecule_identifier="inchikey1", random_state=2,
+                                      number_of_candidates=args.max_n_train_candidates, include_correct_candidate=True),
+        N=args.n_samples_train,
+        L_min=5,
+        L_max=20,
+        random_state=19,
+        ms2scorer=args.ms2scorer)
+
     # ===================
-    # Setup a SSVM
+    # Train the SSVM
     # ===================
+    print("TRAINING", flush=True)
+    summary_writer = tf.summary.create_file_writer(
+        os.path.join(args.output_dir, "test_performance", "C=%d_bsize=%d_ninit=%d_rtw=%.1f" %
+                     (HP_GRID[args.param_tuple_index][0],
+                      HP_GRID[args.param_tuple_index][1],
+                      HP_GRID[args.param_tuple_index][2],
+                      HP_GRID[args.param_tuple_index][3])))
+
+    with tf.summary.create_file_writer(args.output_dir).as_default():
+        assert hp.hparams_config(
+            hparams=[HP_C, HP_BATCH_SIZE, HP_NUM_INIT_ACT_VAR, HP_RT_WEIGHT],
+            metrics=[hp.Metric("Top-%02d_acc_test" % k, display_name="Top-%02d Accuracy (test, %%)" % k)
+                     for k in [1, 5, 10, 20]]
+                    # [hp.Metric("Top-01_map_acc_test", display_name="Top-01 Accuracy (MAP, test, %%)")]
+        ), "Could not create the 'hparam_tuning' Tensorboard configuration."
+
     ssvm = StructuredSVMSequencesFixedMS2(
         mol_feat_label_loss="iokr_fps__positive", mol_feat_retention_order="substructure_count",
-        mol_kernel="minmax_numba", C=2, step_size="linesearch", batch_size=16, n_epochs=1, label_loss="tanimoto_loss",
-        random_state=1993, retention_order_weight=1.0)
+        mol_kernel="minmax_numba", C=hparams[HP_C], step_size=args.stepsize, batch_size=hparams[HP_BATCH_SIZE],
+        n_epochs=args.n_epochs, label_loss="tanimoto_loss", random_state=1993,
+        retention_order_weight=hparams[HP_RT_WEIGHT]
+    ).fit(training_sequences, n_init_per_example=hparams[HP_NUM_INIT_ACT_VAR], summary_writer=summary_writer)
 
-    N = 250
-    seq_sample = SequenceSample(
-        spectra, labels,
-        RandomSubsetCandidateSQLiteDB(db_fn=DB_FN, molecule_identifier="inchikey1", random_state=2,
-                                      number_of_candidates=50, include_correct_candidate=True),
-        N=N, L_min=10,
-        L_max=20, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
+    # ====================
+    # Evaluate performance
+    # ====================
+    print("EVALUATION", flush=True)
+    test_sequences = SequenceSample(
+        [spectra[idx] for idx in test], [labels[idx] for idx in test],
+        CandidateSQLiteDB(db_fn=args.db_fn, molecule_identifier="inchikey1"),
+        N=args.n_samples_test,
+        L_min=30,
+        L_max=50,
+        random_state=19,
+        ms2scorer=args.ms2scorer)
 
-    seq_sample_train, seq_sample_test = seq_sample.get_train_test_split(cv=4)
-    print(len(seq_sample_train[0]))
+    test_acc_tkmm = ssvm.score(test_sequences, stype="topk_mm")
+    # test_acc_t1map = ssvm.score(test_sequences, stype="top1_map")
 
-    summary_writer = tf.summary.create_file_writer(os.path.join(tf_summary_base_dir, "test_performance",
-                                                                "%d" % np.random.randint(1000)))
-
-    ssvm.fit(seq_sample_train, n_init_per_example=3, summary_writer=None)
-
-    print(ssvm.score(seq_sample_test, stype="top1_map"))
+    with summary_writer.as_default():
+        hp.hparams(hparams)
+        for k in [1, 5, 10, 20]:
+            tf.summary.scalar("Top-%02d_acc_test" % k, test_acc_tkmm[k - 1], step=1)  # test, pred
+        # tf.summary.scalar("Top-01_map_acc_test", test_acc_t1map, step=1)
 
     # TODO: We somehow should ensure that the database connection is always closed.
-    seq_sample.candidates.close()
+    training_sequences.candidates.close()
+    test_sequences.candidates.close()
 
