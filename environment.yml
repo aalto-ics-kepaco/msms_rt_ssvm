@@ -1,0 +1,11 @@
+name: ssvm
+dependencies:
+  - numpy
+  - scikit-learn
+  - pandas
+  - scipy
+  - joblib
+  - pip
+  - matchms
+  - more-itertools
+  - tqdm
