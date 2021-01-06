@@ -14,3 +14,4 @@ dependencies:
   - more-itertools
   - tqdm
   - tensorflow>=2.0
+  - tbb
