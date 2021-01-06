@@ -1,5 +1,9 @@
-name: ssvm
+name: ssvm_environment
+channels:
+  - conda-forge
+  - bioconda
 dependencies:
+  - python=3.8
   - numpy
   - scikit-learn
   - pandas
@@ -9,3 +13,4 @@ dependencies:
   - matchms
   - more-itertools
   - tqdm
+  - tensorflow>=2.0

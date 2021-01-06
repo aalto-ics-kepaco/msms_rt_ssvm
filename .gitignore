@@ -9,3 +9,6 @@ slurm-*.out
 **/profiling/ssvm_01.png
 **/profiling/ssvm_02.png
 **/profiling/ssvm_03.png
+OLD_venv
+build
+dist

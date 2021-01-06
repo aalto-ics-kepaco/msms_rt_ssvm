@@ -13,8 +13,10 @@ DB_FN="DB_LATEST.db"
 LOGDIR="$PROJECTDIR/src/ssvm/development/logs_triton/fixedms2"
 SCRIPTPATH="$PROJECTDIR/src/ssvm/development/ssvm_fixedms2__parameter_grid.py"
 
-module load anaconda
-conda active "ssvm"
+# Load the conda environment
+module load miniconda
+eval "$(conda shell.bash hook)"
+conda activate ssvm_environment
 
 # Create temporary output directory for results on local disk of node
 LOCAL_DB_DIR="/tmp/$SLURM_JOB_ID"
