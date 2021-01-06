@@ -547,7 +547,7 @@ class CandidateSQLiteDB(object):
 
         # Scale scores to [min_score_value, 1]
         df_scores["ms2_score"] = MinMaxScaler(feature_range=(min_score_value, max_score_value)) \
-            .fit_transform(df_scores["ms2_score"][:, np.newaxis])
+            .fit_transform(df_scores["ms2_score"].values[:, np.newaxis])
 
         if not return_dataframe:
             df_scores = df_scores["ms2_score"].tolist()

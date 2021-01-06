@@ -46,6 +46,7 @@ def get_argument_parser() -> argparse.ArgumentParser:
     arg_parser.add_argument("--max_n_train_candidates", type=int, default=100)
     arg_parser.add_argument("--stepsize", type=str, default="linesearch")
     arg_parser.add_argument("--ms2scorer", type=str, default="MetFrag_2.4.5__8afe4a14")
+    arg_parser.add_argument("--mol_kernel", type=str, default="minmax_numba", choices=["minmax_numba", "minmax"])
 
     return arg_parser
 
@@ -115,7 +116,7 @@ if __name__ == "__main__":
 
     ssvm = StructuredSVMSequencesFixedMS2(
         mol_feat_label_loss="iokr_fps__positive", mol_feat_retention_order="substructure_count",
-        mol_kernel="minmax_numba", C=hparams[HP_C], step_size=args.stepsize, batch_size=hparams[HP_BATCH_SIZE],
+        mol_kernel=args.mol_kernel, C=hparams[HP_C], step_size=args.stepsize, batch_size=hparams[HP_BATCH_SIZE],
         n_epochs=args.n_epochs, label_loss="tanimoto_loss", random_state=1993,
         retention_order_weight=hparams[HP_RT_WEIGHT]
     ).fit(training_sequences, n_init_per_example=hparams[HP_NUM_INIT_ACT_VAR], summary_writer=summary_writer)
