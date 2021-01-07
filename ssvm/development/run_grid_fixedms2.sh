@@ -1,10 +1,10 @@
 #!/bin/bash
 
-#SBATCH --cpus-per-task=8 --mem-per-cpu=2000
-# -- SBATCH --time=72:00:00
-#SBATCH --time=01:00:00 --partition=debug
+#SBATCH --cpus-per-task=6 --mem-per-cpu=2000
+#SBATCH --time=48:00:00
+# -- SBATCH --time=01:00:00 --partition=debug
 # -- SBATCH --array=0-44
-#SBATCH --array=11
+#SBATCH --array=1-4
 
 
 PROJECTDIR="/scratch/cs/kepaco/bache1/projects/rt_msms_ssvm/"
@@ -28,10 +28,12 @@ trap "rm -rf $LOCAL_DB_DIR; exit" TERM EXIT
 # Copy the DB file to the node's local disk
 cp "$DB_DIR/$DB_FN" "$LOCAL_DB_DIR"
 
-srun python $SCRIPTPATH \
+NUMBA_NUM_THREADS=$SLURM_CPUS_PER_TASK \
+    srun python $SCRIPTPATH \
   --param_tuple_index="$SLURM_ARRAY_TASK_ID" \
   --db_fn="$LOCAL_DB_DIR/$DB_FN" \
   --output_dir="$LOGDIR" \
-  --n_samples_train=24 \
-  --n_samples_test=24 \
-  --n_epoch=1
+  --n_samples_train=250 \
+  --n_samples_test=250 \
+  --n_epoch=5 \
+  --mol_kernel="minmax_numba"
