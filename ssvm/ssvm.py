@@ -52,6 +52,9 @@ from ssvm.kernel_utils import tanimoto_kernel, minmax_kernel_1__numba, generaliz
 
 DUALVARIABLES_T = TypeVar('DUALVARIABLES_T', bound='DualVariables')
 
+# LRU cache parameters
+MAX_CACHE_SIZE = None
+
 
 class DualVariables(object):
     def __init__(self, C: Union[int, float], label_space: List[List[List[str]]], num_init_active_vars: int = 1,
@@ -1297,7 +1300,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     """
     def __init__(self, mol_feat_label_loss: str, mol_feat_retention_order: str,
                  mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]],  n_trees_per_sequence: int = 1,
-                 retention_order_weight=0.5, *args, **kwargs):
+                 retention_order_weight=0.5, n_jobs: int = 1, *args, **kwargs):
         """
         :param mol_feat_label_loss:
         :param mol_feat_retention_order:
@@ -1312,6 +1315,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         self.mol_kernel = self.get_mol_kernel(mol_kernel)
         self.n_trees_per_sequence = n_trees_per_sequence
         self.retention_order_weight = retention_order_weight
+        self.n_jobs = n_jobs
+
         if self.n_trees_per_sequence > 1:
             raise ValueError("Currently only a single spanning tree per sequence is supported.")
 
@@ -1351,13 +1356,16 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         """
         self.training_data_ = data
         self.training_data_info_ = {}
-        self.training_data_info_["d_features_rt_order"] = \
-            data.candidates._get_feature_dimension(self.mol_feat_retention_order)
 
-        # Set up the dual initial dual vector
-        self.alphas_ = DualVariables(C=self.C, label_space=self.training_data_.get_labelspace(),
-                                     num_init_active_vars=n_init_per_example, random_state=self.random_state)
-        assert self._is_feasible_matrix(self.alphas_, self.C), "Initial dual variables must be feasible."
+        # Open the connection to the candidate DB
+        with self.training_data_.candidates:
+            self.training_data_info_["d_features_rt_order"] = \
+                data.candidates._get_feature_dimension(self.mol_feat_retention_order)
+
+            # Set up the dual initial dual vector
+            self.alphas_ = DualVariables(C=self.C, label_space=self.training_data_.get_labelspace(),
+                                         num_init_active_vars=n_init_per_example, random_state=self.random_state)
+            assert self._is_feasible_matrix(self.alphas_, self.C), "Initial dual variables must be feasible."
 
         # Initialize the graphs for each sequence
         self.training_graphs_ = [SpanningTrees(sequence, self.n_trees_per_sequence, i)
@@ -1398,15 +1406,20 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 print("\tStep: %d/%d" % (step + 1, len(_batches)))
 
                 # Find the most violating examples for the current batch
-                res = [self.inference(self.training_data_[i], self.training_graphs_[i],
-                                      loss_augmented=True, return_graphical_model=True)
-                       for i in I_batch]
+                res = Parallel(n_jobs=self.n_jobs)(delayed(self.inference)(
+                    self.training_data_[i], self.training_graphs_[i], loss_augmented=True, return_graphical_model=True)
+                    for i in I_batch)
+
+                # res = [self.inference(self.training_data_[i], self.training_graphs_[i],
+                #                       loss_augmented=True, return_graphical_model=True)
+                #        for i in I_batch]
 
                 y_I_hat = [y_i_hat for y_i_hat, _ in res]
 
                 # Get step-width
                 if self.step_size == "linesearch":
-                    step_size = self._get_step_size_linesearch(I_batch, y_I_hat, [TFG for _, TFG in res])
+                    with self.training_data_.candidates:
+                        step_size = self._get_step_size_linesearch(I_batch, y_I_hat, [TFG for _, TFG in res])
                 else:
                     step_size = self._get_step_size_diminishing(n_iterations_total, N)
                 print("\t%.4f" % step_size)
@@ -1819,7 +1832,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         return [[get_random_spanning_tree(y_seq, random_state=tree) for y_seq in data]
                 for tree in range(n_trees_per_sequence)]
 
-    @lru_cache(maxsize=None)
+    # @lru_cache(maxsize=MAX_CACHE_SIZE)
     def _get_sign_delta(self, tree_index: int):
         N = len(self.training_data_)
 
@@ -1869,33 +1882,25 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         N = len(self.training_data_)
 
         # List of the molecular structures belonging to the active examples, i.e. a(i, y) > 0
-        l_Y_act_sequence = [None for _ in range(N)]  # length = (N, )
-        l_A_Sj = [None for _ in range(N)]
+        l_Y_act_sequence = []  # length = (N, )
+        l_A_Sj = []
         for j in range(N):
             Sj, A_Sj = self.alphas_.get_blocks(j)
             _, Sj = zip(*Sj)  # type: Tuple[Tuple[str, ...]]  # length = number of active sequences for example j
-            l_A_Sj[j] = np.array(A_Sj)
+            l_A_Sj.append(np.array(A_Sj))
 
             # Sj: active labels, i.e. all y in Sigma_j for which a(j, y) > 0
             # A_Sj: dual values, array-like with shape = (|S_j|, )
 
-            l_Y_act_sequence[j] = self.training_data_.candidates.get_molecule_features_by_molecule_id(
-                tuple(it.chain(*Sj)), self.mol_feat_retention_order)
-
-        # print("lambda_delta")
-        # l_lambda_delta = Parallel(n_jobs=4, prefer="threads")(  # prefer="threads"
-        #     delayed(StructuredSVMSequencesFixedMS2._get_lambda_delta)(
-        #         l_Y_act_sequence[j], Y, self.training_graphs_[j][0], self.mol_kernel
-        #     ) for j in range(N))
+            l_Y_act_sequence.append(self.training_data_.candidates.get_molecule_features_by_molecule_id(
+                tuple(it.chain(*Sj)), self.mol_feat_retention_order))
 
         II = np.zeros((len(Y), N))  # shape = (n_molecules, )
         for j in range(N):
-            # print("lambda_delta")
             lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta(
                 l_Y_act_sequence[j], Y, self.training_graphs_[j][0], self.mol_kernel)
 
             # Bring output to shape = (|S_j|, |E_j|, n_molecules)
-            # print("reshape")
             lambda_delta = lambda_delta.reshape(
                 (
                     self.alphas_.n_active(j),
@@ -1903,7 +1908,6 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                     len(Y)
                 ))
 
-            # print("einsum")
             II[:, j] = np.einsum("j,ijk,i",
                                  self.training_data_[j].get_sign_delta_t(self.training_graphs_[j][0]),
                                  lambda_delta,
@@ -1934,14 +1938,15 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             Gs = SpanningTrees(sequence, self.n_trees_per_sequence)
 
         # Calculate the node- and edge-potentials
-        node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, Gs[0], loss_augmented)
+        with sequence.candidates:
+            node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, Gs[0], loss_augmented)
 
-        # Find the MAP estimate
-        TFG, Z_max = self._inference(node_potentials, edge_potentials, Gs[0],
-                                     retention_order_weight=self.retention_order_weight)
+            # Find the MAP estimate
+            TFG, Z_max = self._inference(node_potentials, edge_potentials, Gs[0],
+                                         retention_order_weight=self.retention_order_weight)
 
-        # MAP returns a list of candidate indices, we need to convert them back to actual molecules identifier
-        y_hat = tuple(sequence.get_labelspace(s)[Z_max[s]] for s in Gs[0].nodes)
+            # MAP returns a list of candidate indices, we need to convert them back to actual molecules identifier
+            y_hat = tuple(sequence.get_labelspace(s)[Z_max[s]] for s in Gs[0].nodes)
 
         if return_graphical_model:
             return y_hat, TFG

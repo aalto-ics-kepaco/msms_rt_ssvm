@@ -40,7 +40,7 @@ if __name__ == "__main__":
     seq_sample = SequenceSample(
         spectra, labels,
         RandomSubsetCandidateSQLiteDB(db_fn=DB_FN, molecule_identifier="inchi", random_state=192,
-                                      number_of_candidates=50, include_correct_candidate=True),
+                                      number_of_candidates=50, include_correct_candidate=True, connect_to_db=False),
         N=N, L_min=10,
         L_max=15, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
 
@@ -49,5 +49,5 @@ if __name__ == "__main__":
     ssvm.fit(seq_sample, n_init_per_example=5, summary_writer=None)
 
     # TODO: We somehow should ensure that the database connection is always closed.
-    seq_sample.candidates.close()
+    # seq_sample.candidates.close()q
 

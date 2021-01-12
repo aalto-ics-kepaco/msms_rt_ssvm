@@ -37,7 +37,7 @@ from scipy.sparse import csr_matrix
 from copy import deepcopy
 
 from ssvm.ssvm import _StructuredSVM, StructuredSVMMetIdent, DualVariables, StructuredSVMSequencesFixedMS2
-from ssvm.data_structures import CandidateSQLiteDB, SequenceSample, RandomSubsetCandidateSQLiteDB, SpanningTrees
+from ssvm.data_structures import SequenceSample, RandomSubsetCandidateSQLiteDB, SpanningTrees
 
 DB_FN = "/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_LATEST.db"
 

@@ -31,6 +31,7 @@ import itertools as it
 import networkx as nx
 
 from matchms.Spectrum import Spectrum
+from joblib import Parallel, delayed
 
 from ssvm.data_structures import SequenceSample, CandidateSQLiteDB, RandomSubsetCandidateSQLiteDB
 from ssvm.data_structures import Sequence
@@ -39,6 +40,15 @@ DB_FN = "/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_
 
 
 class TestCandidateSQLiteDB(unittest.TestCase):
+    @staticmethod
+    @delayed
+    def _get_molecule_features_by_molecule_id(candidates, molecule_ids, features):
+        candidates.open()
+        feature_mat = candidates.get_molecule_features_by_molecule_id(molecule_ids, features)
+        candidates.close()
+
+        return feature_mat
+
     def test_get_number_of_candidates(self):
         # ----------
         # SPECTRUM 1
@@ -358,6 +368,29 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         candidates._ensure_molecule_identifier_is_available("inchi")
         candidates._ensure_molecule_identifier_is_available("inchikey")
 
+    def test_parallel_access(self):
+        candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey", connect_to_db=False)
+        molecule_ids = tuple([
+            "FGXWKSZFVQUSTL-UHFFFAOYSA-N",
+            "BFFTVFNQHIJUQT-MRXNPFEDSA-N",
+            "ATFVEXNQLNTOHV-CYBMUJFWSA-N",
+            "BFFTVFNQHIJUQT-INIZCTEOSA-N",
+            "CEJQCDWBMMEZFJ-NKFKGCMQSA-N",
+            "BFFTVFNQHIJUQT-UHFFFAOYSA-N",
+            "ATFVEXNQLNTOHV-ZDUSSCGKSA-N",
+            "CEJQCDWBMMEZFJ-UHFFFAOYSA-N",
+            "AZVUYIUQQIFCQK-UHFFFAOYSA-N"
+        ])
+
+        print("LOAD")
+        res = Parallel(n_jobs=4)(
+            self._get_molecule_features_by_molecule_id(candidates, molecule_ids, "iokr_fps__positive")
+            for _ in range(10000))
+
+        print("TEST")
+        for i in range(len(res)):
+            np.testing.assert_array_equal(res[0], res[i])
+
 
 class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
     def test_get_labelspace(self):
@@ -524,8 +557,8 @@ class TestSequenceSample(unittest.TestCase):
         train_seq, test_seq = seq_sample.get_train_test_split()
 
         # Check length
-        self.assertEqual(7, len(test_seq))
-        self.assertEqual(24, len(train_seq))
+        self.assertEqual(6, len(test_seq))
+        self.assertEqual(25, len(train_seq))
 
         # No intersection of molecules between training and test sequences
         for i, j in it.product(test_seq, train_seq):

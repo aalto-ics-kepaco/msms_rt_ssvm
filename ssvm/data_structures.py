@@ -34,6 +34,7 @@ from functools import lru_cache
 from collections import OrderedDict
 from scipy.io import loadmat
 from typing import List, Tuple, Union, Dict, Optional, Callable
+from sqlalchemy import create_engine
 
 from sklearn.model_selection import GroupKFold, BaseCrossValidator
 from sklearn.utils.validation import check_random_state
@@ -50,6 +51,9 @@ CH = logging.StreamHandler()
 FORMATTER = logging.Formatter('[%(levelname)s] %(name)s : %(message)s')
 CH.setFormatter(FORMATTER)
 LOGGER.addHandler(CH)
+
+# LRU cache parameters
+MAX_CACHE_SIZE = 1
 
 
 class CandidateSetMetIdent(object):
@@ -243,7 +247,7 @@ class Molecule(object):
 
 class CandidateSQLiteDB(object):
     def __init__(self, db_fn: str, cand_def: str = "fixed", molecule_identifier: str = "inchikey",
-                 in_memory: bool = False):
+                 open_db_connection: bool = True):
         """
         :param db_fn:
 
@@ -254,27 +258,17 @@ class CandidateSQLiteDB(object):
         self.db_fn = db_fn
         self.cand_def = cand_def
         self.molecule_identifier = molecule_identifier
+        self.open_db_connection = open_db_connection
 
-        # Open read-only database connection
-        self.db = sqlite3.connect("file:" + self.db_fn + "?mode=ro", uri=True)
-
-        # Load the database into the RAM.
-        if in_memory:
-            self.db_mem = sqlite3.connect(":memory:")
-            self.db.backup(self.db_mem)
-            self.db.close()
-            self.db = self.db_mem
+        if self.open_db_connection:
+            self.db = self.connect_to_db()
+        else:
+            self.db = None
 
         if self.cand_def != "fixed":
             raise NotImplementedError("Currently only fixed candidate set definition supported.")
 
         self._ensure_molecule_identifier_is_available(self.molecule_identifier)
-
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """
-        Exit function for the context manager. Closes the connection to the candidate database.
-        """
-        self.close()
 
     def _get_labelspace_query(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> str:
         """
@@ -374,7 +368,8 @@ class CandidateSQLiteDB(object):
 
         :param molecule_identifier: string, column name of the molecule identifier
         """
-        if molecule_identifier not in pd.read_sql_query("SELECT * FROM molecules LIMIT 1", self.db).columns:
+        if molecule_identifier not in pd.read_sql_query(
+                "SELECT * FROM molecules LIMIT 1", con=create_engine("sqlite:///%s" % self.db_fn)).columns:
             raise ValueError("Molecule identifier '%s' is not available." % molecule_identifier)
 
     def _get_molecule_feature_matrix(self, data: Union[pd.Series, List, Tuple], features: str) -> np.ndarray:
@@ -409,11 +404,43 @@ class CandidateSQLiteDB(object):
 
         return X
 
+    def _get_connection_uri(self) -> str:
+        return "file:" + self.db_fn + "?mode=ro"
+
+    def connect_to_db(self) -> sqlite3.Connection:
+        """
+        Connects to the candidate database in read-only mode.
+        """
+        return sqlite3.connect(self._get_connection_uri(), uri=True)
+
+    def __enter__(self):
+        return self.open()
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """
+        Exit function for the context manager. Closes the connection to the candidate database.
+        """
+        self.close()
+
+    def open(self):
+        """
+        Closes the database connection.
+        """
+        if self.db is None:
+            assert self.open_db_connection
+            self.db = self.connect_to_db()
+
+        return self
+
     def close(self) -> None:
         """
         Closes the database connection.
         """
-        self.db.close()
+        if self.open_db_connection:
+            pass
+        else:
+            self.db.close()
+            self.db = None
 
     def get_n_cand(self, spectrum: Spectrum) -> int:
         """
@@ -454,7 +481,7 @@ class CandidateSQLiteDB(object):
 
         return df_features
 
-    @lru_cache(maxsize=None)
+    @lru_cache(maxsize=MAX_CACHE_SIZE)
     def get_molecule_features_by_molecule_id(self, molecule_ids: Union[List[str], Tuple[str, ...]], features: str,
                                              return_dataframe: bool = False) -> Union[pd.DataFrame, np.ndarray]:
         """
