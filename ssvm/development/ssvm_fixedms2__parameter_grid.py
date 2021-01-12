@@ -142,8 +142,3 @@ if __name__ == "__main__":
         for k in [1, 5, 10, 20]:
             tf.summary.scalar("Top-%02d_acc_test" % k, test_acc_tkmm[k - 1], step=1)  # test, pred
         # tf.summary.scalar("Top-01_map_acc_test", test_acc_t1map, step=1)
-
-    # TODO: We somehow should ensure that the database connection is always closed.
-    training_sequences.candidates.close()
-    test_sequences.candidates.close()
-

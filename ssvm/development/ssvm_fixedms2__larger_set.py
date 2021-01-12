@@ -48,7 +48,3 @@ if __name__ == "__main__":
                                                                 "%d" % np.random.randint(1000)))
 
     ssvm.fit(seq_sample, n_init_per_example=3, summary_writer=None)
-
-    # TODO: We somehow should ensure that the database connection is always closed.
-    seq_sample.candidates.close()
-

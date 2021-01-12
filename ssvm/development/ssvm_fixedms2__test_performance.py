@@ -54,7 +54,3 @@ if __name__ == "__main__":
     ssvm.fit(seq_sample_train, n_init_per_example=3, summary_writer=None)
 
     print(ssvm.score(seq_sample_test, stype="top1_map"))
-
-    # TODO: We somehow should ensure that the database connection is always closed.
-    seq_sample.candidates.close()
-

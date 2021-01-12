@@ -414,33 +414,31 @@ class CandidateSQLiteDB(object):
         return sqlite3.connect(self._get_connection_uri(), uri=True)
 
     def __enter__(self):
-        return self.open()
+        if self.db is None:
+            # Connection is not open --> open it
+            self.db = self.connect_to_db()
+            self._db_connected_in_context_manager = True
+        else:
+            # Connection is already open --> do nothing
+            assert self.init_with_open_db_conn
+            self._db_connected_in_context_manager = False
+
+        return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         """
         Exit function for the context manager. Closes the connection to the candidate database.
         """
-        self.close()
-
-    def open(self):
-        """
-        Closes the database connection.
-        """
-        if self.db is None:
-            assert not self.init_with_open_db_conn
-            self.db = self.connect_to_db()
-
-        return self
+        if self._db_connected_in_context_manager:
+            self.db.close()
+            self.db = None
 
     def close(self) -> None:
         """
         Closes the database connection.
         """
-        if self.init_with_open_db_conn:
-            pass
-        else:
+        if self.db is not None:
             self.db.close()
-            self.db = None
 
     def get_n_cand(self, spectrum: Spectrum) -> int:
         """
