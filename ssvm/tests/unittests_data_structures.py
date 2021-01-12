@@ -43,9 +43,8 @@ class TestCandidateSQLiteDB(unittest.TestCase):
     @staticmethod
     @delayed
     def _get_molecule_features_by_molecule_id(candidates, molecule_ids, features):
-        candidates.open()
-        feature_mat = candidates.get_molecule_features_by_molecule_id(molecule_ids, features)
-        candidates.close()
+        with candidates:
+            feature_mat = candidates.get_molecule_features_by_molecule_id(molecule_ids, features)
 
         return feature_mat
 
@@ -369,7 +368,7 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         candidates._ensure_molecule_identifier_is_available("inchikey")
 
     def test_parallel_access(self):
-        candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey", connect_to_db=False)
+        candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey", init_with_open_db_conn=False)
         molecule_ids = tuple([
             "FGXWKSZFVQUSTL-UHFFFAOYSA-N",
             "BFFTVFNQHIJUQT-MRXNPFEDSA-N",

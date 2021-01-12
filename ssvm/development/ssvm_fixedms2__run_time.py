@@ -43,7 +43,7 @@ if __name__ == "__main__":
     seq_sample = SequenceSample(
         spectra, labels,
         RandomSubsetCandidateSQLiteDB(db_fn=DB_FN, molecule_identifier="inchi", random_state=192,
-                                      number_of_candidates=50, include_correct_candidate=True, connect_to_db=False),
+                                      number_of_candidates=50, include_correct_candidate=True, open_db_connection=False),
         N=N, L_min=10,
         L_max=15, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
 
@@ -64,11 +64,11 @@ if __name__ == "__main__":
         run("minmax", seq_sample, 4)
         t_np_mc += (time.time() - t)
 
-    print("Numba")
-    for _ in range(n_rep):
-        t = time.time()
-        run("minmax_numba", seq_sample, 1)
-        t_numba += (time.time() - t)
+    # print("Numba")
+    # for _ in range(n_rep):
+    #     t = time.time()
+    #     run("minmax_numba", seq_sample, 1)
+    #     t_numba += (time.time() - t)
 
     print("Numpy: %.3fs" % (t_np / n_rep))
     print("Numpy (multicore): %.3fs" % (t_np_mc / n_rep))

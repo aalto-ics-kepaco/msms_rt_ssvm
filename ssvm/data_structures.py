@@ -53,7 +53,7 @@ CH.setFormatter(FORMATTER)
 LOGGER.addHandler(CH)
 
 # LRU cache parameters
-MAX_CACHE_SIZE = 1
+MAX_CACHE_SIZE = 0
 
 
 class CandidateSetMetIdent(object):
@@ -247,7 +247,7 @@ class Molecule(object):
 
 class CandidateSQLiteDB(object):
     def __init__(self, db_fn: str, cand_def: str = "fixed", molecule_identifier: str = "inchikey",
-                 open_db_connection: bool = True):
+                 init_with_open_db_conn: bool = True):
         """
         :param db_fn:
 
@@ -258,9 +258,9 @@ class CandidateSQLiteDB(object):
         self.db_fn = db_fn
         self.cand_def = cand_def
         self.molecule_identifier = molecule_identifier
-        self.open_db_connection = open_db_connection
+        self.init_with_open_db_conn = init_with_open_db_conn
 
-        if self.open_db_connection:
+        if self.init_with_open_db_conn:
             self.db = self.connect_to_db()
         else:
             self.db = None
@@ -427,7 +427,7 @@ class CandidateSQLiteDB(object):
         Closes the database connection.
         """
         if self.db is None:
-            assert self.open_db_connection
+            assert not self.init_with_open_db_conn
             self.db = self.connect_to_db()
 
         return self
@@ -436,7 +436,7 @@ class CandidateSQLiteDB(object):
         """
         Closes the database connection.
         """
-        if self.open_db_connection:
+        if self.init_with_open_db_conn:
             pass
         else:
             self.db.close()
