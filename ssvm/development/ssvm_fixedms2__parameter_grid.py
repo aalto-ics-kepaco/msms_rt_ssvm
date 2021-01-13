@@ -30,6 +30,7 @@ def get_argument_parser() -> argparse.ArgumentParser:
     """
     arg_parser = argparse.ArgumentParser()
 
+    arg_parser.add_argument("--n_jobs", type=int, default=1)
     arg_parser.add_argument("--param_tuple_index", type=int, choices=list(range(N_TOTAL_PAR_TUP)),
                             help="Index of the parameter tuple for which the evaluation should be run.")
     arg_parser.add_argument("--db_fn", type=str,
@@ -88,7 +89,8 @@ if __name__ == "__main__":
     training_sequences = SequenceSample(
         [spectra[idx] for idx in train], [labels[idx] for idx in train],
         RandomSubsetCandidateSQLiteDB(db_fn=args.db_fn, molecule_identifier="inchikey1", random_state=2,
-                                      number_of_candidates=args.max_n_train_candidates, include_correct_candidate=True),
+                                      number_of_candidates=args.max_n_train_candidates, include_correct_candidate=True,
+                                      init_with_open_db_conn=False),
         N=args.n_samples_train,
         L_min=5,
         L_max=20,
@@ -118,7 +120,7 @@ if __name__ == "__main__":
         mol_feat_label_loss="iokr_fps__positive", mol_feat_retention_order="substructure_count",
         mol_kernel=args.mol_kernel, C=hparams[HP_C], step_size=args.stepsize, batch_size=hparams[HP_BATCH_SIZE],
         n_epochs=args.n_epochs, label_loss="tanimoto_loss", random_state=1993,
-        retention_order_weight=hparams[HP_RT_WEIGHT]
+        retention_order_weight=hparams[HP_RT_WEIGHT], n_jobs=args.n_jobs
     ).fit(training_sequences, n_init_per_example=hparams[HP_NUM_INIT_ACT_VAR], summary_writer=summary_writer)
 
     # ====================
@@ -127,7 +129,7 @@ if __name__ == "__main__":
     print("EVALUATION", flush=True)
     test_sequences = SequenceSample(
         [spectra[idx] for idx in test], [labels[idx] for idx in test],
-        CandidateSQLiteDB(db_fn=args.db_fn, molecule_identifier="inchikey1"),
+        CandidateSQLiteDB(db_fn=args.db_fn, molecule_identifier="inchikey1", init_with_open_db_conn=False),
         N=args.n_samples_test,
         L_min=30,
         L_max=50,
