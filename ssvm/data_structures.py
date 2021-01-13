@@ -35,15 +35,14 @@ from collections import OrderedDict
 from scipy.io import loadmat
 from typing import List, Tuple, Union, Dict, Optional, Callable
 from sqlalchemy import create_engine
-
 from sklearn.model_selection import GroupKFold, BaseCrossValidator
 from sklearn.utils.validation import check_random_state
 from sklearn.preprocessing import MinMaxScaler
+from matchms.Spectrum import Spectrum
 
+import ssvm.cfg
 from ssvm.kernel_utils import tanimoto_kernel
 from ssvm.factor_graphs import get_random_spanning_tree
-
-from matchms.Spectrum import Spectrum
 
 # Setup the Logger
 LOGGER = logging.getLogger(__name__)
@@ -51,9 +50,6 @@ CH = logging.StreamHandler()
 FORMATTER = logging.Formatter('[%(levelname)s] %(name)s : %(message)s')
 CH.setFormatter(FORMATTER)
 LOGGER.addHandler(CH)
-
-# LRU cache parameters
-MAX_CACHE_SIZE = 0
 
 
 class CandidateSetMetIdent(object):
@@ -450,7 +446,6 @@ class CandidateSQLiteDB(object):
         """
         return len(self.get_labelspace(spectrum))
 
-    # TODO: Use the lru_cache here!
     def get_molecule_features(self, spectrum: Spectrum, features: str, return_dataframe: bool = False) \
             -> Union[np.ndarray, pd.DataFrame]:
         """
@@ -479,7 +474,7 @@ class CandidateSQLiteDB(object):
 
         return df_features
 
-    @lru_cache(maxsize=MAX_CACHE_SIZE)
+    @lru_cache(maxsize=ssvm.cfg.LRU_CACHE_MAX_SIZE)
     def get_molecule_features_by_molecule_id(self, molecule_ids: Union[List[str], Tuple[str, ...]], features: str,
                                              return_dataframe: bool = False) -> Union[pd.DataFrame, np.ndarray]:
         """

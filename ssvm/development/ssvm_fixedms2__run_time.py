@@ -22,7 +22,8 @@ def run(mol_kernel, seq_sample, n_jobs):
 
 
 if __name__ == "__main__":
-    DB_FN = "/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_LATEST.db"
+    # DB_FN = "/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_LATEST.db"
+    DB_FN = "/home/bach/tmp/DB_LATEST.db"
 
     # ===================
     # Get list of Spectra
@@ -39,11 +40,12 @@ if __name__ == "__main__":
 
     db.close()
 
-    N = 48
+    N = 24
     seq_sample = SequenceSample(
         spectra, labels,
         RandomSubsetCandidateSQLiteDB(db_fn=DB_FN, molecule_identifier="inchi", random_state=192,
-                                      number_of_candidates=50, include_correct_candidate=True, open_db_connection=False),
+                                      number_of_candidates=50, include_correct_candidate=True,
+                                      init_with_open_db_conn=False),
         N=N, L_min=10,
         L_max=15, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
 
@@ -51,6 +53,9 @@ if __name__ == "__main__":
     t_np = 0.0
     t_np_mc = 0.0
     t_numba = 0.0
+
+    print("Fill cache")
+    run("minmax", seq_sample, 1)
 
     print("Numpy")
     for _ in range(n_rep):

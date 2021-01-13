@@ -39,11 +39,14 @@ from sklearn.metrics import ndcg_score
 from scipy.sparse import csc_matrix, lil_matrix, csr_matrix
 from tqdm import tqdm
 from joblib.parallel import Parallel, delayed
+from joblib.memory import Memory
 
 from msmsrt_scorer.lib.exact_solvers import TreeFactorGraph
 from msmsrt_scorer.lib.evaluation_tools import get_topk_performance_from_scores as get_topk_performance_from_marginals
 
+import ssvm.cfg
 from ssvm.data_structures import SequenceSample, CandidateSetMetIdent, Sequence, LabeledSequence, SpanningTrees
+from ssvm.data_structures import CandidateSQLiteDB
 from ssvm.loss_functions import hamming_loss, tanimoto_loss
 from ssvm.evaluation_tools import get_topk_performance_csifingerid
 from ssvm.factor_graphs import get_random_spanning_tree
@@ -52,8 +55,17 @@ from ssvm.kernel_utils import tanimoto_kernel, minmax_kernel_1__numba, generaliz
 
 DUALVARIABLES_T = TypeVar('DUALVARIABLES_T', bound='DualVariables')
 
-# LRU cache parameters
-MAX_CACHE_SIZE = None
+JOBLIB_CACHE = Memory(ssvm.cfg.JOBLIB_MEMORY_CACHE_LOCATION, verbose=0)
+
+
+@JOBLIB_CACHE.cache(ignore=["candidates"], mmap_mode="r")
+def get_molecule_features_by_molecule_id_CACHED(candidates: CandidateSQLiteDB, molecule_ids: Tuple[str, ...],
+                                                features: str) -> np.ndarray:
+    """
+    Function to load molecular features by molecule IDs from the candidate database. The method of the CandidateDB class
+    is wrapped here to allow for caching.
+    """
+    return candidates.get_molecule_features_by_molecule_id(molecule_ids, features)
 
 
 class DualVariables(object):
@@ -1444,7 +1456,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                                            "active_variables": self.alphas_.n_active()},
                                        summary_writer=summary_writer)
 
-                print(self.training_data_.candidates.get_molecule_features_by_molecule_id.cache_info())
+                # print(self.training_data_.candidates.get_molecule_features_by_molecule_id.cache_info())
                 print(flush=True)
 
             if summary_writer is not None:
@@ -1552,21 +1564,24 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             l_Gs = [None for _ in data]
 
         if stype == "top1_mm":
-            scores = [self.top1_score(sequence, Gs=Gs) for sequence, Gs in zip(data, l_Gs)]
+            scores = Parallel(n_jobs=self.n_jobs)(
+                delayed(self.top1_score)(sequence, Gs=Gs) for sequence, Gs in zip(data, l_Gs))
         elif stype == "top1_map":
-            scores = [self.top1_score(sequence, Gs=Gs, map=True) for sequence, Gs in zip(data, l_Gs)]
+            scores = Parallel(n_jobs=self.n_jobs)(
+                delayed(self.top1_score)(sequence, Gs=Gs, map=True) for sequence, Gs in zip(data, l_Gs))
         elif stype == "topk_mm":
             return_percentage = kwargs.get("return_percentage", True)
             max_k = kwargs.get("max_k", 50)
-            scores = [
-                self.topk_score(
-                    sequence, Gs=Gs, return_percentage=return_percentage, max_k=max_k,  pad_output=True)
-                for sequence, Gs in zip(data, l_Gs)
-            ]
+            scores = Parallel(n_jobs=self.n_jobs)(
+                delayed(self.topk_score)(
+                    sequence, Gs=Gs, return_percentage=return_percentage, max_k=max_k,  pad_output=True
+                ) for sequence, Gs in zip(data, l_Gs))
         elif stype == "ndcg_ll":
-            scores = [self.ndcg_score(sequence, Gs=Gs, use_label_loss=True) for sequence, Gs in zip(data, l_Gs)]
+            scores = Parallel(n_jobs=self.n_jobs)(
+                delayed(self.ndcg_score)(sequence, Gs=Gs, use_label_loss=True) for sequence, Gs in zip(data, l_Gs))
         elif stype == "ndcg_ohc":
-            scores = [self.ndcg_score(sequence, Gs=Gs, use_label_loss=False) for sequence, Gs in zip(data, l_Gs)]
+            scores = Parallel(n_jobs=self.n_jobs)(
+                delayed(self.ndcg_score)(sequence, Gs=Gs, use_label_loss=False) for sequence, Gs in zip(data, l_Gs))
         else:
             raise ValueError("Invalid scoring type: '%s'." % stype)
 
@@ -1686,28 +1701,30 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             v[idx] = 1
             return v
 
-        # Calculate the marginals
-        marginals = self.predict(sequence, Gs=Gs, map=False)
+        with sequence.candidates:
+            # Calculate the marginals
+            marginals = self.predict(sequence, Gs=Gs, map=False)
 
-        # Get the ground-truth relevance for the ranked lists
-        if use_label_loss:
-            # 1 - label_loss
-            gt_relevance = [
-                1 - sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s)
-                for s in marginals
-            ]
-        else:
-            # One-hot-encoding of the positive of the correct molecular structure
-            gt_relevance = [
-                _one_hot_vector(marginals[s]["label"].index(sequence.get_labels(s)), marginals[s]["n_cand"])
-                for s in marginals
-            ]
+            # Get the ground-truth relevance for the ranked lists
+            if use_label_loss:
+                # 1 - label_loss
+                gt_relevance = [
+                    1 - sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s)
+                    for s in marginals
+                ]
+            else:
+                # One-hot-encoding of the positive of the correct molecular structure
+                gt_relevance = [
+                    _one_hot_vector(marginals[s]["label"].index(sequence.get_labels(s)), marginals[s]["n_cand"])
+                    for s in marginals
+                ]
 
-        # Calculate the NDCG averaged over the sequence
-        scores = np.ones(len(marginals))
-        for s in marginals:
-            if len(marginals[s]["score"]) > 1:
-                scores[s] = ndcg_score(gt_relevance[s][np.newaxis, :], marginals[s]["score"][np.newaxis, :])
+            # Calculate the NDCG averaged over the sequence
+            scores = np.ones(len(marginals))
+            for s in marginals:
+                if len(marginals[s]["score"]) > 1:
+                    scores[s] = ndcg_score(gt_relevance[s][np.newaxis, :], marginals[s]["score"][np.newaxis, :])
+
         return scores.mean().item()
 
     def _get_step_size_linesearch(self, I_batch: List[int], y_I_hat: List[Tuple[str, ...]],
@@ -1754,8 +1771,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 nom += fac * TFG.likelihood(Z, log=False)  # fac = s(i, y) - a(i, y)
 
                 # Load the molecular features for the active sequence y
-                l_mol_features[idx][y] = self.training_data_.candidates.get_molecule_features_by_molecule_id(
-                    tuple(y), self.mol_feat_retention_order)
+                l_mol_features[idx][y] = get_molecule_features_by_molecule_id_CACHED(
+                    self.training_data_.candidates, tuple(y), self.mol_feat_retention_order)
 
         # ================
         # Denominator
@@ -1832,7 +1849,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         return [[get_random_spanning_tree(y_seq, random_state=tree) for y_seq in data]
                 for tree in range(n_trees_per_sequence)]
 
-    # @lru_cache(maxsize=MAX_CACHE_SIZE)
+    @lru_cache(maxsize=ssvm.cfg.LRU_CACHE_MAX_SIZE)
     def _get_sign_delta(self, tree_index: int):
         N = len(self.training_data_)
 
@@ -1857,7 +1874,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         # List of the ground truth molecular structures for all examples j
         l_Y_gt_sequence = [
-            self.training_data_[j].get_molecule_features_for_labels(self.mol_feat_retention_order) for j in range(N)
+            self._get_molecule_features_for_labels(self.training_data_[j], self.mol_feat_retention_order)
+            for j in range(N)
             # shape = (|E_j|, n_features)
         ]
         lambda_delta = np.vstack([
@@ -1892,8 +1910,15 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             # Sj: active labels, i.e. all y in Sigma_j for which a(j, y) > 0
             # A_Sj: dual values, array-like with shape = (|S_j|, )
 
-            l_Y_act_sequence.append(self.training_data_.candidates.get_molecule_features_by_molecule_id(
-                tuple(it.chain(*Sj)), self.mol_feat_retention_order))
+            # l_Y_act_sequence.append(np.vstack([
+            #     get_molecule_features_by_molecule_id_CACHED(
+            #         self.training_data_.candidates, tuple(Sj_k), self.mol_feat_retention_order)  # type: np.ndarray
+            #     # array-like, shape = (|E_j|, n_features)
+            #     for Sj_k in Sj   # type: List[np.ndarray]  # length = |S_j|
+            # ]))
+
+            l_Y_act_sequence.append(get_molecule_features_by_molecule_id_CACHED(
+                self.training_data_.candidates, tuple(it.chain(*Sj)), self.mol_feat_retention_order))
 
         II = np.zeros((len(Y), N))  # shape = (n_molecules, )
         for j in range(N):
@@ -1973,11 +1998,14 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         if Gs is None:
             Gs = SpanningTrees(sequence, self.n_trees_per_sequence)
 
-        node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, Gs[0])
+        with sequence.candidates:
+            node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, Gs[0])
 
-        # Calculate the max-max_marginals
-        return self._max_marginals(sequence, node_potentials, edge_potentials, Gs[0], normalize=True,
-                                   retention_order_weight=self.retention_order_weight)
+            # Calculate the max-marginals
+            mm = self._max_marginals(sequence, node_potentials, edge_potentials, Gs[0], normalize=True,
+                                     retention_order_weight=self.retention_order_weight)
+
+        return mm
 
     # def _get_node_and_edge_potentials_OLD(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph,
     #                                       loss_augmented: bool = False):
@@ -2218,3 +2246,10 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             out = Ky[list(bS)] - Ky[list(bT)]
 
         return out
+
+    @staticmethod
+    def _get_molecule_features_for_labels(sequence: LabeledSequence, features: str) -> np.ndarray:
+        """
+        TODO
+        """
+        return get_molecule_features_by_molecule_id_CACHED(sequence.candidates, tuple(sequence.labels), features)
