@@ -1422,10 +1422,6 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                     self.training_data_[i], self.training_graphs_[i], loss_augmented=True, return_graphical_model=True)
                     for i in I_batch)
 
-                # res = [self.inference(self.training_data_[i], self.training_graphs_[i],
-                #                       loss_augmented=True, return_graphical_model=True)
-                #        for i in I_batch]
-
                 y_I_hat = [y_i_hat for y_i_hat, _ in res]
 
                 # Get step-width
@@ -1963,7 +1959,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             Gs = SpanningTrees(sequence, self.n_trees_per_sequence)
 
         # Calculate the node- and edge-potentials
-        with sequence.candidates:
+        with sequence.candidates, self.training_data_.candidates:
             node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, Gs[0], loss_augmented)
 
             # Find the MAP estimate
@@ -1998,7 +1994,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         if Gs is None:
             Gs = SpanningTrees(sequence, self.n_trees_per_sequence)
 
-        with sequence.candidates:
+        with sequence.candidates, self.training_data_.candidates:
             node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, Gs[0])
 
             # Calculate the max-marginals
