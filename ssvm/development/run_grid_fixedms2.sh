@@ -12,7 +12,7 @@
 PROJECTDIR="/scratch/cs/kepaco/bache1/projects/rt_msms_ssvm/"
 DB_DIR="$PROJECTDIR/_CASMI_DB/"
 DB_FN="DB_LATEST.db"
-LOGDIR="$PROJECTDIR/src/ssvm/development/logs_triton/fixedms2"
+LOGDIR="$PROJECTDIR/src/ssvm/development/logs_triton/fixedms2_multicore"
 SCRIPTPATH="$PROJECTDIR/src/ssvm/development/ssvm_fixedms2__parameter_grid.py"
 
 # Load the conda environment

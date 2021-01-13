@@ -416,7 +416,6 @@ class CandidateSQLiteDB(object):
             self._db_connected_in_context_manager = True
         else:
             # Connection is already open --> do nothing
-            assert self.init_with_open_db_conn
             self._db_connected_in_context_manager = False
 
         return self
