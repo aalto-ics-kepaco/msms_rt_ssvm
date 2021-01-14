@@ -33,14 +33,15 @@ if __name__ == "__main__":
     # ===================
     ssvm = StructuredSVMSequencesFixedMS2(
         mol_feat_label_loss="iokr_fps__positive", mol_feat_retention_order="substructure_count",
-        mol_kernel="minmax", C=2, step_size="linesearch", batch_size=8, n_epochs=3, label_loss="tanimoto_loss",
+        mol_kernel="minmax", C=16, step_size="linesearch", batch_size=8, n_epochs=5, label_loss="tanimoto_loss",
         random_state=1993, retention_order_weight=0.5)
 
     N = 24
     seq_sample = SequenceSample(
         spectra, labels,
         RandomSubsetCandidateSQLiteDB(db_fn=DB_FN, molecule_identifier="inchi", random_state=192,
-                                      number_of_candidates=50, include_correct_candidate=True, connect_to_db=False),
+                                      number_of_candidates=50, include_correct_candidate=True,
+                                      init_with_open_db_conn=False),
         N=N, L_min=10,
         L_max=15, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
 

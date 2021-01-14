@@ -1764,7 +1764,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             # Go over the active "dual" variables: s(i, y) - a(s, y) != 0
             for y, fac in s_minus_a.iter(i):
                 Z = self.label_sequence_to_Z(y, self.training_data_[i].get_labelspace())
-                nom += fac * TFG.likelihood(Z, log=False)  # fac = s(i, y) - a(i, y)
+                nom += fac * TFG.likelihood(Z, log=True)  # fac = s(i, y) - a(i, y)
 
                 # Load the molecular features for the active sequence y
                 l_mol_features[idx][y] = get_molecule_features_by_molecule_id_CACHED(
@@ -1784,9 +1784,9 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
             for y, fac in s_minus_a.iter(i):
                 L_yy = self.mol_kernel(l_mol_features[idx][y], l_mol_features[idx][y])
-                den += sign_delta_t_i_T_P_i @ L_yy @ sign_delta_t_i_T_P_i
+                den += fac**2 * sign_delta_t_i_T_P_i @ L_yy @ sign_delta_t_i_T_P_i
 
-        # Go iver all i,j for which i != j. Note (i, j) gets the same values as (j, i)
+        # Go over all (i, j) for which i != j. Note (i, j) gets the same values as (j, i)
         for idx_i, i in enumerate(I_batch):
             sign_delta_t_i_T_P_i = l_sign_delta_t[idx_i] @ l_P[idx_i]
 
@@ -1906,13 +1906,6 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             # Sj: active labels, i.e. all y in Sigma_j for which a(j, y) > 0
             # A_Sj: dual values, array-like with shape = (|S_j|, )
 
-            # l_Y_act_sequence.append(np.vstack([
-            #     get_molecule_features_by_molecule_id_CACHED(
-            #         self.training_data_.candidates, tuple(Sj_k), self.mol_feat_retention_order)  # type: np.ndarray
-            #     # array-like, shape = (|E_j|, n_features)
-            #     for Sj_k in Sj   # type: List[np.ndarray]  # length = |S_j|
-            # ]))
-
             l_Y_act_sequence.append(get_molecule_features_by_molecule_id_CACHED(
                 self.training_data_.candidates, tuple(it.chain(*Sj)), self.mol_feat_retention_order))
 
@@ -2003,59 +1996,6 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         return mm
 
-    # def _get_node_and_edge_potentials_OLD(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph,
-    #                                       loss_augmented: bool = False):
-    #     """
-    #
-    #     :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
-    #
-    #     :param G: networkx.Graph, random spanning tree of the MRF defined over the (MS, RT)-sequence.
-    #
-    #     :param loss_augmented: boolean, indicating whether the node potentials should be augmented with the label loss.
-    #         Set this option to True during model parameter estimation.
-    #
-    #     :return: tuple (
-    #         OrderedDict: key = nodes of G, values {"log_score": node scores, "n_cand": size of the label space},
-    #         nested dictionary: key = nodes of G, (nested) key = nodes of G (<- edges): (nested) values: transition
-    #             matrices
-    #     )
-    #     """
-    #     # Calculate the node potentials. If needed, augment the MS scores with the label loss
-    #     node_potentials = OrderedDict()
-    #     for s in G.nodes:  # V
-    #         _score = np.array(sequence.get_ms2_scores(s))  # S(x_i, y) with shape (n_candidates_s, )
-    #
-    #         if loss_augmented:
-    #             _score += sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s) / len(sequence)
-    #             # Delta_i(y)
-    #
-    #         node_potentials[s] = {"log_score": _score, "n_cand": len(_score)}
-    #
-    #     # Calculate the edge potentials
-    #     edge_potentials = OrderedDict()
-    #     for s, t in G.edges:
-    #         if s not in edge_potentials:
-    #             edge_potentials[s] = OrderedDict()
-    #
-    #         edge_potentials[s][t] = {
-    #             "log_score": self._get_edge_potentials(
-    #                 # Retention times
-    #                 sequence.get_retention_time(s),
-    #                 sequence.get_retention_time(t),
-    #                 # Molecule features used for the retention order prediction
-    #                 sequence.get_molecule_features_for_candidates(self.mol_feat_retention_order, s),
-    #                 sequence.get_molecule_features_for_candidates(self.mol_feat_retention_order, t))
-    #         }
-    #
-    #         # As we do not know in which direction the edges are traversed during the message passing, we need to add
-    #         # the transition matrices for both directions, i.e. s -> t and t -> s.
-    #         if t not in edge_potentials:
-    #             edge_potentials[t] = OrderedDict()
-    #
-    #         edge_potentials[t][s] = {"log_score": edge_potentials[s][t]["log_score"].T}
-    #
-    #     return node_potentials, edge_potentials
-
     def _get_node_and_edge_potentials(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph,
                                       loss_augmented: bool = False):
         """
@@ -2079,7 +2019,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             _score = np.array(sequence.get_ms2_scores(s))  # S(x_i, y) with shape (n_candidates_s, )
 
             if loss_augmented:
-                _score += sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s) / len(sequence)
+                _score += sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s)
                 # Delta_i(y)
 
             node_potentials[s] = {"log_score": _score, "n_cand": len(_score)}
