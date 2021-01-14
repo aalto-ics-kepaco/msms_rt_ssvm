@@ -314,7 +314,7 @@ class CandidateSQLiteDB(object):
         :param candidate_subset:
         :return:
         """
-        query = "SELECT m.%s AS identifier, score AS ms2_score" \
+        query = "SELECT m.%s AS identifier, MAX(score) AS ms2_score" \
                 "   FROM (SELECT * FROM candidates_spectra WHERE candidates_spectra.spectrum IS '%s') cs" \
                 "   INNER JOIN molecules m ON m.inchi = cs.candidate" \
                 "   LEFT OUTER JOIN (" \
