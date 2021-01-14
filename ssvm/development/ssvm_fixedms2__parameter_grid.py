@@ -64,6 +64,7 @@ if __name__ == "__main__":
         HP_NUM_INIT_ACT_VAR: HP_GRID[args.param_tuple_index][2],
         HP_RT_WEIGHT: HP_GRID[args.param_tuple_index][3]
     }
+    print(hparams)
 
     # ===================
     # Get list of Spectra
