@@ -3,9 +3,9 @@
 # We should reserve at least 12GB of RAM for the candidate database
 
 #SBATCH --cpus-per-task=32 --mem-per-cpu=2000
-#SBATCH --time=08:00:00
+#SBATCH --time=04:00:00
 # -- SBATCH --time=01:00:00 --partition=debug
-#SBATCH --array=0-44
+#SBATCH --array=0-2,4,5,7,8,10,11,13,14,16,17,19,20,22,23,25,26,28,29,31,32,34,35,37,38,40,41,43,44
 # -- SBATCH --array=4
 
 N_THREADS=4
@@ -14,7 +14,7 @@ N_JOBS=8
 PROJECTDIR="/scratch/cs/kepaco/bache1/projects/rt_msms_ssvm/"
 DB_DIR="$PROJECTDIR/_CASMI_DB/"
 DB_FN="DB_LATEST.db"
-LOGDIR="$PROJECTDIR/src/ssvm/development/logs_triton/fixedms2_linesearch_fix_IOKR/"
+LOGDIR="$PROJECTDIR/src/ssvm/development/logs_triton/fixedms2_rtw_fix/"
 SCRIPTPATH="$PROJECTDIR/src/ssvm/development/ssvm_fixedms2__parameter_grid.py"
 
 # Load the conda environment
@@ -41,5 +41,6 @@ NUMBA_NUM_THREADS=$N_THREADS;OMP_NUM_THREADS=$N_THREADS;OPENBLAS_NUM_THREADS=$N_
   --n_samples_train=250 \
   --n_samples_test=250 \
   --n_epoch=6 \
-  --ms2scorer="IOKR__696a17f3" \
   --mol_kernel="minmax_numba"
+
+# --ms2scorer="IOKR__696a17f3" \
