@@ -1,3 +1,4 @@
+import sys
 import sqlite3
 import os
 import pandas as pd
@@ -30,6 +31,7 @@ def get_argument_parser() -> argparse.ArgumentParser:
     """
     arg_parser = argparse.ArgumentParser()
 
+    arg_parser.add_argument("--only_show_grid_param_ids", action="store_true")
     arg_parser.add_argument("--n_jobs", type=int, default=1)
     arg_parser.add_argument("--param_tuple_index", type=int, choices=list(range(N_TOTAL_PAR_TUP)),
                             help="Index of the parameter tuple for which the evaluation should be run.")
@@ -57,6 +59,13 @@ if __name__ == "__main__":
     # Parse arguments
     # ===================
     args = get_argument_parser().parse_args()
+
+    if args.only_show_grid_param_ids:
+        print("idx (C, bsize, ninit, rtw)")
+        for idx, hp in enumerate(HP_GRID):
+            print(idx, hp)
+
+        sys.exit(0)
 
     hparams = {
         HP_C: HP_GRID[args.param_tuple_index][0],

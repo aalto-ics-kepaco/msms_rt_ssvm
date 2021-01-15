@@ -1329,6 +1329,19 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         self.retention_order_weight = retention_order_weight
         self.n_jobs = n_jobs
 
+        if self.retention_order_weight is None:
+            self.D_rt = 1.0
+            self.D_ms = 1.0
+        elif np.isscalar(self.retention_order_weight):
+            if not (0 <= self.retention_order_weight <= 1):
+                raise ValueError("The retention order weight must be in [0, 1].")
+
+            # Define the weight on the retention order and mass spectra scores
+            self.D_rt = self.retention_order_weight
+            self.D_ms = 1.0 - self.D_rt
+        else:
+            raise ValueError("The retention order weight must be either a scalar or None.")
+
         if self.n_trees_per_sequence > 1:
             raise ValueError("Currently only a single spanning tree per sequence is supported.")
 
@@ -1956,8 +1969,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, Gs[0], loss_augmented)
 
             # Find the MAP estimate
-            TFG, Z_max = self._inference(node_potentials, edge_potentials, Gs[0],
-                                         retention_order_weight=self.retention_order_weight)
+            TFG, Z_max = self._inference(node_potentials, edge_potentials, Gs[0])
 
             # MAP returns a list of candidate indices, we need to convert them back to actual molecules identifier
             y_hat = tuple(sequence.get_labelspace(s)[Z_max[s]] for s in Gs[0].nodes)
@@ -1991,8 +2003,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, Gs[0])
 
             # Calculate the max-marginals
-            mm = self._max_marginals(sequence, node_potentials, edge_potentials, Gs[0], normalize=True,
-                                     retention_order_weight=self.retention_order_weight)
+            mm = self._max_marginals(sequence, node_potentials, edge_potentials, Gs[0], normalize=True)
 
         return mm
 
@@ -2016,7 +2027,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         # Calculate the node potentials. If needed, augment the MS scores with the label loss
         node_potentials = OrderedDict()
         for s in G.nodes:  # V
-            _score = np.array(sequence.get_ms2_scores(s))  # S(x_i, y) with shape (n_candidates_s, )
+            _score = self.D_ms * np.array(sequence.get_ms2_scores(s))  # S(x_i, y) with shape (n_candidates_s, )
 
             if loss_augmented:
                 _score += sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s)
@@ -2039,7 +2050,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 edge_potentials[s] = OrderedDict()
 
             edge_potentials[s][t] = {
-                "log_score": self._get_edge_potentials(
+                "log_score": self.D_rt * self._get_edge_potentials(
                     # Retention times
                     sequence.get_retention_time(s),
                     sequence.get_retention_time(t),
@@ -2096,27 +2107,27 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
     @staticmethod
     def _max_marginals(sequence: Union[Sequence, LabeledSequence], node_potentials: OrderedDict, edge_potentials: Dict,
-                       G: nx.Graph, normalize=True, retention_order_weight: float = 0.5):
+                       G: nx.Graph, normalize=True):
         """
         Max-max_marginals
         """
         # Calculate the normalized max-max_marginals
         marg = TreeFactorGraph(candidates=node_potentials, var_conn_graph=G, make_order_probs=None,
-                               order_probs=edge_potentials, D=retention_order_weight) \
+                               order_probs=edge_potentials, D=None) \
             .max_product() \
             .get_max_marginals(normalize)
 
         return {s: {"label": sequence.get_labelspace(s), "score": marg[s], "n_cand": len(marg[s])} for s in G.nodes}
 
     @staticmethod
-    def _inference(node_potentials: OrderedDict, edge_potentials: Dict, G: nx.Graph, retention_order_weight: float = 0.5) \
+    def _inference(node_potentials: OrderedDict, edge_potentials: Dict, G: nx.Graph) \
             -> Tuple[TreeFactorGraph, List[List[int]]]:
         """
         MAP inference
         """
         # MAP inference (find most likely label sequence) for the given node- and edge-potentials
         TFG = TreeFactorGraph(candidates=node_potentials, var_conn_graph=G, make_order_probs=None,
-                              order_probs=edge_potentials, D=retention_order_weight)
+                              order_probs=edge_potentials, D=None)
         Z_max, _ = TFG.MAP_only()
 
         return TFG, Z_max

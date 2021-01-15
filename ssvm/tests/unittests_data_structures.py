@@ -564,5 +564,39 @@ class TestSequenceSample(unittest.TestCase):
             self.assertTrue(len(set(i.labels) & set(j.labels)) == 0)
 
 
+class TestBugsAndWiredStuff(unittest.TestCase):
+    def setUp(self) -> None:
+        self.db = sqlite3.connect("file:" + DB_FN + "?mode=ro", uri=True)
+
+        # Read in spectra and labels
+        res = pd.read_sql_query("SELECT spectrum, molecule, rt, challenge FROM challenges_spectra "
+                                "   INNER JOIN spectra s ON s.name = challenges_spectra.spectrum", con=self.db)
+        self.spectra = [Spectrum(np.array([]), np.array([]),
+                                 {"spectrum_id": spec_id, "retention_time": rt, "dataset": chlg})
+                        for (spec_id, rt, chlg) in zip(res["spectrum"], res["rt"], res["challenge"])]
+        self.labels = res["molecule"].to_list()
+
+        self.db.close()
+
+    def test_different_candidates_sets_between_ms2scorer(self):
+        from sklearn.model_selection import GroupShuffleSplit
+        _, test = next(
+            GroupShuffleSplit(test_size=0.2, random_state=10).split(np.arange(len(self.spectra)), groups=self.labels))
+
+        test_sequences_metfrag = SequenceSample(
+            [self.spectra[idx] for idx in test], [self.labels[idx] for idx in test],
+            CandidateSQLiteDB(db_fn=DB_FN, molecule_identifier="inchikey1", init_with_open_db_conn=True),
+            N=50, L_min=30, L_max=50, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
+
+        test_sequences_iokr = SequenceSample(
+            [self.spectra[idx] for idx in test], [self.labels[idx] for idx in test],
+            CandidateSQLiteDB(db_fn=DB_FN, molecule_identifier="inchikey1", init_with_open_db_conn=True),
+            N=50, L_min=30, L_max=50, random_state=19, ms2scorer="IOKR__696a17f3")
+
+        for idx in range(len(test_sequences_metfrag)):
+            self.assertListEqual(test_sequences_metfrag[idx].get_labelspace(),
+                                 test_sequences_iokr[idx].get_labelspace())
+
+
 if __name__ == '__main__':
     unittest.main()
