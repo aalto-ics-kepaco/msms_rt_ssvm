@@ -10,7 +10,7 @@ from ssvm.data_structures import RandomSubsetCandidateSQLiteDB, SequenceSample
 from ssvm.ssvm import StructuredSVMSequencesFixedMS2
 
 if __name__ == "__main__":
-    tf_summary_base_dir = "/home/bach/Documents/doctoral/projects/rt_msms_ssvm/src/ssvm/development/logs"
+    tf_summary_base_dir = "/home/bach/Documents/doctoral/projects/msms_rt_ssvm/ssvm/development/logs"
     DB_FN = "/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_LATEST.db"
 
     # ===================
@@ -32,8 +32,8 @@ if __name__ == "__main__":
     # Setup a SSVM
     # ===================
     ssvm = StructuredSVMSequencesFixedMS2(
-        mol_feat_label_loss="iokr_fps__positive", mol_feat_retention_order="substructure_count",
-        mol_kernel="minmax", C=16, step_size="linesearch", batch_size=8, n_epochs=5, label_loss="tanimoto_loss",
+        mol_feat_label_loss="iokr_fps__count", mol_feat_retention_order="substructure_count",
+        mol_kernel="minmax", C=16, step_size="linesearch", batch_size=8, n_epochs=5, label_loss="minmax_loss",
         random_state=1993, retention_order_weight=0.5)
 
     N = 24

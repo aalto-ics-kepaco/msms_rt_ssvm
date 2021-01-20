@@ -47,7 +47,7 @@ from msmsrt_scorer.lib.evaluation_tools import get_topk_performance_from_scores 
 import ssvm.cfg
 from ssvm.data_structures import SequenceSample, CandidateSetMetIdent, Sequence, LabeledSequence, SpanningTrees
 from ssvm.data_structures import CandidateSQLiteDB
-from ssvm.loss_functions import hamming_loss, tanimoto_loss
+from ssvm.loss_functions import hamming_loss, tanimoto_loss, minmax_loss
 from ssvm.evaluation_tools import get_topk_performance_csifingerid
 from ssvm.factor_graphs import get_random_spanning_tree
 from ssvm.kernel_utils import tanimoto_kernel, minmax_kernel_1__numba, generalized_tanimoto_kernel_FAST
@@ -499,8 +499,10 @@ class _StructuredSVM(object):
             self.label_loss_fun = hamming_loss
         elif self.label_loss == "tanimoto_loss":
             self.label_loss_fun = tanimoto_loss
+        elif self.label_loss == "minmax_loss":
+            self.label_loss_fun = minmax_loss
         else:
-            raise ValueError("Invalid label loss '%s'. Choices are 'hamming' and 'tanimoto_loss'.")
+            raise ValueError("Invalid label loss '%s'. Choices are 'hamming', 'tanimoto_loss' and 'minmax_loss'.")
 
         if self.step_size not in ["diminishing", "linesearch"]:
             raise ValueError("Invalid stepsize method '%s'. Choices are 'diminishing' and 'linesearch'." %

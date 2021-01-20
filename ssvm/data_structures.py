@@ -385,12 +385,9 @@ class CandidateSQLiteDB(object):
         d = self._get_feature_dimension(features)
         X = np.zeros((n, d))
 
-        if features == "substructure_count":
+        if features in ["substructure_count", "iokr_fps__count"]:
             for i, row in enumerate(data):
                 for _fp_str in row.split(","):
-                    # _tmp = _fp_str.split(":")
-                    # if len(_tmp) > 1:
-                    #     _idx, _cnt = _tmp
                     _idx, _cnt = _fp_str.split(":")
                     X[i, int(_idx)] = int(_cnt)
         else:

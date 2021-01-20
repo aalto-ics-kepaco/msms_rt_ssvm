@@ -10,7 +10,7 @@ from ssvm.data_structures import RandomSubsetCandidateSQLiteDB, SequenceSample
 from ssvm.ssvm import StructuredSVMSequencesFixedMS2
 
 if __name__ == "__main__":
-    tf_summary_base_dir = "/home/bach/Documents/doctoral/projects/rt_msms_ssvm/src/ssvm/development/logs"
+    tf_summary_base_dir = "/home/bach/Documents/doctoral/projects/msms_rt_ssvm/ssvm/development/logs"
     DB_FN = "/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_LATEST.db"
 
     # ===================
