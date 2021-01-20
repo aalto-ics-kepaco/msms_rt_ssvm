@@ -127,9 +127,9 @@ if __name__ == "__main__":
         ), "Could not create the 'hparam_tuning' Tensorboard configuration."
 
     ssvm = StructuredSVMSequencesFixedMS2(
-        mol_feat_label_loss="iokr_fps__positive", mol_feat_retention_order="substructure_count",
+        mol_feat_label_loss="iokr_fps__count", mol_feat_retention_order="substructure_count",
         mol_kernel=args.mol_kernel, C=hparams[HP_C], step_size=args.stepsize, batch_size=hparams[HP_BATCH_SIZE],
-        n_epochs=args.n_epochs, label_loss="tanimoto_loss", random_state=1993,
+        n_epochs=args.n_epochs, label_loss="minmax_loss", random_state=1993,
         retention_order_weight=hparams[HP_RT_WEIGHT], n_jobs=args.n_jobs
     ).fit(training_sequences, n_init_per_example=hparams[HP_NUM_INIT_ACT_VAR], summary_writer=summary_writer)
 
