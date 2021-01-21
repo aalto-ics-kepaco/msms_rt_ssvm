@@ -7,6 +7,7 @@ import argparse
 import pickle
 import gzip
 
+from typing import Tuple
 from matchms.Spectrum import Spectrum
 from sklearn.model_selection import GroupShuffleSplit
 
@@ -48,6 +49,21 @@ def get_cli_arguments() -> argparse.Namespace:
     return arg_parser.parse_args()
 
 
+def get_hparam_estimation_setting(debug: bool) -> Tuple:
+    if args.debug:
+        n_splits_inner = 2
+        n_epochs_inner = 1
+        C_grid = [1, 64]
+        rtw_grid = [0.5]
+    else:
+        n_splits_inner = 10
+        n_epochs_inner = 5
+        C_grid = [1, 2, 4, 8, 16, 32, 64, 128, 256]
+        rtw_grid = [0.3, 0.4, 0.5, 0.6, 0.7]
+
+    return n_splits_inner, n_epochs_inner, C_grid, rtw_grid
+
+
 if __name__ == "__main__":
     # ===================
     # Parse arguments
@@ -55,23 +71,15 @@ if __name__ == "__main__":
     args = get_cli_arguments()
     print(args)
 
-    if args.debug:
-        n_splits_inner = 2
-        n_epochs_inner = 1
-        HP_C = [1, 64]
-        HP_RT_WEIGHT = [0.4, 0.5]
-    else:
-        n_splits_inner = 10
-        n_epochs_inner = 5
-        HP_C = [1, 2, 4, 8, 16, 32, 64, 128, 256]
-        HP_RT_WEIGHT = [0.3, 0.4, 0.5, 0.6, 0.7]
-
+    # Handle parameters regarding the label-loss
     if args.lloss_fps_mode == "count":
         mol_feat_label_loss = "iokr_fps__count"
         label_loss = "minmax_loss"
     else:
         mol_feat_label_loss = "iokr_fps__positive"
         label_loss = "tanimoto_loss"
+
+    n_splits_inner, n_epochs_inner, C_grid, rtw_grid = get_hparam_estimation_setting(args.debug)
 
     # ==================================
     # Get the evaluation dataset from ID
@@ -109,14 +117,13 @@ if __name__ == "__main__":
                             "   INNER JOIN spectra s ON s.name = challenges_spectra.spectrum"
                             "   INNER JOIN molecules m on m.inchi = s.molecule" % args.molecule_identifier, con=db)
     spectra = [Spectrum(np.array([]), np.array([]),
-                        {"spectrum_id": spec_id, "retention_time": wrt, "dataset": chlg, "molecule_id": mol})
-               for (spec_id, wrt, chlg, mol) in zip(res["spectrum"], res["rt"], res["challenge"], res["molecule"])]
+                        {"spectrum_id": spec_id, "retention_time": rtw, "dataset": chlg, "molecule_id": mol})
+               for (spec_id, rtw, chlg, mol) in zip(res["spectrum"], res["rt"], res["challenge"], res["molecule"])]
     labels = res["molecule"].to_list()
 
     # ========================
     # Get test set spectra IDs
     # ========================
-    # TODO: Split of test for particular eval set id by spectra used --> rest goes to training.
     if eval_ds == "CASMI":
         challenges, candidates = load_dataset_CASMI(db, ion_mode=eval_ion, participant=args.ms2scorer,
                                                     prefmodel="c6d6f521", sort_candidates_by_ms2_score=False,
@@ -150,11 +157,11 @@ if __name__ == "__main__":
 
     print("N_spec_total=%d, N_spec_train=%d, N_spec_eval=%d" % (len(spectra), len(spectra_train), len(spectra_eval)))
 
-    param_grid = list(it.product(HP_C, HP_RT_WEIGHT))
-    opt_value_grid = np.zeros(len(param_grid))
+    param_grid = list(it.product(C_grid, rtw_grid))
+    opt_values = []
     cv_inner = GroupShuffleSplit(n_splits=n_splits_inner, test_size=0.2, random_state=102)
-    for idx, (C, wrt) in enumerate(param_grid):
-        print("(%02d/%02d) C=%f, rtw=%f" % (idx + 1, len(param_grid), C, wrt))
+    for idx, (C, rtw) in enumerate(param_grid):
+        print("(%02d/%02d) C=%f, rtw=%f" % (idx + 1, len(param_grid), C, rtw))
 
         for jdx, (train, test) in enumerate(cv_inner.split(spectra_train, groups=labels_train)):
             print("\t(%02d/%02d) n_train_inner=%d, n_test_inner=%d" % (jdx + 1, n_splits_inner, len(train), len(test)))
@@ -179,7 +186,7 @@ if __name__ == "__main__":
                 mol_feat_label_loss=mol_feat_label_loss, mol_feat_retention_order="substructure_count",
                 mol_kernel=args.mol_kernel, C=C, step_size=args.stepsize, batch_size=args.batch_size,
                 n_epochs=n_epochs_inner, label_loss=label_loss, random_state=jdx,
-                retention_order_weight=wrt, n_jobs=args.n_jobs
+                retention_order_weight=rtw, n_jobs=args.n_jobs
             ).fit(training_sequences, n_init_per_example=args.n_init_per_example)
 
             # Access test set performance
@@ -196,18 +203,18 @@ if __name__ == "__main__":
                 N=np.int(np.round(args.n_samples_train * 0.25)), L_min=10, L_max=30, random_state=jdx,
                 ms2scorer=args.ms2scorer)
 
-            opt_value_grid[idx] += ssvm.score(test_sequences, stype="ndcg_ohc")
+            opt_values.append([C, rtw, jdx, ssvm.score(test_sequences, stype="ndcg_ohc")])
 
-    C_opt, rtw_opt = param_grid[np.argmax(opt_value_grid).item()]
+    df_opt_values = pd.DataFrame(opt_values, columns=["C", "retention_order_weight", "inner_split", "ndcg_ohc"])
+    C_opt, rtw_opt = df_opt_values.groupby(["C", "retention_order_weight"]).mean()["ndcg_ohc"].idxmax()
 
     print("\tC_opt=%f, rtw_opt=%f" % (C_opt, rtw_opt))
-    opt_value_grid = opt_value_grid.reshape((len(HP_C), len(HP_RT_WEIGHT))) / n_splits_inner
     print("\tC-grid:")
-    print("\t", HP_C)
-    print("\t", np.mean(opt_value_grid, axis=1))
+    print("\t", C_grid)
+    print("\t", df_opt_values.groupby(["C"]).mean()["ndcg_ohc"].values)
     print("\trtw-grid:")
-    print("\t", HP_RT_WEIGHT)
-    print("\t", np.mean(opt_value_grid, axis=0))
+    print("\t", rtw_grid)
+    print("\t", df_opt_values.groupby(["retention_order_weight"]).mean()["ndcg_ohc"].values)
 
     # =========================================
     # Train the SSVM with best hyper-parameters
@@ -245,9 +252,22 @@ if __name__ == "__main__":
 
     seq_eval = LabeledSequence(spectra_eval, labels_eval, candidates=candidates, ms2scorer=args.ms2scorer)
 
-    topk = ssvm.score([seq_eval], stype="topk_mm", average=False)
+    topk = ssvm.score([seq_eval], stype="topk_mm", average=False).flatten()
     print(topk)
-    top1_map = ssvm.score([seq_eval], stype="top1_map", average=False)
+    top1_map = ssvm.score([seq_eval], stype="top1_map", average=False).item()
     print(top1_map)
 
-    # TODO: Write out results
+    # =================
+    # Write out results
+    # =================
+    odir_res = os.path.join(args.output_dir, "ds=%s__ion=%s" % (eval_ds, eval_ion))
+    os.makedirs(odir_res, exist_ok=True)
+
+    df_opt_values.to_csv(os.path.join(odir_res, "grid_search_results__spl=%03d.tsv" % eval_idx), sep="\t", index=False)
+
+    pd.DataFrame(zip(range(1, len(topk) + 1), topk), columns=["k", "top_acc_perc"]) \
+        .to_csv(os.path.join(odir_res, "topk__spl=%03d.tsv" % eval_idx), sep="\t", index=False)
+
+    with open(os.path.join(odir_res, "top1_map__spl=%03d.tsv" % eval_idx), "x") as ofile:
+        ofile.write("%f" % top1_map)
+
