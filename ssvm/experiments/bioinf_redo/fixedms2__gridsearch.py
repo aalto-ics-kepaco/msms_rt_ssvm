@@ -10,7 +10,8 @@ import gzip
 from matchms.Spectrum import Spectrum
 from sklearn.model_selection import GroupShuffleSplit
 
-from ssvm.data_structures import RandomSubsetCandidateSQLiteDB, CandidateSQLiteDB, SequenceSample, LabeledSequence
+from ssvm.data_structures import RandomSubsetCandidateSQLiteDB, FixedSubsetCandidateSQLiteDB, CandidateSQLiteDB
+from ssvm.data_structures import LabeledSequence, SequenceSample
 from ssvm.ssvm import StructuredSVMSequencesFixedMS2
 
 from msmsrt_scorer.lib.data_utils import load_dataset_CASMI, load_dataset_EA
@@ -41,7 +42,7 @@ def get_cli_arguments() -> argparse.Namespace:
     arg_parser.add_argument("--stepsize", type=str, default="linesearch")
     arg_parser.add_argument("--ms2scorer", type=str, default="MetFrag_2.4.5__8afe4a14")
     arg_parser.add_argument("--mol_kernel", type=str, default="minmax_numba", choices=["minmax_numba", "minmax"])
-    arg_parser.add_argument("--molecule_identifier", type=str, default="inchikey1", choices=["inchikey1", "inchi"])
+    arg_parser.add_argument("--molecule_identifier", type=str, default="inchi2D", choices=["inchikey1", "inchi", "inchi2D"])
     arg_parser.add_argument("--lloss_fps_mode", type=str, default="binary", choices=["binary", "count"])
 
     return arg_parser.parse_args()
@@ -55,9 +56,9 @@ if __name__ == "__main__":
     print(args)
 
     if args.debug:
-        n_splits_inner = 3
+        n_splits_inner = 2
         n_epochs_inner = 1
-        HP_C = [1, 8, 64]
+        HP_C = [1, 64]
         HP_RT_WEIGHT = [0.4, 0.5]
     else:
         n_splits_inner = 10
@@ -117,16 +118,16 @@ if __name__ == "__main__":
     # ========================
     # TODO: Split of test for particular eval set id by spectra used --> rest goes to training.
     if eval_ds == "CASMI":
-        challenges, _ = load_dataset_CASMI(db, ion_mode=eval_ion, participant=args.ms2scorer,
-                                           prefmodel="c6d6f521", sort_candidates_by_ms2_score=False,
-                                           restrict_candidates_to_correct_mf=False)
+        challenges, candidates = load_dataset_CASMI(db, ion_mode=eval_ion, participant=args.ms2scorer,
+                                                    prefmodel="c6d6f521", sort_candidates_by_ms2_score=False,
+                                                    restrict_candidates_to_correct_mf=False)
     else:
-        challenges, _ = load_dataset_EA(db, ion_mode=eval_ion, participant=args.ms2scorer, sample_idx=eval_idx,
-                                        sort_candidates_by_ms2_score=False,
-                                        prefmodel={"training_dataset": "MEOH_AND_CASMI_JOINT",
-                                                   "keep_test_molecules": False,
-                                                   "estimator": "ranksvm",
-                                                   "molecule_representation": "substructure_count"})
+        challenges, candidates = load_dataset_EA(db, ion_mode=eval_ion, participant=args.ms2scorer, sample_idx=eval_idx,
+                                                 sort_candidates_by_ms2_score=False,
+                                                 prefmodel={"training_dataset": "MEOH_AND_CASMI_JOINT",
+                                                            "keep_test_molecules": False,
+                                                            "estimator": "ranksvm",
+                                                            "molecule_representation": "substructure_count"})
 
     with gzip.open(os.path.join(
             "split_data", eval_ds, eval_ion,
@@ -136,6 +137,8 @@ if __name__ == "__main__":
     spec_ids_eval = [challenges[i]["name"] for i in eval_set]
     spectra_eval, labels_eval = zip(*[(spectrum, label) for spectrum, label in zip(spectra, labels)
                                       if spectrum.get("spectrum_id") in spec_ids_eval])
+
+    labelspace_subset = {challenges[i]["name"]: candidates[i]["structure"] for i in eval_set}
 
     db.close()
 
@@ -196,11 +199,14 @@ if __name__ == "__main__":
             opt_value_grid[idx] += ssvm.score(test_sequences, stype="ndcg_ohc")
 
     C_opt, rtw_opt = param_grid[np.argmax(opt_value_grid).item()]
+
     print("\tC_opt=%f, rtw_opt=%f" % (C_opt, rtw_opt))
     opt_value_grid = opt_value_grid.reshape((len(HP_C), len(HP_RT_WEIGHT))) / n_splits_inner
     print("\tC-grid:")
+    print("\t", HP_C)
     print("\t", np.mean(opt_value_grid, axis=1))
     print("\trtw-grid:")
+    print("\t", HP_RT_WEIGHT)
     print("\t", np.mean(opt_value_grid, axis=0))
 
     # =========================================
@@ -225,15 +231,23 @@ if __name__ == "__main__":
     # ====================
     # Evaluate performance
     # ====================
-    seq_eval = LabeledSequence(
-        spectra_eval, labels_eval,
-        candidates=CandidateSQLiteDB(db_fn=args.db_fn,
-                                     molecule_identifier=args.molecule_identifier,
-                                     init_with_open_db_conn=False),
-        ms2scorer=args.ms2scorer)
+    candidates = FixedSubsetCandidateSQLiteDB(
+        labelspace_subset=labelspace_subset, db_fn=args.db_fn, molecule_identifier=args.molecule_identifier,
+        init_with_open_db_conn=False, assert_correct_candidate=True)
+
+    # candidates = CandidateSQLiteDB(
+    #     db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, init_with_open_db_conn=False)
+
+    with candidates:
+        print("\tSpectrum - n_candidates:")
+        for spec in spectra_eval:
+            print("\t%s - %05d" % (spec.get("spectrum_id"), len(candidates.get_labelspace(spec))))
+
+    seq_eval = LabeledSequence(spectra_eval, labels_eval, candidates=candidates, ms2scorer=args.ms2scorer)
 
     topk = ssvm.score([seq_eval], stype="topk_mm", average=False)
-    top1_map = ssvm.score([seq_eval], stype="topk_map", average=False)
-
+    print(topk)
+    top1_map = ssvm.score([seq_eval], stype="top1_map", average=False)
+    print(top1_map)
 
     # TODO: Write out results
