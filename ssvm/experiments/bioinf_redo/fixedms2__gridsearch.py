@@ -2,32 +2,23 @@ import sqlite3
 import os
 import pandas as pd
 import numpy as np
-import tensorflow as tf
 import itertools as it
 import argparse
+import pickle
+import gzip
 
-from tensorboard.plugins.hparams import api as hp
 from matchms.Spectrum import Spectrum
 from sklearn.model_selection import GroupShuffleSplit
 
-from ssvm.data_structures import RandomSubsetCandidateSQLiteDB, CandidateSQLiteDB, SequenceSample
+from ssvm.data_structures import RandomSubsetCandidateSQLiteDB, FixedSubsetCandidateSQLiteDB, CandidateSQLiteDB
+from ssvm.data_structures import LabeledSequence, SequenceSample
 from ssvm.ssvm import StructuredSVMSequencesFixedMS2
 
-from msmsrt_scorer.experiments.EA_Massbank.plot_and_table_utils import IDIR as IDIR_EA
-from msmsrt_scorer.experiments.CASMI_2016.plot_and_table_utils import IDIR as IDIR_CASMI
-
-#
-# HP_BATCH_SIZE = hp.HParam("batch_size", hp.Discrete([4, 8, 16]))
-# HP_NUM_INIT_ACT_VAR = hp.HParam("num_init_act_var", hp.Discrete([6]))
-# HP_RT_WEIGHT = hp.HParam("rt_weight", hp.Discrete([0.0, 0.5, 1.0]))
-# HP_GRID = list(it.product(HP_C.domain.values,
-#                           HP_BATCH_SIZE.domain.values,
-#                           HP_NUM_INIT_ACT_VAR.domain.values,
-#                           HP_RT_WEIGHT.domain.values))
-# N_TOTAL_PAR_TUP = len(HP_GRID)
+from msmsrt_scorer.lib.data_utils import load_dataset_CASMI, load_dataset_EA
+from msmsrt_scorer.experiments.plot_and_table_utils import _marg_or_cand
 
 
-def get_argument_parser() -> argparse.ArgumentParser:
+def get_cli_arguments() -> argparse.Namespace:
     """
     Set up the command line input argument parser
     """
@@ -39,54 +30,74 @@ def get_argument_parser() -> argparse.ArgumentParser:
     arg_parser.add_argument("--db_fn", type=str,
                             help="Path to the CASMI database.",
                             default="/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_LATEST.db")
-    arg_parser.add_argument("--bioinf_dir", type=str,
-                            help="Base directory of the MS + RT framework (published in Bioinformatics) git repository.",
-                            default="/home/bach/Documents/doctoral/projects/rt_msms_score_integration_PUBLICATION")
     arg_parser.add_argument("--output_dir", type=str,
                             help="Base directory to store the Tensorboard logging files, train and test splits, ...",
                             default="./logs/fixedms2")
     arg_parser.add_argument("--n_samples_train", type=int, default=1000,
                             help="Number of training sample sequences.")
-    arg_parser.add_argument("--n_epochs", type=int, default=5)
+    arg_parser.add_argument("--n_epochs", type=int, default=7)
     arg_parser.add_argument("--batch_size", type=int, default=8)
     arg_parser.add_argument("--n_init_per_example", type=int, default=6)
     arg_parser.add_argument("--max_n_train_candidates", type=int, default=100)
     arg_parser.add_argument("--stepsize", type=str, default="linesearch")
     arg_parser.add_argument("--ms2scorer", type=str, default="MetFrag_2.4.5__8afe4a14")
     arg_parser.add_argument("--mol_kernel", type=str, default="minmax_numba", choices=["minmax_numba", "minmax"])
-    arg_parser.add_argument("--molecule_identifier", type=str, default="inchikey1", choices=["inchikey1", "inchi"])
+    arg_parser.add_argument("--molecule_identifier", type=str, default="inchi2D", choices=["inchikey1", "inchi", "inchi2D"])
+    arg_parser.add_argument("--lloss_fps_mode", type=str, default="binary", choices=["binary", "count"])
 
-    return arg_parser
+    return arg_parser.parse_args()
 
 
 if __name__ == "__main__":
     # ===================
     # Parse arguments
     # ===================
-    args = get_argument_parser().parse_args()
+    args = get_cli_arguments()
+    print(args)
 
     if args.debug:
-        HP_C = hp.HParam("C", hp.Discrete([1, 64]))
-        HP_RT_WEIGHT = hp.HParam("rt_weight", hp.Discrete([0.4, 0.5]))
+        n_splits_inner = 2
+        n_epochs_inner = 1
+        HP_C = [1, 64]
+        HP_RT_WEIGHT = [0.4, 0.5]
     else:
-        HP_C = hp.HParam("C", hp.Discrete([1, 2, 4, 8, 16, 32, 64, 128, 256]))
-        HP_RT_WEIGHT = hp.HParam("rt_weight", hp.Discrete([0.3, 0.4, 0.5, 0.6, 0.7]))
+        n_splits_inner = 10
+        n_epochs_inner = 5
+        HP_C = [1, 2, 4, 8, 16, 32, 64, 128, 256]
+        HP_RT_WEIGHT = [0.3, 0.4, 0.5, 0.6, 0.7]
+
+    if args.lloss_fps_mode == "count":
+        mol_feat_label_loss = "iokr_fps__count"
+        label_loss = "minmax_loss"
+    else:
+        mol_feat_label_loss = "iokr_fps__positive"
+        label_loss = "tanimoto_loss"
 
     # ==================================
     # Get the evaluation dataset from ID
     # ==================================
     if args.eval_set_id in range(0, 50):
-        eval_ds = "CASMI_neg"
+        eval_ds = "CASMI"
+        eval_ion = "negative"
+        eval_max_n_ms2 = 50
         eval_idx = args.eval_set_id
     elif args.eval_set_id in range(50, 100):
-        eval_ds = "CASMI_pos"
+        eval_ds = "CASMI"
+        eval_ion = "positive"
+        eval_max_n_ms2 = 75
         eval_idx = args.eval_set_id - 50
     elif args.eval_set_id in range(100, 150):
-        eval_ds = "EA_neg"
+        eval_ds = "EA"
+        eval_ion = "negative"
+        eval_max_n_ms2 = 65
         eval_idx = args.eval_set_id - 100
     else:  # in range(150, 250)
-        eval_ds = "EA_pos"
+        eval_ds = "EA"
+        eval_ion = "positive"
+        eval_max_n_ms2 = 100
         eval_idx = args.eval_set_id - 150
+
+    print("DS=%s, ION=%s, MAXNMS2=%d" % (eval_ds, eval_ion, eval_max_n_ms2))
 
     # ===================
     # Get list of Spectra
@@ -98,74 +109,145 @@ if __name__ == "__main__":
                             "   INNER JOIN spectra s ON s.name = challenges_spectra.spectrum"
                             "   INNER JOIN molecules m on m.inchi = s.molecule" % args.molecule_identifier, con=db)
     spectra = [Spectrum(np.array([]), np.array([]),
-                        {"spectrum_id": spec_id, "retention_time": rt, "dataset": chlg, "molecule_id": mol})
-               for (spec_id, rt, chlg, mol) in zip(res["spectrum"], res["rt"], res["challenge"], res["molecule"])]
+                        {"spectrum_id": spec_id, "retention_time": wrt, "dataset": chlg, "molecule_id": mol})
+               for (spec_id, wrt, chlg, mol) in zip(res["spectrum"], res["rt"], res["challenge"], res["molecule"])]
     labels = res["molecule"].to_list()
+
+    # ========================
+    # Get test set spectra IDs
+    # ========================
+    # TODO: Split of test for particular eval set id by spectra used --> rest goes to training.
+    if eval_ds == "CASMI":
+        challenges, candidates = load_dataset_CASMI(db, ion_mode=eval_ion, participant=args.ms2scorer,
+                                                    prefmodel="c6d6f521", sort_candidates_by_ms2_score=False,
+                                                    restrict_candidates_to_correct_mf=False)
+    else:
+        challenges, candidates = load_dataset_EA(db, ion_mode=eval_ion, participant=args.ms2scorer, sample_idx=eval_idx,
+                                                 sort_candidates_by_ms2_score=False,
+                                                 prefmodel={"training_dataset": "MEOH_AND_CASMI_JOINT",
+                                                            "keep_test_molecules": False,
+                                                            "estimator": "ranksvm",
+                                                            "molecule_representation": "substructure_count"})
+
+    with gzip.open(os.path.join(
+            "split_data", eval_ds, eval_ion,
+            _marg_or_cand("candidates", max_n_ms2=eval_max_n_ms2, sample_id=eval_idx))) as eval_set_file:
+        eval_set = pickle.load(eval_set_file)["test_set"]
+
+    spec_ids_eval = [challenges[i]["name"] for i in eval_set]
+    spectra_eval, labels_eval = zip(*[(spectrum, label) for spectrum, label in zip(spectra, labels)
+                                      if spectrum.get("spectrum_id") in spec_ids_eval])
+
+    labelspace_subset = {challenges[i]["name"]: candidates[i]["structure"] for i in eval_set}
 
     db.close()
 
-    # ======================
-    # Get training sequences
-    # ======================
-    # TODO: Split of test for particular eval set id by spectra used --> rest goes to training.
+    # =================================
+    # Find the optimal hyper-parameters
+    # =================================
+    spectra_train, labels_train = zip(*[(spectrum, label) for spectrum, label in zip(spectra, labels)
+                                        if label not in labels_eval])
 
-    train, test = next(GroupShuffleSplit(test_size=0.2, random_state=10).split(np.arange(len(spectra)), groups=labels))
+    print("N_spec_total=%d, N_spec_train=%d, N_spec_eval=%d" % (len(spectra), len(spectra_train), len(spectra_eval)))
 
+    param_grid = list(it.product(HP_C, HP_RT_WEIGHT))
+    opt_value_grid = np.zeros(len(param_grid))
+    cv_inner = GroupShuffleSplit(n_splits=n_splits_inner, test_size=0.2, random_state=102)
+    for idx, (C, wrt) in enumerate(param_grid):
+        print("(%02d/%02d) C=%f, rtw=%f" % (idx + 1, len(param_grid), C, wrt))
+
+        for jdx, (train, test) in enumerate(cv_inner.split(spectra_train, groups=labels_train)):
+            print("\t(%02d/%02d) n_train_inner=%d, n_test_inner=%d" % (jdx + 1, n_splits_inner, len(train), len(test)))
+
+            spectra_train_inner = [spectra_train[i] for i in train]
+            labels_train_inner = [labels_train[i] for i in train]
+
+            # Get training sequences
+            # ----------------------
+            training_sequences = SequenceSample(
+                spectra_train_inner, labels_train_inner,
+                RandomSubsetCandidateSQLiteDB(
+                    db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, random_state=jdx,
+                    number_of_candidates=args.max_n_train_candidates, include_correct_candidate=True,
+                    init_with_open_db_conn=False),
+                N=np.int(np.round(args.n_samples_train * 0.75)), L_min=10, L_max=30, random_state=jdx,
+                ms2scorer=args.ms2scorer)
+
+            # Train the SSVM
+            # --------------
+            ssvm = StructuredSVMSequencesFixedMS2(
+                mol_feat_label_loss=mol_feat_label_loss, mol_feat_retention_order="substructure_count",
+                mol_kernel=args.mol_kernel, C=C, step_size=args.stepsize, batch_size=args.batch_size,
+                n_epochs=n_epochs_inner, label_loss=label_loss, random_state=jdx,
+                retention_order_weight=wrt, n_jobs=args.n_jobs
+            ).fit(training_sequences, n_init_per_example=args.n_init_per_example)
+
+            # Access test set performance
+            # ---------------------------
+            spectra_test_inner = [spectra_train[i] for i in test]
+            labels_test_inner = [labels_train[i] for i in test]
+
+            test_sequences = SequenceSample(
+                spectra_test_inner, labels_test_inner,
+                RandomSubsetCandidateSQLiteDB(
+                    db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, random_state=jdx,
+                    number_of_candidates=args.max_n_train_candidates, include_correct_candidate=True,
+                    init_with_open_db_conn=False),
+                N=np.int(np.round(args.n_samples_train * 0.25)), L_min=10, L_max=30, random_state=jdx,
+                ms2scorer=args.ms2scorer)
+
+            opt_value_grid[idx] += ssvm.score(test_sequences, stype="ndcg_ohc")
+
+    C_opt, rtw_opt = param_grid[np.argmax(opt_value_grid).item()]
+
+    print("\tC_opt=%f, rtw_opt=%f" % (C_opt, rtw_opt))
+    opt_value_grid = opt_value_grid.reshape((len(HP_C), len(HP_RT_WEIGHT))) / n_splits_inner
+    print("\tC-grid:")
+    print("\t", HP_C)
+    print("\t", np.mean(opt_value_grid, axis=1))
+    print("\trtw-grid:")
+    print("\t", HP_RT_WEIGHT)
+    print("\t", np.mean(opt_value_grid, axis=0))
+
+    # =========================================
+    # Train the SSVM with best hyper-parameters
+    # =========================================
     training_sequences = SequenceSample(
-        [spectra[idx] for idx in train], [labels[idx] for idx in train],
-        RandomSubsetCandidateSQLiteDB(db_fn=args.db_fn, molecule_identifier="inchikey1", random_state=2,
-                                      number_of_candidates=args.max_n_train_candidates, include_correct_candidate=True,
-                                      init_with_open_db_conn=False),
-        N=args.n_samples_train,
-        L_min=5,
-        L_max=20,
-        random_state=19,
+        spectra_train, labels_train,
+        RandomSubsetCandidateSQLiteDB(
+            db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, random_state=425,
+            number_of_candidates=args.max_n_train_candidates, include_correct_candidate=True,
+            init_with_open_db_conn=False),
+        N=args.n_samples_train, L_min=10, L_max=30, random_state=23,
         ms2scorer=args.ms2scorer)
 
-    # ===================
-    # Train the SSVM
-    # ===================
-    print("TRAINING", flush=True)
-    summary_writer = tf.summary.create_file_writer(
-        os.path.join(args.output_dir, "test_performance", "C=%d_bsize=%d_ninit=%d_rtw=%.1f" %
-                     (HP_GRID[args.param_tuple_index][0],
-                      HP_GRID[args.param_tuple_index][1],
-                      HP_GRID[args.param_tuple_index][2],
-                      HP_GRID[args.param_tuple_index][3])))
-
-    with tf.summary.create_file_writer(args.output_dir).as_default():
-        assert hp.hparams_config(
-            hparams=[HP_C, HP_BATCH_SIZE, HP_NUM_INIT_ACT_VAR, HP_RT_WEIGHT],
-            metrics=[hp.Metric("Top-%02d_acc_test" % k, display_name="Top-%02d Accuracy (test, %%)" % k)
-                     for k in [1, 5, 10, 20]]
-                    # [hp.Metric("Top-01_map_acc_test", display_name="Top-01 Accuracy (MAP, test, %%)")]
-        ), "Could not create the 'hparam_tuning' Tensorboard configuration."
-
     ssvm = StructuredSVMSequencesFixedMS2(
-        mol_feat_label_loss="iokr_fps__positive", mol_feat_retention_order="substructure_count",
-        mol_kernel=args.mol_kernel, C=hparams[HP_C], step_size=args.stepsize, batch_size=hparams[HP_BATCH_SIZE],
-        n_epochs=args.n_epochs, label_loss="tanimoto_loss", random_state=1993,
-        retention_order_weight=hparams[HP_RT_WEIGHT], n_jobs=args.n_jobs
-    ).fit(training_sequences, n_init_per_example=hparams[HP_NUM_INIT_ACT_VAR], summary_writer=summary_writer)
+        mol_feat_label_loss=mol_feat_label_loss, mol_feat_retention_order="substructure_count",
+        mol_kernel=args.mol_kernel, C=C_opt, step_size=args.stepsize, batch_size=args.batch_size,
+        n_epochs=args.n_epochs, label_loss=label_loss, random_state=1993,
+        retention_order_weight=rtw_opt, n_jobs=args.n_jobs
+    ).fit(training_sequences, n_init_per_example=args.n_init_per_example)
 
     # ====================
     # Evaluate performance
     # ====================
-    print("EVALUATION", flush=True)
-    test_sequences = SequenceSample(
-        [spectra[idx] for idx in test], [labels[idx] for idx in test],
-        CandidateSQLiteDB(db_fn=args.db_fn, molecule_identifier="inchikey1", init_with_open_db_conn=False),
-        N=args.n_samples_test,
-        L_min=30,
-        L_max=50,
-        random_state=19,
-        ms2scorer=args.ms2scorer)
+    candidates = FixedSubsetCandidateSQLiteDB(
+        labelspace_subset=labelspace_subset, db_fn=args.db_fn, molecule_identifier=args.molecule_identifier,
+        init_with_open_db_conn=False, assert_correct_candidate=True)
 
-    test_acc_tkmm = ssvm.score(test_sequences, stype="topk_mm")
-    # test_acc_t1map = ssvm.score(test_sequences, stype="top1_map")
+    # candidates = CandidateSQLiteDB(
+    #     db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, init_with_open_db_conn=False)
 
-    with summary_writer.as_default():
-        hp.hparams(hparams)
-        for k in [1, 5, 10, 20]:
-            tf.summary.scalar("Top-%02d_acc_test" % k, test_acc_tkmm[k - 1], step=1)  # test, pred
-        # tf.summary.scalar("Top-01_map_acc_test", test_acc_t1map, step=1)
+    with candidates:
+        print("\tSpectrum - n_candidates:")
+        for spec in spectra_eval:
+            print("\t%s - %05d" % (spec.get("spectrum_id"), len(candidates.get_labelspace(spec))))
+
+    seq_eval = LabeledSequence(spectra_eval, labels_eval, candidates=candidates, ms2scorer=args.ms2scorer)
+
+    topk = ssvm.score([seq_eval], stype="topk_mm", average=False)
+    print(topk)
+    top1_map = ssvm.score([seq_eval], stype="top1_map", average=False)
+    print(top1_map)
+
+    # TODO: Write out results

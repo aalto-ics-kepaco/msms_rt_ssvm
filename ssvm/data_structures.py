@@ -587,6 +587,54 @@ class CandidateSQLiteDB(object):
         return "(" + ",".join(["'%s'" % li for li in np.atleast_1d(li)]) + ")"
 
 
+class FixedSubsetCandidateSQLiteDB(CandidateSQLiteDB):
+    def __init__(self, labelspace_subset: Dict[str, List[str]], assert_correct_candidate: bool = True, *args, **kwargs):
+        self.assert_correct_candidate = assert_correct_candidate
+        self._labelspace_subset = labelspace_subset
+
+        super().__init__(*args, **kwargs)
+
+    def _get_candidate_subset(self, spectrum: Spectrum) -> List[str]:
+        """
+        :param spectrum: matchms.Spectrum, of the sequence element to get the number of candidates.
+
+        :return: list of strings, molecule identifier for the candidate subset of the given spectrum (not sorted !).
+        """
+        spectrum_id = spectrum.get("spectrum_id")
+
+        try:
+            candidates_sub = self._labelspace_subset[spectrum_id]
+
+            if self.assert_correct_candidate:
+                molecule_id = spectrum.get("molecule_id")
+
+                if molecule_id is None:
+                    raise ValueError("Cannot ensure that the ground truth structure is included in the candidate set, "
+                                     "as no 'molecule_id' is specified in the Spectrum object.")
+
+                if molecule_id not in candidates_sub:
+                    raise ValueError("The molecule id '%s' is not in the candidate set." % molecule_id)
+        except KeyError:
+            raise KeyError("Candidate set for the specified spectrum was not provided: spectrum-id = %s" % spectrum_id)
+
+        return candidates_sub
+
+    def get_n_cand(self, spectrum: Spectrum) -> int:
+        """
+        Return the number of candidates in the random label space subset for the given spectrum.
+        """
+        return len(self.get_labelspace(spectrum))
+
+    def get_labelspace(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> List[str]:
+        """
+        Return the label space of the random subset.
+        """
+        if candidate_subset is not None:
+            raise RuntimeError("Candidate subset cannot be requested in any sub-class of 'CandidateSQLiteDB'.")
+
+        return super().get_labelspace(spectrum, self._get_candidate_subset(spectrum))
+
+
 class RandomSubsetCandidateSQLiteDB(CandidateSQLiteDB):
     def __init__(self, number_of_candidates: Union[int, float], include_correct_candidate: bool = False,
                  random_state: Optional[Union[int, np.random.RandomState]] = None, *args, **kwargs):
