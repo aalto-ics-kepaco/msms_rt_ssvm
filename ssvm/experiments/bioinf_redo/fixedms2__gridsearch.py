@@ -283,7 +283,7 @@ if __name__ == "__main__":
     for stype in ["topk_mm", "top1_map"]:
         LOGGER.info("Evaluation set scoring: %s" % stype)
         start = time.time()
-        scores[stype] = ssvm.score([seq_eval], stype=stype, average=False).flatten()
+        scores[stype] = ssvm.score([seq_eval], stype=stype, average=False, n_trees_per_sequence=4).flatten()
         LOGGER.info("Scoring time (%s): %.3fs" % (stype, time.time() - start))
 
     LOGGER.info("topk (raw): {}".format(scores["topk_mm"]))

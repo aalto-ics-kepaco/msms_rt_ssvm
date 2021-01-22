@@ -1557,7 +1557,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 with tf.name_scope("Metrics (Training)"):
                     tf.summary.scalar("Top-1 (MAP)", data=data_to_log["training_top1_map"], step=n_iter)
 
-    def predict(self, sequence: Sequence, map: bool = False, Gs: Optional[SpanningTrees] = None) \
+    def predict(self, sequence: Sequence, map: bool = False, Gs: Optional[SpanningTrees] = None,
+                n_jobs_for_trees: Optional[int] = None) \
             -> Union[Tuple[str, ...], Dict[int, Dict[str, Union[int, np.ndarray, List[str]]]]]:
         """
         Function to predict the marginal distribution of the candidate sets along the given (MS, RT)-sequence.
@@ -1585,10 +1586,10 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         if map:
             return self.inference(sequence, Gs=Gs, loss_augmented=False)
         else:
-            return self.max_marginals(sequence, Gs=Gs)
+            return self.max_marginals(sequence, Gs=Gs, n_jobs=n_jobs_for_trees)
 
     def score(self, data: SequenceSample, l_Gs: Optional[List[SpanningTrees]] = None, stype: str = "top1_mm",
-              average: bool = True, **kwargs) -> Union[float, np.ndarray]:
+              average: bool = True, n_trees_per_sequence: Optional[int] = None, **kwargs) -> Union[float, np.ndarray]:
         """
         TODO: We could calculate the scores here in parallel
 
@@ -1611,27 +1612,37 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         :return: scalar or array-like, requested score
         """
+        if len(data) <= 1:
+            n_jobs_for_data = 1
+            n_jobs_for_trees = self.n_jobs
+        else:
+            n_jobs_for_data = self.n_jobs
+            n_jobs_for_trees = 1
+
+        if n_trees_per_sequence is None:
+            n_trees_per_sequence = self.n_trees_per_sequence
+
         if l_Gs is None:
-            l_Gs = [None for _ in data]
+            l_Gs = [SpanningTrees(seq, n_trees=n_trees_per_sequence) for seq in data]
 
         if stype == "top1_mm":
-            scores = Parallel(n_jobs=self.n_jobs)(
+            scores = Parallel(n_jobs=n_jobs_for_data)(
                 delayed(self.top1_score)(sequence, Gs=Gs) for sequence, Gs in zip(data, l_Gs))
         elif stype == "top1_map":
-            scores = Parallel(n_jobs=self.n_jobs)(
+            scores = Parallel(n_jobs=n_jobs_for_data)(
                 delayed(self.top1_score)(sequence, Gs=Gs, map=True) for sequence, Gs in zip(data, l_Gs))
         elif stype == "topk_mm":
             return_percentage = kwargs.get("return_percentage", True)
             max_k = kwargs.get("max_k", 50)
-            scores = Parallel(n_jobs=self.n_jobs)(
+            scores = Parallel(n_jobs=n_jobs_for_data)(
                 delayed(self.topk_score)(
-                    sequence, Gs=Gs, return_percentage=return_percentage, max_k=max_k,  pad_output=True
-                ) for sequence, Gs in zip(data, l_Gs))
+                    sequence, Gs=Gs, return_percentage=return_percentage, max_k=max_k,  pad_output=True,
+                    n_jobs_for_trees=n_jobs_for_trees) for sequence, Gs in zip(data, l_Gs))
         elif stype == "ndcg_ll":
-            scores = Parallel(n_jobs=self.n_jobs)(
+            scores = Parallel(n_jobs=n_jobs_for_data)(
                 delayed(self.ndcg_score)(sequence, Gs=Gs, use_label_loss=True) for sequence, Gs in zip(data, l_Gs))
         elif stype == "ndcg_ohc":
-            scores = Parallel(n_jobs=self.n_jobs)(
+            scores = Parallel(n_jobs=n_jobs_for_data)(
                 delayed(self.ndcg_score)(sequence, Gs=Gs, use_label_loss=False) for sequence, Gs in zip(data, l_Gs))
         else:
             raise ValueError("Invalid scoring type: '%s'." % stype)
@@ -1645,7 +1656,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         return scores
 
     def topk_score(self, sequence: LabeledSequence, Gs: Optional[SpanningTrees] = None, return_percentage: bool = True,
-                   max_k: Optional[int] = None, pad_output: bool = False) -> Union[int, float, np.ndarray]:
+                   max_k: Optional[int] = None, pad_output: bool = False, n_jobs_for_trees: Optional[int] = None) \
+            -> Union[int, float, np.ndarray]:
         """
         Calculate top-k accuracy of the ranked candidate lists based on the max-marginals.
 
@@ -1669,7 +1681,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             zero-based, i.e. at index 0 we have top-1. If max_k == 1, the output is a scalar.
         """
         # Calculate the marginals
-        marginals = self.predict(sequence, Gs=Gs, map=False)
+        marginals = self.predict(sequence, Gs=Gs, map=False, n_jobs_for_trees=n_jobs_for_trees)
 
         # Need to find the index of the correct label / molecular structure in the candidate sets to determine the top-k
         # accuracy.
@@ -2021,7 +2033,18 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         else:
             return y_hat
 
-    def max_marginals(self, sequence: Union[Sequence, LabeledSequence], Gs: Optional[SpanningTrees] = None):
+    def _max_marginals_joblib_wrapper(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph):
+        """
+        Wrapper needed to calculate the max-marginals in parallel using joblib.
+        """
+        with sequence.candidates, self.training_data_.candidates:
+            node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, G)
+
+            # Calculate the max-marginals
+            return self._max_marginals(sequence, node_potentials, edge_potentials, G, normalize=True)
+
+    def max_marginals(self, sequence: Union[Sequence, LabeledSequence], Gs: Optional[SpanningTrees] = None,
+                      n_jobs: Optional[int] = None) -> Dict[int, Dict]:
         """
         Calculate the max-marginals for all possible label assignments of the given (MS, RT)-sequence.
 
@@ -2033,7 +2056,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         :return: dictionary = {
             sequence_index: dictionary = {
                 labels: list of strings, length = m, candidate labels
-                topk_score: array-like, shape = (m, ), candidate marginals scores
+                score: array-like, shape = (m, ), candidate marginals scores
                 n_cand: scalar, number of candidate labels
             }
         } the dictionary is of length
@@ -2041,13 +2064,23 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         if Gs is None:
             Gs = SpanningTrees(sequence, self.n_trees_per_sequence)
 
-        with sequence.candidates, self.training_data_.candidates:
-            node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, Gs[0])
+        if n_jobs is None:
+            n_jobs = 1
 
-            # Calculate the max-marginals
-            mm = self._max_marginals(sequence, node_potentials, edge_potentials, Gs[0], normalize=True)
+        mms = Parallel(n_jobs=n_jobs)(delayed(self._max_marginals_joblib_wrapper)(sequence, G) for G in Gs)
+        mm_agg = mms[0]
 
-        return mm
+        # Aggregate max-marginals by simply averaging them
+        if len(Gs) > 1:
+            for mm in mms[1:]:
+                for node in Gs.get_nodes():
+                    assert mm_agg[node]["n_cand"] == mm[node]["n_cand"]
+                    mm_agg[node]["score"] += mm[node]["score"]
+
+                for node in Gs.get_nodes():
+                    mm_agg[node]["score"] /= len(Gs)
+
+        return mm_agg
 
     def _get_node_and_edge_potentials(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph,
                                       loss_augmented: bool = False):

@@ -1172,6 +1172,11 @@ class SpanningTrees(object):
 
         self.trees = [get_random_spanning_tree(sequence, random_state=random_state) for _ in range(self.n_tress)]
 
+        for T in self.trees:
+            assert self.trees[0].nodes == T.nodes
+
+        self.nodes = self.trees[0].nodes
+
     def __getitem__(self, item) -> nx.Graph:
         assert isinstance(item, int)
         return self.trees[item]
@@ -1185,8 +1190,13 @@ class SpanningTrees(object):
     def get_n_edges(self):
         return self.n_edges
 
+    def get_nodes(self):
+        return self.nodes
+
 
 if __name__ == "__main__":
-    ss = SequenceSample(["A", "B", "C"], np.random.rand(3, 3), "", "")
-    ss_train, ss_test = ss.get_train_test_split()
-    ss_train._sample_sequences(100, 20)
+    # ss = SequenceSample(["A", "B", "C"], np.random.rand(3, 3), "", "")
+    # ss_train, ss_test = ss.get_train_test_split()
+    # ss_train._sample_sequences(100, 20)
+
+    SpanningTrees(["A", "B", "T"], n_trees=10)
