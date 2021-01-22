@@ -28,6 +28,8 @@ import itertools as it
 import more_itertools as mit
 import tensorflow as tf
 import networkx as nx
+import logging
+import time
 
 from functools import lru_cache
 from collections import OrderedDict
@@ -56,6 +58,22 @@ from ssvm.kernel_utils import tanimoto_kernel, minmax_kernel_1__numba, generaliz
 DUALVARIABLES_T = TypeVar('DUALVARIABLES_T', bound='DualVariables')
 
 JOBLIB_CACHE = Memory(ssvm.cfg.JOBLIB_MEMORY_CACHE_LOCATION, verbose=0)
+
+
+# ================
+# Setup the Logger
+SSVM_LOGGER = logging.getLogger("ssvm_fixedms2")
+SSVM_LOGGER.setLevel(logging.INFO)
+SSVM_LOGGER.propagate = False
+
+CH = logging.StreamHandler()
+CH.setLevel(logging.INFO)
+
+FORMATTER = logging.Formatter('[%(levelname)s] %(name)s : %(message)s')
+CH.setFormatter(FORMATTER)
+
+SSVM_LOGGER.addHandler(CH)
+# ================
 
 
 @JOBLIB_CACHE.cache(ignore=["candidates"], mmap_mode="r")
@@ -468,7 +486,7 @@ class _StructuredSVM(object):
     Structured Support Vector Machine (SSVM) meta-class
     """
     def __init__(self, C: Union[int, float] = 1, n_epochs: int = 100, batch_size: int = 1, label_loss: str = "hamming",
-                 step_size: str = "diminishing", random_state: Optional[Union[int, np.random.RandomState]] = None):
+                 step_size_approach: str = "diminishing", random_state: Optional[Union[int, np.random.RandomState]] = None):
         """
         Structured Support Vector Machine (SSVM)
 
@@ -480,7 +498,7 @@ class _StructuredSVM(object):
 
         :param label_loss: string, indicating which label-loss is used.
         
-        :param step_size: string, indicating which strategy is used to determine the step-size. 
+        :param step_size_approach: string, indicating which strategy is used to determine the step-size. 
 
         :param random_state: None | int | instance of RandomState
             If seed is None, return the RandomState singleton used by np.random.
@@ -493,7 +511,7 @@ class _StructuredSVM(object):
         self.batch_size = batch_size
         self.label_loss = label_loss
         self.random_state = random_state
-        self.step_size = step_size
+        self.step_size_approach = step_size_approach
 
         if self.label_loss == "hamming":
             self.label_loss_fun = hamming_loss
@@ -504,9 +522,9 @@ class _StructuredSVM(object):
         else:
             raise ValueError("Invalid label loss '%s'. Choices are 'hamming', 'tanimoto_loss' and 'minmax_loss'.")
 
-        if self.step_size not in ["diminishing", "linesearch"]:
+        if self.step_size_approach not in ["diminishing", "linesearch"]:
             raise ValueError("Invalid stepsize method '%s'. Choices are 'diminishing' and 'linesearch'." %
-                             self.step_size)
+                             self.step_size_approach)
 
     @staticmethod
     def _is_feasible_matrix(alphas: DualVariables, C: Union[int, float]) -> bool:
@@ -546,7 +564,7 @@ class _StructuredSVM(object):
 
 class StructuredSVMMetIdent(_StructuredSVM):
     def __init__(self, C=1.0, n_epochs=1000, label_loss="hamming", random_state=None, batch_size=1,
-                 step_size="diminishing"):
+                 step_size_approach="diminishing"):
         self.batch_size = batch_size
 
         # States defining a fitted SSVM Model
@@ -557,7 +575,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
         self.N = None
 
         super(StructuredSVMMetIdent, self).__init__(C=C, n_epochs=n_epochs, label_loss=label_loss,
-                                                    random_state=random_state, step_size=step_size)
+                                                    random_state=random_state, step_size_approach=step_size_approach)
 
     @staticmethod
     def _sanitize_fit_args(idict, keys, bool_default):
@@ -767,7 +785,7 @@ class StructuredSVMMetIdent(_StructuredSVM):
                     gamma = self._get_step_size_linesearch(batch, res_batch, candidates)
                 else:
                     raise ValueError(
-                        "Invalid stepsize method '%s'. Choices are 'diminishing' and 'linesearch'." % self.step_size)
+                        "Invalid stepsize method '%s'. Choices are 'diminishing' and 'linesearch'." % self.step_size_approach)
 
                 # -------------------------
                 # UPDATE THE DUAL VARIABLES
@@ -1424,37 +1442,51 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                                                                stype="top1_map")},
                            summary_writer=summary_writer)
 
+        SSVM_LOGGER.info("=== Start training ===")
+        SSVM_LOGGER.info("batch_size = %d" % self.batch_size)
+
+        t_epoch, n_epochs_ran = 0, 0
+        t_batch, n_batches_ran = 0, 0
+
         for epoch in range(self.n_epochs):
-            print("Epoch: %d/%d" % (epoch + 1, self.n_epochs))
+            SSVM_LOGGER.info("Epoch: %d / %d" % (epoch + 1, self.n_epochs))
+            _start_time_epoch = time.time()
 
             _batches = list(mit.chunked(random_state.permutation(np.arange(N)), self.batch_size))
             updates_made = False
             for step, I_batch in enumerate(_batches):
-                print("\tStep: %d/%d" % (step + 1, len(_batches)))
+                SSVM_LOGGER.info("Step: %d / %d" % (step + 1, len(_batches)))
+                _start_time_batch = time.time()
 
                 # Find the most violating examples for the current batch
+                _start_time = time.time()
                 res = Parallel(n_jobs=self.n_jobs)(delayed(self.inference)(
                     self.training_data_[i], self.training_graphs_[i], loss_augmented=True, return_graphical_model=True)
-                    for i in I_batch)
-
+                                                   for i in I_batch)
                 y_I_hat = [y_i_hat for y_i_hat, _ in res]
+                SSVM_LOGGER.info("Finding the most violating examples took %.3fs" % (time.time() - _start_time))
 
                 # Get step-width
-                if self.step_size == "linesearch":
+                _start_time = time.time()
+                if self.step_size_approach == "linesearch":
                     with self.training_data_.candidates:
                         step_size = self._get_step_size_linesearch(I_batch, y_I_hat, [TFG for _, TFG in res])
                 else:
                     step_size = self._get_step_size_diminishing(n_iterations_total, N)
-                print("\t%.4f" % step_size)
+                SSVM_LOGGER.info("Step-size determination using '%s' (took %.3fs): %.4f"
+                                 % (self.step_size_approach, time.time() - _start_time, step_size))
 
                 # Update the dual variables
                 n_iterations_total += 1
-                print("\tn_active=%d (before update)" % self.alphas_.n_active())
+                SSVM_LOGGER.info("Number of active dual variables (a_iy > 0)")
+                SSVM_LOGGER.info("\tBefore update: %d" % self.alphas_.n_active())
 
                 if step_size > 0:
                     is_new = [self.alphas_.update(i, y_i_hat, step_size) for i, y_i_hat in zip(I_batch, y_I_hat)]
-                    print(is_new)
-                    print("\tn_active=%d (after update)" % self.alphas_.n_active())
+                    SSVM_LOGGER.info("\tAfter update: %d" % self.alphas_.n_active())
+                    SSVM_LOGGER.info("Which active sequences are new:")
+                    for _i, _is_new in zip(I_batch, is_new):
+                        SSVM_LOGGER.info("\tExample {:>4} new? {}".format(_i, _is_new))
                     updates_made = True
 
                     assert self._is_feasible_matrix(self.alphas_, self.C), \
@@ -1467,8 +1499,16 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                                            "active_variables": self.alphas_.n_active()},
                                        summary_writer=summary_writer)
 
-                # print(self.training_data_.candidates.get_molecule_features_by_molecule_id.cache_info())
-                print(flush=True)
+                n_batches_ran += 1
+                t_batch += (time.time() - _start_time_batch)
+                SSVM_LOGGER.info("Batch run-time (avg): %.3fs" % (t_batch / n_batches_ran))
+                SSVM_LOGGER.handlers[0].flush()
+
+            n_epochs_ran += 1
+            t_epoch += (time.time() - _start_time_epoch)
+            SSVM_LOGGER.info("Epoch run-time (avg): %.3fs" % (t_epoch / n_epochs_ran))
+
+            SSVM_LOGGER.handlers[0].flush()
 
             if summary_writer is not None:
                 # Write out scores only after each epoch

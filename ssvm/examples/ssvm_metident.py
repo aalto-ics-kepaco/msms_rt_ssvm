@@ -71,7 +71,7 @@ if __name__ == "__main__":
 
     start = timer()
 
-    svm = StructuredSVMMetIdent(C=128, random_state=928, n_epochs=10, batch_size=8, step_size="linesearch") \
+    svm = StructuredSVMMetIdent(C=128, random_state=928, n_epochs=10, batch_size=8, step_size_approach="linesearch") \
         .fit(X_train, mols_train, candidates=cand, num_init_active_vars_per_seq=1,
              pre_calc_args={"pre_calc_label_losses": True,
                             "pre_calc_L_Ci_S_matrices": True,

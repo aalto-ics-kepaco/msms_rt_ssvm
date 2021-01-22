@@ -6,6 +6,9 @@ import itertools as it
 import argparse
 import pickle
 import gzip
+import logging
+import time
+import sys
 
 from typing import Tuple
 from matchms.Spectrum import Spectrum
@@ -17,6 +20,21 @@ from ssvm.ssvm import StructuredSVMSequencesFixedMS2
 
 from msmsrt_scorer.lib.data_utils import load_dataset_CASMI, load_dataset_EA
 from msmsrt_scorer.experiments.plot_and_table_utils import _marg_or_cand
+
+# ================
+# Setup the Logger
+LOGGER = logging.getLogger("redo_bioinf_exp")
+LOGGER.setLevel(logging.INFO)
+LOGGER.propagate = False
+
+CH = logging.StreamHandler()
+CH.setLevel(logging.INFO)
+
+FORMATTER = logging.Formatter('[%(levelname)s] %(name)s : %(message)s')
+CH.setFormatter(FORMATTER)
+
+LOGGER.addHandler(CH)
+# ================
 
 
 def get_cli_arguments() -> argparse.Namespace:
@@ -69,7 +87,9 @@ if __name__ == "__main__":
     # Parse arguments
     # ===================
     args = get_cli_arguments()
-    print(args)
+    LOGGER.info("=== Arguments ===")
+    for k, v in args.__dict__.items():
+        LOGGER.info("{} = {}".format(k, v))
 
     # Handle parameters regarding the label-loss
     if args.lloss_fps_mode == "count":
@@ -105,7 +125,8 @@ if __name__ == "__main__":
         eval_max_n_ms2 = 100
         eval_idx = args.eval_set_id - 150
 
-    print("DS=%s, ION=%s, MAXNMS2=%d" % (eval_ds, eval_ion, eval_max_n_ms2))
+    LOGGER.info("=== Dataset ===")
+    LOGGER.info("DS = %s, ION = %s" % (eval_ds, eval_ion))
 
     # ===================
     # Get list of Spectra
@@ -155,16 +176,21 @@ if __name__ == "__main__":
     spectra_train, labels_train = zip(*[(spectrum, label) for spectrum, label in zip(spectra, labels)
                                         if label not in labels_eval])
 
-    print("N_spec_total=%d, N_spec_train=%d, N_spec_eval=%d" % (len(spectra), len(spectra_train), len(spectra_eval)))
+    LOGGER.info("Number of spectra: total = %d, train = %d, evaluation = %d"
+                % (len(spectra), len(spectra_train), len(spectra_eval)))
 
     param_grid = list(it.product(C_grid, rtw_grid))
     opt_values = []
     cv_inner = GroupShuffleSplit(n_splits=n_splits_inner, test_size=0.2, random_state=102)
+    LOGGER.info("=== Search hyper parameter grid ===")
+    LOGGER.info("C-grid: {}".format(C_grid))
+    LOGGER.info("RTW-grid: {}".format(rtw_grid))
     for idx, (C, rtw) in enumerate(param_grid):
-        print("(%02d/%02d) C=%f, rtw=%f" % (idx + 1, len(param_grid), C, rtw))
+        LOGGER.info("(%d / %d) C = %f, rtw = %f" % (idx + 1, len(param_grid), C, rtw))
 
         for jdx, (train, test) in enumerate(cv_inner.split(spectra_train, groups=labels_train)):
-            print("\t(%02d/%02d) n_train_inner=%d, n_test_inner=%d" % (jdx + 1, n_splits_inner, len(train), len(test)))
+            LOGGER.info("(%d / %d, inner) Number of spectra (inner cv): train = %d, test = %d"
+                        % (jdx + 1, n_splits_inner, len(train), len(test)))
 
             spectra_train_inner = [spectra_train[i] for i in train]
             labels_train_inner = [labels_train[i] for i in train]
@@ -184,7 +210,7 @@ if __name__ == "__main__":
             # --------------
             ssvm = StructuredSVMSequencesFixedMS2(
                 mol_feat_label_loss=mol_feat_label_loss, mol_feat_retention_order="substructure_count",
-                mol_kernel=args.mol_kernel, C=C, step_size=args.stepsize, batch_size=args.batch_size,
+                mol_kernel=args.mol_kernel, C=C, step_size_approach=args.stepsize, batch_size=args.batch_size,
                 n_epochs=n_epochs_inner, label_loss=label_loss, random_state=jdx,
                 retention_order_weight=rtw, n_jobs=args.n_jobs
             ).fit(training_sequences, n_init_per_example=args.n_init_per_example)
@@ -203,22 +229,22 @@ if __name__ == "__main__":
                 N=np.int(np.round(args.n_samples_train * 0.25)), L_min=10, L_max=30, random_state=jdx,
                 ms2scorer=args.ms2scorer)
 
+            LOGGER.info("Score hyper-parameter tuple ...")
             opt_values.append([C, rtw, jdx, ssvm.score(test_sequences, stype="ndcg_ohc")])
 
     df_opt_values = pd.DataFrame(opt_values, columns=["C", "retention_order_weight", "inner_split", "ndcg_ohc"])
     C_opt, rtw_opt = df_opt_values.groupby(["C", "retention_order_weight"]).mean()["ndcg_ohc"].idxmax()
 
-    print("\tC_opt=%f, rtw_opt=%f" % (C_opt, rtw_opt))
-    print("\tC-grid:")
-    print("\t", C_grid)
-    print("\t", df_opt_values.groupby(["C"]).mean()["ndcg_ohc"].values)
-    print("\trtw-grid:")
-    print("\t", rtw_grid)
-    print("\t", df_opt_values.groupby(["retention_order_weight"]).mean()["ndcg_ohc"].values)
+    LOGGER.info("C_opt=%f, rtw_opt=%f" % (C_opt, rtw_opt))
+    LOGGER.info("C-grid: {}".format(C_grid))
+    LOGGER.info(df_opt_values.groupby(["C"]).mean()["ndcg_ohc"].values)
+    LOGGER.info("RTW-grid: {}".format(rtw_grid))
+    LOGGER.info(df_opt_values.groupby(["retention_order_weight"]).mean()["ndcg_ohc"].values)
 
     # =========================================
     # Train the SSVM with best hyper-parameters
     # =========================================
+    LOGGER.info("=== Train SSVM with all training data ===")
     training_sequences = SequenceSample(
         spectra_train, labels_train,
         RandomSubsetCandidateSQLiteDB(
@@ -230,7 +256,7 @@ if __name__ == "__main__":
 
     ssvm = StructuredSVMSequencesFixedMS2(
         mol_feat_label_loss=mol_feat_label_loss, mol_feat_retention_order="substructure_count",
-        mol_kernel=args.mol_kernel, C=C_opt, step_size=args.stepsize, batch_size=args.batch_size,
+        mol_kernel=args.mol_kernel, C=C_opt, step_size_approach=args.stepsize, batch_size=args.batch_size,
         n_epochs=args.n_epochs, label_loss=label_loss, random_state=1993,
         retention_order_weight=rtw_opt, n_jobs=args.n_jobs
     ).fit(training_sequences, n_init_per_example=args.n_init_per_example)
@@ -238,6 +264,7 @@ if __name__ == "__main__":
     # ====================
     # Evaluate performance
     # ====================
+    LOGGER.info("=== Evaluate SSVM performance on the evaluation set ===")
     candidates = FixedSubsetCandidateSQLiteDB(
         labelspace_subset=labelspace_subset, db_fn=args.db_fn, molecule_identifier=args.molecule_identifier,
         init_with_open_db_conn=False, assert_correct_candidate=True)
@@ -246,28 +273,41 @@ if __name__ == "__main__":
     #     db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, init_with_open_db_conn=False)
 
     with candidates:
-        print("\tSpectrum - n_candidates:")
+        LOGGER.info("\tSpectrum - n_candidates:")
         for spec in spectra_eval:
-            print("\t%s - %05d" % (spec.get("spectrum_id"), len(candidates.get_labelspace(spec))))
+            LOGGER.info("\t%s - %5d" % (spec.get("spectrum_id"), len(candidates.get_labelspace(spec))))
 
     seq_eval = LabeledSequence(spectra_eval, labels_eval, candidates=candidates, ms2scorer=args.ms2scorer)
 
-    topk = ssvm.score([seq_eval], stype="topk_mm", average=False).flatten()
-    print(topk)
-    top1_map = ssvm.score([seq_eval], stype="top1_map", average=False).item()
-    print(top1_map)
+    scores = {}
+    for stype in ["topk_mm", "top1_map"]:
+        LOGGER.info("Evaluation set scoring: %s" % stype)
+        start = time.time()
+        scores[stype] = ssvm.score([seq_eval], stype=stype, average=False).flatten()
+        LOGGER.info("Scoring time (%s): %.3fs" % (stype, time.time() - start))
+
+    LOGGER.info("topk (raw): {}".format(scores["topk_mm"]))
+    LOGGER.info("Top-1 (MAP) = %.2f%%" % scores["top1_map"])
+    LOGGER.info("Top-1 (MM) = %.2f%%, Top-5 (MM) = %.2f%%, Top-10 (MM) = %.2f%%, Top-20 (MM) = %.2f%%"
+                % (scores["topk_mm"][0], scores["topk_mm"][4], scores["topk_mm"][9], scores["topk_mm"][19]))
 
     # =================
     # Write out results
     # =================
+    LOGGER.info("=== Write out results ===")
     odir_res = os.path.join(args.output_dir, "ds=%s__ion=%s" % (eval_ds, eval_ion))
     os.makedirs(odir_res, exist_ok=True)
+    LOGGER.info("Output directory: %s" % odir_res)
 
     df_opt_values.to_csv(os.path.join(odir_res, "grid_search_results__spl=%03d.tsv" % eval_idx), sep="\t", index=False)
 
-    pd.DataFrame(zip(range(1, len(topk) + 1), topk), columns=["k", "top_acc_perc"]) \
+    pd.DataFrame(zip(range(1, len(scores["topk_mm"]) + 1), scores["topk_mm"]), columns=["k", "top_acc_perc"]) \
         .to_csv(os.path.join(odir_res, "topk__spl=%03d.tsv" % eval_idx), sep="\t", index=False)
 
-    with open(os.path.join(odir_res, "top1_map__spl=%03d.tsv" % eval_idx), "x") as ofile:
-        ofile.write("%f" % top1_map)
+    with open(os.path.join(odir_res, "top1_map__spl=%03d.tsv" % eval_idx), "w+") as ofile:
+        ofile.write("%f" % scores["top1_map"])
 
+    with open(os.path.join(odir_res, "eval_spec_ids__spl=%03d.tsv" % eval_idx), "w+") as ofile:
+        ofile.write("\n".join(spec_ids_eval))
+
+    sys.exit(0)
