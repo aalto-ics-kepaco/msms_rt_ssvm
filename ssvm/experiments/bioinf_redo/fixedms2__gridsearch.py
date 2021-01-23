@@ -63,12 +63,14 @@ def get_cli_arguments() -> argparse.Namespace:
     arg_parser.add_argument("--mol_kernel", type=str, default="minmax_numba", choices=["minmax_numba", "minmax"])
     arg_parser.add_argument("--molecule_identifier", type=str, default="inchi2D", choices=["inchikey1", "inchi", "inchi2D"])
     arg_parser.add_argument("--lloss_fps_mode", type=str, default="binary", choices=["binary", "count"])
+    arg_parser.add_argument("--n_trees_for_scoring", type=int, default=128)
+    arg_parser.add_argument("--n_trees_for_training", type=int, default=1)
 
     return arg_parser.parse_args()
 
 
 def get_hparam_estimation_setting(debug: bool) -> Tuple:
-    if args.debug:
+    if debug:
         n_splits_inner = 2
         n_epochs_inner = 1
         C_grid = [1, 64]
@@ -126,7 +128,7 @@ if __name__ == "__main__":
         eval_idx = args.eval_set_id - 150
 
     LOGGER.info("=== Dataset ===")
-    LOGGER.info("DS = %s, ION = %s" % (eval_ds, eval_ion))
+    LOGGER.info("EVAL_SET_IDX = %d, DS = %s, ION = %s" % (args.eval_set_id, eval_ds, eval_ion))
 
     # ===================
     # Get list of Spectra
@@ -212,7 +214,7 @@ if __name__ == "__main__":
                 mol_feat_label_loss=mol_feat_label_loss, mol_feat_retention_order="substructure_count",
                 mol_kernel=args.mol_kernel, C=C, step_size_approach=args.stepsize, batch_size=args.batch_size,
                 n_epochs=n_epochs_inner, label_loss=label_loss, random_state=jdx,
-                retention_order_weight=rtw, n_jobs=args.n_jobs
+                retention_order_weight=rtw, n_jobs=args.n_jobs, n_trees_per_sequence=args.n_trees_for_training
             ).fit(training_sequences, n_init_per_example=args.n_init_per_example)
 
             # Access test set performance
@@ -258,7 +260,7 @@ if __name__ == "__main__":
         mol_feat_label_loss=mol_feat_label_loss, mol_feat_retention_order="substructure_count",
         mol_kernel=args.mol_kernel, C=C_opt, step_size_approach=args.stepsize, batch_size=args.batch_size,
         n_epochs=args.n_epochs, label_loss=label_loss, random_state=1993,
-        retention_order_weight=rtw_opt, n_jobs=args.n_jobs
+        retention_order_weight=rtw_opt, n_jobs=args.n_jobs, n_trees_per_sequence=args.n_trees_for_training
     ).fit(training_sequences, n_init_per_example=args.n_init_per_example)
 
     # ====================
@@ -283,7 +285,8 @@ if __name__ == "__main__":
     for stype in ["topk_mm", "top1_map"]:
         LOGGER.info("Evaluation set scoring: %s" % stype)
         start = time.time()
-        scores[stype] = ssvm.score([seq_eval], stype=stype, average=False, n_trees_per_sequence=4).flatten()
+        scores[stype] = ssvm.score([seq_eval], stype=stype, average=False,
+                                   n_trees_per_sequence=args.n_trees_for_scoring).flatten()
         LOGGER.info("Scoring time (%s): %.3fs" % (stype, time.time() - start))
 
     LOGGER.info("topk (raw): {}".format(scores["topk_mm"]))
@@ -309,5 +312,14 @@ if __name__ == "__main__":
 
     with open(os.path.join(odir_res, "eval_spec_ids__spl=%03d.tsv" % eval_idx), "w+") as ofile:
         ofile.write("\n".join(spec_ids_eval))
+
+    with open(os.path.join(odir_res, "parameters__spl=%03d.tsv" % eval_idx), "w+") as ofile:
+        for k, v in args.__dict__.items():
+            ofile.write("{} = {}\n".format(k, v))
+
+        ofile.write("C_grid = {}\n".format(C_grid))
+        ofile.write("C_opt = %f\n" % C_opt)
+        ofile.write("rtw_grid = {}\n".format(rtw_grid))
+        ofile.write("rtw_opt = %f\n" % rtw_opt)
 
     sys.exit(0)
