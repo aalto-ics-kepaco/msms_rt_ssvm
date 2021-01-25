@@ -50,4 +50,5 @@ JOBLIB_MEMORY_CACHE_LOCATION=$CACHE_DIR; \
   --lloss_fps_mode="count" \
   --n_trees_for_scoring=128 \
   --n_init_per_example=4 \
-  --batch_size=16
+  --batch_size=16 \
+  --stepsize="linesearch_parallel"

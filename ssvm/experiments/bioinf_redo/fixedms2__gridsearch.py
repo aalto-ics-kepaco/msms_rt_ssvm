@@ -77,7 +77,7 @@ def get_hparam_estimation_setting(debug: bool) -> Tuple:
         rtw_grid = [0.5]
     else:
         n_splits_inner = 5
-        n_epochs_inner = 5
+        n_epochs_inner = 4
         C_grid = [1, 4, 16, 64, 256]
         rtw_grid = [0.1, 0.3, 0.5, 0.7]
 
@@ -183,7 +183,7 @@ if __name__ == "__main__":
 
     param_grid = list(it.product(C_grid, rtw_grid))
     opt_values = []
-    cv_inner = GroupShuffleSplit(n_splits=n_splits_inner, test_size=0.2, random_state=102)
+    cv_inner = GroupShuffleSplit(n_splits=n_splits_inner, test_size=0.25, random_state=102)
     LOGGER.info("=== Search hyper parameter grid ===")
     LOGGER.info("C-grid: {}".format(C_grid))
     LOGGER.info("RTW-grid: {}".format(rtw_grid))
@@ -205,7 +205,7 @@ if __name__ == "__main__":
                     db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, random_state=jdx,
                     number_of_candidates=args.max_n_train_candidates, include_correct_candidate=True,
                     init_with_open_db_conn=False),
-                N=np.int(np.round(args.n_samples_train * 0.75)), L_min=10, L_max=30, random_state=jdx,
+                N=np.int(np.round(args.n_samples_train * 0.5)), L_min=10, L_max=30, random_state=jdx,
                 ms2scorer=args.ms2scorer)
 
             # Train the SSVM
@@ -228,7 +228,7 @@ if __name__ == "__main__":
                     db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, random_state=jdx,
                     number_of_candidates=args.max_n_train_candidates, include_correct_candidate=True,
                     init_with_open_db_conn=False),
-                N=np.int(np.round(args.n_samples_train * 0.25)), L_min=10, L_max=30, random_state=jdx,
+                N=np.int(np.round(args.n_samples_train * 0.5)), L_min=10, L_max=30, random_state=jdx,
                 ms2scorer=args.ms2scorer)
 
             LOGGER.info("Score hyper-parameter tuple ...")

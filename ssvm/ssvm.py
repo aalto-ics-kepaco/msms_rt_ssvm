@@ -522,7 +522,7 @@ class _StructuredSVM(object):
         else:
             raise ValueError("Invalid label loss '%s'. Choices are 'hamming', 'tanimoto_loss' and 'minmax_loss'.")
 
-        if self.step_size_approach not in ["diminishing", "linesearch"]:
+        if self.step_size_approach not in ["diminishing", "linesearch", "linesearch_parallel"]:
             raise ValueError("Invalid stepsize method '%s'. Choices are 'diminishing' and 'linesearch'." %
                              self.step_size_approach)
 
@@ -1471,6 +1471,14 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 if self.step_size_approach == "linesearch":
                     with self.training_data_.candidates:
                         step_size = self._get_step_size_linesearch(I_batch, y_I_hat, [TFG for _, TFG in res])
+                elif self.step_size_approach == "linesearch_parallel":
+                    step_size = self._get_step_size_linesearch_PARALLEL(I_batch, y_I_hat, [TFG for _, TFG in res])
+
+                    # with self.training_data_.candidates:
+                    #     step_size_old = self._get_step_size_linesearch(I_batch, y_I_hat, [TFG for _, TFG in res])
+                    #
+                    #     print(step_size, step_size_old)
+                    #     assert np.isclose(step_size, step_size_old)
                 else:
                     step_size = self._get_step_size_diminishing(n_iterations_total, N)
                 SSVM_LOGGER.info("Step-size determination using '%s' (took %.3fs): %.4f"
@@ -1789,6 +1797,102 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                     scores[s] = ndcg_score(gt_relevance[s][np.newaxis, :], marginals[s]["score"][np.newaxis, :])
 
         return scores.mean().item()
+
+    def _linesearch_helper_den_ii(self, s_minus_a, idx, i, l_sign_delta_t, l_P, l_mol_features):
+        den_ii = 0.0
+
+        sign_delta_t_i_T_P_i = l_sign_delta_t[idx] @ l_P[idx]
+
+        for y, fac in s_minus_a.iter(i):
+            L_yy = self.mol_kernel(l_mol_features[idx][y], l_mol_features[idx][y])
+            den_ii += fac ** 2 * sign_delta_t_i_T_P_i @ L_yy @ sign_delta_t_i_T_P_i
+
+        return den_ii
+
+    def _linesearch_helper_den_ij(self, s_minus_a, I_batch, idx_i, i, l_sign_delta_t, l_P, l_mol_features):
+        den_ij = 0.0
+
+        sign_delta_t_i_T_P_i = l_sign_delta_t[idx_i] @ l_P[idx_i]
+
+        for idx_j, j in enumerate(I_batch[idx_i + 1:], idx_i + 1):
+            sign_delta_t_j_T_P_j = l_sign_delta_t[idx_j] @ l_P[idx_j]
+
+            for y, fac_i in s_minus_a.iter(i):
+                for by, fac_j in s_minus_a.iter(j):
+                    L_yby = self.mol_kernel(l_mol_features[idx_i][y], l_mol_features[idx_j][by])
+                    den_ij += 2 * fac_i * fac_j * sign_delta_t_i_T_P_i @ L_yby @ sign_delta_t_j_T_P_j
+
+        return den_ij
+
+    def _get_step_size_linesearch_PARALLEL(self, I_batch: List[int], y_I_hat: List[Tuple[str, ...]],
+                                           TFG_I: List[TreeFactorGraph]) -> float:
+        """
+        Determine step-size using linesearch.
+
+        :param I_batch: list, training example indices in the current batch
+
+        :param y_I_hat: list of tuples, list of most-violating label sequences
+
+        :param TFG_I: list of TreeFactorGraph, list of graphical models associated with the training examples. The TFGs
+            must be generated using loss-augmentation.
+
+        :return: scalar, line search step-size
+        """
+        N = len(self.training_data_)
+
+        with self.training_data_.candidates:
+            label_space = self.training_data_.get_labelspace()
+
+        # Update direction s
+        s = DualVariables(self.C, label_space, initialize=False).set_alphas(
+            [(i, y_i_hat) for i, y_i_hat in zip(I_batch, y_I_hat)], self.C / N)
+
+        # Difference of the dual vectors: s - a
+        s_minus_a = s - self.alphas_  # type: DualVariables
+
+        if s_minus_a.get_blocks(I_batch) == ([], []):
+            # The best update direction found is equal to the current solution (model). No update needed.
+            return -1
+
+        # ================
+        # Nominator
+        # ================
+        nom = 0.0
+
+        # Tracking some variables we need later for the denominator
+        l_mol_features = [{} for _ in I_batch]
+
+        with self.training_data_.candidates:
+            for idx, i in enumerate(I_batch):
+                TFG = TFG_I[idx]
+
+                # Go over the active "dual" variables: s(i, y) - a(s, y) != 0
+                for y, fac in s_minus_a.iter(i):
+                    Z = self.label_sequence_to_Z(y, label_space[i])
+                    nom += fac * TFG.likelihood(Z, log=True)  # fac = s(i, y) - a(i, y)
+
+                    # Load the molecular features for the active sequence y
+                    l_mol_features[idx][y] = get_molecule_features_by_molecule_id_CACHED(
+                        self.training_data_.candidates, tuple(y), self.mol_feat_retention_order)
+
+        # ================
+        # Denominator
+        # ================
+        l_sign_delta_t = [self.training_data_[i].get_sign_delta_t(self.training_graphs_[i][0]) for i in I_batch]
+        l_P = [self._get_P(self.training_graphs_[i][0]) for i in I_batch]
+
+        with Parallel(n_jobs=self.n_jobs) as parallel_workers:
+            # Go over all i, j for which i = j
+            den = np.sum(parallel_workers(
+                delayed(self._linesearch_helper_den_ii)(s_minus_a, idx, i, l_sign_delta_t, l_P, l_mol_features)
+                for idx, i in enumerate(I_batch)))
+
+            # Go over all (i, j) for which i != j. Note (i, j) gets the same values as (j, i)
+            den += np.sum(parallel_workers(
+                delayed(self._linesearch_helper_den_ij)(s_minus_a, I_batch, idx_i, i, l_sign_delta_t, l_P, l_mol_features)
+                for idx_i, i in enumerate(I_batch)))
+
+        return np.maximum(0.0, np.minimum(1.0, nom / den))
 
     def _get_step_size_linesearch(self, I_batch: List[int], y_I_hat: List[Tuple[str, ...]],
                                   TFG_I: List[TreeFactorGraph]) -> float:
