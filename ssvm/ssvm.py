@@ -1798,32 +1798,6 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         return scores.mean().item()
 
-    def _linesearch_helper_den_ii(self, s_minus_a, idx, i, l_sign_delta_t, l_P, l_mol_features):
-        den_ii = 0.0
-
-        sign_delta_t_i_T_P_i = l_sign_delta_t[idx] @ l_P[idx]
-
-        for y, fac in s_minus_a.iter(i):
-            L_yy = self.mol_kernel(l_mol_features[idx][y], l_mol_features[idx][y])
-            den_ii += fac ** 2 * sign_delta_t_i_T_P_i @ L_yy @ sign_delta_t_i_T_P_i
-
-        return den_ii
-
-    def _linesearch_helper_den_ij(self, s_minus_a, I_batch, idx_i, i, l_sign_delta_t, l_P, l_mol_features):
-        den_ij = 0.0
-
-        sign_delta_t_i_T_P_i = l_sign_delta_t[idx_i] @ l_P[idx_i]
-
-        for idx_j, j in enumerate(I_batch[idx_i + 1:], idx_i + 1):
-            sign_delta_t_j_T_P_j = l_sign_delta_t[idx_j] @ l_P[idx_j]
-
-            for y, fac_i in s_minus_a.iter(i):
-                for by, fac_j in s_minus_a.iter(j):
-                    L_yby = self.mol_kernel(l_mol_features[idx_i][y], l_mol_features[idx_j][by])
-                    den_ij += 2 * fac_i * fac_j * sign_delta_t_i_T_P_i @ L_yby @ sign_delta_t_j_T_P_j
-
-        return den_ij
-
     def _linesearch_helper(self, s_minus_a, TFG_i, I_batch, i, idx_i, l_sign_delta_t, l_P):
         nom = 0.0
         den = 0.0
