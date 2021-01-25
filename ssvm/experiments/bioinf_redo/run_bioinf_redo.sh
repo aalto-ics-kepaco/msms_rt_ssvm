@@ -26,6 +26,10 @@ conda activate ssvm_environment
 LOCAL_DB_DIR="/dev/shm/$SLURM_JOB_ID"
 mkdir "$LOCAL_DB_DIR" || exit 1
 
+# Directory to store joblib-cache files
+CACHE_DIR="$LOCAL_DB_DIR/cache"
+mkdir "$CACHE_DIR" || exit 1
+
 # Set up trap to remove my results on exit from the local disk
 trap "rm -rf $LOCAL_DB_DIR; exit" TERM EXIT
 
@@ -33,6 +37,7 @@ trap "rm -rf $LOCAL_DB_DIR; exit" TERM EXIT
 cp "$DB_DIR/$DB_FN" "$LOCAL_DB_DIR"
 
 NUMBA_NUM_THREADS=$N_THREADS;OMP_NUM_THREADS=$N_THREADS;OPENBLAS_NUM_THREADS=$N_THREADS; \
+JOBLIB_MEMORY_CACHE_LOCATION=$CACHE_DIR; \
     srun python $SCRIPTPATH \
     "$SLURM_ARRAY_TASK_ID" \
   --n_jobs="$N_JOBS" \

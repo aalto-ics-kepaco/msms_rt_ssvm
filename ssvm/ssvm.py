@@ -1973,8 +1973,11 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             # Sj: active labels, i.e. all y in Sigma_j for which a(j, y) > 0
             # A_Sj: dual values, array-like with shape = (|S_j|, )
 
-            l_Y_act_sequence.append(get_molecule_features_by_molecule_id_CACHED(
-                self.training_data_.candidates, tuple(it.chain(*Sj)), self.mol_feat_retention_order))
+            # l_Y_act_sequence.append(get_molecule_features_by_molecule_id_CACHED(
+            #     self.training_data_.candidates, tuple(it.chain(*Sj)), self.mol_feat_retention_order))
+
+            l_Y_act_sequence.append(self.training_data_.candidates.get_molecule_features_by_molecule_id(
+                tuple(it.chain(*Sj)), self.mol_feat_retention_order))
 
         II = np.zeros((len(Y), N))  # shape = (n_molecules, )
         for j in range(N):
@@ -2274,4 +2277,5 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         """
         TODO
         """
-        return get_molecule_features_by_molecule_id_CACHED(sequence.candidates, tuple(sequence.labels), features)
+        # return get_molecule_features_by_molecule_id_CACHED(sequence.candidates, tuple(sequence.labels), features)
+        return sequence.candidates.get_molecule_features_by_molecule_id(tuple(sequence.labels), features)

@@ -57,7 +57,7 @@ def get_cli_arguments() -> argparse.Namespace:
     arg_parser.add_argument("--n_epochs", type=int, default=7)
     arg_parser.add_argument("--batch_size", type=int, default=8)
     arg_parser.add_argument("--n_init_per_example", type=int, default=6)
-    arg_parser.add_argument("--max_n_train_candidates", type=int, default=100)
+    arg_parser.add_argument("--max_n_train_candidates", type=int, default=50)
     arg_parser.add_argument("--stepsize", type=str, default="linesearch")
     arg_parser.add_argument("--ms2scorer", type=str, default="MetFrag_2.4.5__8afe4a14")
     arg_parser.add_argument("--mol_kernel", type=str, default="minmax_numba", choices=["minmax_numba", "minmax"])
@@ -76,10 +76,10 @@ def get_hparam_estimation_setting(debug: bool) -> Tuple:
         C_grid = [1, 64]
         rtw_grid = [0.5]
     else:
-        n_splits_inner = 10
+        n_splits_inner = 5
         n_epochs_inner = 5
-        C_grid = [1, 2, 4, 8, 16, 32, 64, 128, 256]
-        rtw_grid = [0.3, 0.4, 0.5, 0.6, 0.7]
+        C_grid = [1, 4, 16, 64, 256]
+        rtw_grid = [0.1, 0.3, 0.5, 0.7]
 
     return n_splits_inner, n_epochs_inner, C_grid, rtw_grid
 
