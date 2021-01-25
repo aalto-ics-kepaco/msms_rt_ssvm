@@ -5,8 +5,8 @@
 #SBATCH --cpus-per-task=32 --mem-per-cpu=2000
 #SBATCH --time=72:00:00
 # -- SBATCH --time=01:00:00 --partition=debug
-#SBATCH --array=0-249
-# -- SBATCH --array=4
+# -- SBATCH --array=0-249
+#SBATCH --array=0,101
 
 N_THREADS=4
 N_JOBS=8
@@ -15,7 +15,7 @@ PROJECTDIR="/scratch/cs/kepaco/bache1/projects/rt_msms_ssvm/"
 DB_DIR="$PROJECTDIR/_CASMI_DB/"
 DB_FN="DB_LATEST.db"
 LOGDIR="$PROJECTDIR/src/ssvm/experiments/bioinf_redo/logs_triton/version_01"
-SCRIPTPATH="$PROJECTDIR/src/ssvm/experiments/bioinf_redo/ssvm_fixedms2__gridsearch.py"
+SCRIPTPATH="$PROJECTDIR/src/ssvm/experiments/bioinf_redo/fixedms2__gridsearch.py"
 
 # Load the conda environment
 module load miniconda
@@ -39,8 +39,10 @@ NUMBA_NUM_THREADS=$N_THREADS;OMP_NUM_THREADS=$N_THREADS;OPENBLAS_NUM_THREADS=$N_
   --db_fn="$LOCAL_DB_DIR/$DB_FN" \
   --output_dir="$LOGDIR" \
   --n_samples_train=1000 \
-  --n_epoch=7 \
+  --n_epoch=6 \
   --mol_kernel="minmax_numba" \
   --ms2scorer="MetFrag_2.4.5__8afe4a14" \
   --lloss_fps_mode="count" \
-  --n_trees_for_scoring=128
+  --n_trees_for_scoring=128 \
+  --n_init_per_example=4 \
+  --batch_size=16
