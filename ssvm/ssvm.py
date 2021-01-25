@@ -1824,6 +1824,40 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         return den_ij
 
+    def _linesearch_helper(self, s_minus_a, TFG_i, I_batch, i, idx_i, l_sign_delta_t, l_P):
+        nom = 0.0
+        den = 0.0
+
+        # Go over the active "dual" variables: s(i, y) - a(s, y) != 0
+        l_sign_delta_t_i_T_P_i = {}
+        l_mol_features_i = {}
+
+        with self.training_data_.candidates:
+            for y, fac in s_minus_a.iter(i):
+                Z = self.label_sequence_to_Z(y, s_minus_a.label_space[i])
+                nom += fac * TFG_i.likelihood(Z, log=True)  # fac = s(i, y) - a(i, y)
+
+                l_mol_features_i[y] = get_molecule_features_by_molecule_id_CACHED(
+                    self.training_data_.candidates, tuple(y), self.mol_feat_retention_order)
+
+                # Go over all i, j for which i = j
+                l_sign_delta_t_i_T_P_i[y] = l_sign_delta_t[idx_i] @ l_P[idx_i]
+                L_yy = self.mol_kernel(l_mol_features_i[y], l_mol_features_i[y])
+                den += fac ** 2 * l_sign_delta_t_i_T_P_i[y] @ L_yy @ l_sign_delta_t_i_T_P_i[y]
+
+            for idx_j, j in enumerate(I_batch[idx_i + 1:], idx_i + 1):
+                sign_delta_t_j_T_P_j = l_sign_delta_t[idx_j] @ l_P[idx_j]
+
+                for by, fac_j in s_minus_a.iter(j):
+                    mol_features_by = get_molecule_features_by_molecule_id_CACHED(
+                        self.training_data_.candidates, tuple(by), self.mol_feat_retention_order)
+
+                    for y, fac_i in s_minus_a.iter(i):
+                        L_yby = self.mol_kernel(l_mol_features_i[y], mol_features_by)
+                        den += 2 * fac_i * fac_j * l_sign_delta_t_i_T_P_i[y] @ L_yby @ sign_delta_t_j_T_P_j
+
+        return nom, den
+
     def _get_step_size_linesearch_PARALLEL(self, I_batch: List[int], y_I_hat: List[Tuple[str, ...]],
                                            TFG_I: List[TreeFactorGraph]) -> float:
         """
@@ -1840,11 +1874,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         """
         N = len(self.training_data_)
 
-        with self.training_data_.candidates:
-            label_space = self.training_data_.get_labelspace()
-
         # Update direction s
-        s = DualVariables(self.C, label_space, initialize=False).set_alphas(
+        s = DualVariables(self.C, self.alphas_.label_space, initialize=False).set_alphas(
             [(i, y_i_hat) for i, y_i_hat in zip(I_batch, y_I_hat)], self.C / N)
 
         # Difference of the dual vectors: s - a
@@ -1854,45 +1885,24 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             # The best update direction found is equal to the current solution (model). No update needed.
             return -1
 
-        # ================
-        # Nominator
-        # ================
-        nom = 0.0
+        # # Pre-load molecular features
+        # l_mol_features = [{} for _ in I_batch]
+        #
+        # with self.training_data_.candidates:
+        #     for idx, i in enumerate(I_batch):
+        #         for y, fac in s_minus_a.iter(i):
+        #             # Load the molecular features for the active sequence y
+        #             l_mol_features[idx][y] = get_molecule_features_by_molecule_id_CACHED(
+        #                 self.training_data_.candidates, tuple(y), self.mol_feat_retention_order)
 
-        # Tracking some variables we need later for the denominator
-        l_mol_features = [{} for _ in I_batch]
-
-        with self.training_data_.candidates:
-            for idx, i in enumerate(I_batch):
-                TFG = TFG_I[idx]
-
-                # Go over the active "dual" variables: s(i, y) - a(s, y) != 0
-                for y, fac in s_minus_a.iter(i):
-                    Z = self.label_sequence_to_Z(y, label_space[i])
-                    nom += fac * TFG.likelihood(Z, log=True)  # fac = s(i, y) - a(i, y)
-
-                    # Load the molecular features for the active sequence y
-                    l_mol_features[idx][y] = get_molecule_features_by_molecule_id_CACHED(
-                        self.training_data_.candidates, tuple(y), self.mol_feat_retention_order)
-
-        # ================
-        # Denominator
-        # ================
         l_sign_delta_t = [self.training_data_[i].get_sign_delta_t(self.training_graphs_[i][0]) for i in I_batch]
         l_P = [self._get_P(self.training_graphs_[i][0]) for i in I_batch]
 
-        with Parallel(n_jobs=self.n_jobs) as parallel_workers:
-            # Go over all i, j for which i = j
-            den = np.sum(parallel_workers(
-                delayed(self._linesearch_helper_den_ii)(s_minus_a, idx, i, l_sign_delta_t, l_P, l_mol_features)
-                for idx, i in enumerate(I_batch)))
+        nom, den = zip(*Parallel(n_jobs=self.n_jobs)(
+            delayed(self._linesearch_helper)(s_minus_a, TFG_I[idx], I_batch, i, idx, l_sign_delta_t, l_P)
+            for idx, i in enumerate(I_batch)))
 
-            # Go over all (i, j) for which i != j. Note (i, j) gets the same values as (j, i)
-            den += np.sum(parallel_workers(
-                delayed(self._linesearch_helper_den_ij)(s_minus_a, I_batch, idx_i, i, l_sign_delta_t, l_P, l_mol_features)
-                for idx_i, i in enumerate(I_batch)))
-
-        return np.maximum(0.0, np.minimum(1.0, nom / den))
+        return np.maximum(0.0, np.minimum(1.0, np.sum(nom) / np.sum(den)))
 
     def _get_step_size_linesearch(self, I_batch: List[int], y_I_hat: List[Tuple[str, ...]],
                                   TFG_I: List[TreeFactorGraph]) -> float:
@@ -2077,11 +2087,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             # Sj: active labels, i.e. all y in Sigma_j for which a(j, y) > 0
             # A_Sj: dual values, array-like with shape = (|S_j|, )
 
-            # l_Y_act_sequence.append(get_molecule_features_by_molecule_id_CACHED(
-            #     self.training_data_.candidates, tuple(it.chain(*Sj)), self.mol_feat_retention_order))
-
-            l_Y_act_sequence.append(self.training_data_.candidates.get_molecule_features_by_molecule_id(
-                tuple(it.chain(*Sj)), self.mol_feat_retention_order))
+            l_Y_act_sequence.append(get_molecule_features_by_molecule_id_CACHED(
+                self.training_data_.candidates, tuple(it.chain(*Sj)), self.mol_feat_retention_order))
 
         II = np.zeros((len(Y), N))  # shape = (n_molecules, )
         for j in range(N):
@@ -2381,5 +2388,4 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         """
         TODO
         """
-        # return get_molecule_features_by_molecule_id_CACHED(sequence.candidates, tuple(sequence.labels), features)
-        return sequence.candidates.get_molecule_features_by_molecule_id(tuple(sequence.labels), features)
+        return get_molecule_features_by_molecule_id_CACHED(sequence.candidates, tuple(sequence.labels), features)
