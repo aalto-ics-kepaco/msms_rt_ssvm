@@ -381,6 +381,22 @@ class DualVariables(object):
         for y_seq in self._y2col[i]:
             yield y_seq, self._alphas[i, self._y2col[i][y_seq]]
 
+    def squared_l2norm(self):
+        return self._alphas.power(2).sum()
+
+    def __eq__(self, other):
+        if not self._eq_dual_domain(self, other):
+            return False
+
+        if self.n_active() != other.n_active():
+            return False
+
+        for (i, y_seq), a in zip(*self.get_blocks()):
+            if other.get_dual_variable(i, y_seq) != a:
+                return False
+
+        return True
+
     def __mul__(self, fac: Union[float, int]) -> DUALVARIABLES_T:
         if not np.isscalar(fac):
             raise ValueError("Can only multiply with scalar.")
