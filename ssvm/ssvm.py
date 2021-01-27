@@ -2094,7 +2094,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             for idx_j, j in enumerate(I_batch[idx_i + 1:], idx_i + 1):
                 sign_delta_t_j_T_P_j = l_sign_delta_t[idx_j] @ l_P[idx_j]
 
-                # Go over the active "dual" variables: s(i, y) - a(s, y) != 0
+                # Go over the active "dual" variables: s(i, y) - a(i, y) != 0
                 for by, fac_j in s_minus_a.iter(j):
                     mol_features_by = get_molecule_features_by_molecule_id_CACHED(
                         self.training_data_.candidates, tuple(by), self.mol_feat_retention_order)
@@ -2143,7 +2143,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         for idx, i in enumerate(I_batch):
             TFG = TFG_I[idx]
 
-            # Go over the active "dual" variables: s(i, y) - a(s, y) != 0
+            # Go over the active "dual" variables: s(i, y) - a(i, y) != 0
             for y, fac in s_minus_a.iter(i):
                 Z = self.label_sequence_to_Z(y, self.training_data_[i].get_labelspace())
                 nom += fac * TFG.likelihood(Z, log=True)  # fac = s(i, y) - a(i, y)
