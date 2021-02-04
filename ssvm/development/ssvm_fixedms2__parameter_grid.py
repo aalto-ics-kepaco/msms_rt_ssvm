@@ -17,11 +17,9 @@ from ssvm.ssvm import StructuredSVMSequencesFixedMS2
 HP_C = hp.HParam("C", hp.Discrete([1, 2, 8, 32, 128]))
 HP_BATCH_SIZE = hp.HParam("batch_size", hp.Discrete([4, 8, 16]))
 HP_NUM_INIT_ACT_VAR = hp.HParam("num_init_act_var", hp.Discrete([6]))
-HP_RT_WEIGHT = hp.HParam("rt_weight", hp.Discrete([0.0, 0.5, 1.0]))
 HP_GRID = list(it.product(HP_C.domain.values,
                           HP_BATCH_SIZE.domain.values,
-                          HP_NUM_INIT_ACT_VAR.domain.values,
-                          HP_RT_WEIGHT.domain.values))
+                          HP_NUM_INIT_ACT_VAR.domain.values))
 N_TOTAL_PAR_TUP = len(HP_GRID)
 
 
@@ -40,7 +38,7 @@ def get_argument_parser() -> argparse.ArgumentParser:
                             default="/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_LATEST.db")
     arg_parser.add_argument("--output_dir", type=str,
                             help="Base directory to store the Tensorboard logging files, train and test splits, ...",
-                            default="./logs/fixedms2")
+                            default="./logs/fixedms2_nortw")
     arg_parser.add_argument("--n_samples_train", type=int, default=250,
                             help="Number of training sample sequences.")
     arg_parser.add_argument("--n_samples_test", type=int, default=200,
@@ -50,6 +48,7 @@ def get_argument_parser() -> argparse.ArgumentParser:
     arg_parser.add_argument("--stepsize", type=str, default="linesearch")
     arg_parser.add_argument("--ms2scorer", type=str, default="MetFrag_2.4.5__8afe4a14")
     arg_parser.add_argument("--mol_kernel", type=str, default="minmax_numba", choices=["minmax_numba", "minmax"])
+    arg_parser.add_argument("--avg_model", action="store_true")
 
     return arg_parser
 
@@ -70,8 +69,7 @@ if __name__ == "__main__":
     hparams = {
         HP_C: HP_GRID[args.param_tuple_index][0],
         HP_BATCH_SIZE: HP_GRID[args.param_tuple_index][1],
-        HP_NUM_INIT_ACT_VAR: HP_GRID[args.param_tuple_index][2],
-        HP_RT_WEIGHT: HP_GRID[args.param_tuple_index][3]
+        HP_NUM_INIT_ACT_VAR: HP_GRID[args.param_tuple_index][2]
     }
     print(hparams)
 
@@ -112,25 +110,28 @@ if __name__ == "__main__":
     # ===================
     print("TRAINING", flush=True)
     summary_writer = tf.summary.create_file_writer(
-        os.path.join(args.output_dir, "test_performance", "C=%d_bsize=%d_ninit=%d_rtw=%.1f" %
+        os.path.join(args.output_dir, "C=%d_bsize=%d_ninit=%d_avgg=%d" %
                      (HP_GRID[args.param_tuple_index][0],
                       HP_GRID[args.param_tuple_index][1],
                       HP_GRID[args.param_tuple_index][2],
-                      HP_GRID[args.param_tuple_index][3])))
+                      args.avg_model)))
 
     with tf.summary.create_file_writer(args.output_dir).as_default():
         assert hp.hparams_config(
-            hparams=[HP_C, HP_BATCH_SIZE, HP_NUM_INIT_ACT_VAR, HP_RT_WEIGHT],
+            hparams=[HP_C, HP_BATCH_SIZE, HP_NUM_INIT_ACT_VAR],
             metrics=[hp.Metric("Top-%02d_acc_test" % k, display_name="Top-%02d Accuracy (test, %%)" % k)
                      for k in [1, 5, 10, 20]]
-                    # [hp.Metric("Top-01_map_acc_test", display_name="Top-01 Accuracy (MAP, test, %%)")]
         ), "Could not create the 'hparam_tuning' Tensorboard configuration."
 
+    if args.avg_model:
+        aggregated_gradients = "average"
+    else:
+        aggregated_gradients = None
     ssvm = StructuredSVMSequencesFixedMS2(
         mol_feat_label_loss="iokr_fps__count", mol_feat_retention_order="substructure_count",
-        mol_kernel=args.mol_kernel, C=hparams[HP_C], step_size=args.stepsize, batch_size=hparams[HP_BATCH_SIZE],
+        mol_kernel=args.mol_kernel, C=hparams[HP_C], step_size_approach=args.stepsize, batch_size=hparams[HP_BATCH_SIZE],
         n_epochs=args.n_epochs, label_loss="minmax_loss", random_state=1993,
-        retention_order_weight=hparams[HP_RT_WEIGHT], n_jobs=args.n_jobs
+        retention_order_weight=None, n_jobs=args.n_jobs, aggregated_gradients=aggregated_gradients
     ).fit(training_sequences, n_init_per_example=hparams[HP_NUM_INIT_ACT_VAR], summary_writer=summary_writer)
 
     # ====================
@@ -147,10 +148,8 @@ if __name__ == "__main__":
         ms2scorer=args.ms2scorer)
 
     test_acc_tkmm = ssvm.score(test_sequences, stype="topk_mm")
-    # test_acc_t1map = ssvm.score(test_sequences, stype="top1_map")
 
     with summary_writer.as_default():
         hp.hparams(hparams)
         for k in [1, 5, 10, 20]:
             tf.summary.scalar("Top-%02d_acc_test" % k, test_acc_tkmm[k - 1], step=1)  # test, pred
-        # tf.summary.scalar("Top-01_map_acc_test", test_acc_t1map, step=1)

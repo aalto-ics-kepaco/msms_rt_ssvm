@@ -496,13 +496,35 @@ class DualVariables(object):
 
         return True
 
+    @staticmethod
+    def get_s(alphas: DUALVARIABLES_T, I_batch, y_I_hat) -> DUALVARIABLES_T:
+        C = alphas.C
+        N = alphas.N
+
+        i2idx_batch = {i: idx for idx, i in enumerate(I_batch)}
+
+        iy, a = [], []
+        for i in range(N):
+            try:
+                # Example i was updated in the batch (I_batch)
+                iy.append((i, y_I_hat[i2idx_batch[i]]))
+                a.append(C / N)
+            except KeyError:
+                # Example i was not updated
+                _iy, _a = alphas.get_blocks(i)
+                iy += _iy
+                a += _a
+
+        return DualVariables(C=C, label_space=alphas.label_space, initialize=False).set_alphas(iy, a)
+
 
 class _StructuredSVM(object):
     """
     Structured Support Vector Machine (SSVM) meta-class
     """
     def __init__(self, C: Union[int, float] = 1, n_epochs: int = 100, batch_size: int = 1, label_loss: str = "hamming",
-                 step_size_approach: str = "diminishing", random_state: Optional[Union[int, np.random.RandomState]] = None):
+                 step_size_approach: str = "diminishing", step_size_0: float = 0.9,
+                 random_state: Optional[Union[int, np.random.RandomState]] = None):
         """
         Structured Support Vector Machine (SSVM)
 
@@ -526,8 +548,9 @@ class _StructuredSVM(object):
         self.n_epochs = n_epochs
         self.batch_size = batch_size
         self.label_loss = label_loss
-        self.random_state = random_state
         self.step_size_approach = step_size_approach
+        self.gamma_0 = step_size_0
+        self.random_state = random_state
 
         if self.label_loss == "hamming":
             self.label_loss_fun = hamming_loss
@@ -538,7 +561,7 @@ class _StructuredSVM(object):
         else:
             raise ValueError("Invalid label loss '%s'. Choices are 'hamming', 'tanimoto_loss' and 'minmax_loss'.")
 
-        if self.step_size_approach not in ["diminishing", "linesearch", "linesearch_parallel"]:
+        if self.step_size_approach not in ["diminishing", "diminishing_2", "linesearch", "linesearch_parallel"]:
             raise ValueError("Invalid stepsize method '%s'. Choices are 'diminishing' and 'linesearch'." %
                              self.step_size_approach)
 
@@ -576,6 +599,19 @@ class _StructuredSVM(object):
         :return: scalar, step-size
         """
         return (2 * N) / (k + 2 * N)
+
+    @staticmethod
+    def _get_step_size_diminishing_2(gamma_k, d=2):
+        """
+        Step-size and Sandor proposed. Simple decaying formula.
+
+        :param gamma_k: scalar, step-size in step k
+
+        :param d: scalar, controlling the steepness of the decay.
+
+        :return: scalar, step-size for step k + 1
+        """
+        return gamma_k - (gamma_k**2 / d)
 
 
 class StructuredSVMMetIdent(_StructuredSVM):
@@ -1348,7 +1384,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     """
     def __init__(self, mol_feat_label_loss: str, mol_feat_retention_order: str,
                  mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]],  n_trees_per_sequence: int = 1,
-                 retention_order_weight=0.5, n_jobs: int = 1, *args, **kwargs):
+                 retention_order_weight=0.5, n_jobs: int = 1, aggregated_gradients: Optional[str] = None,
+                 *args, **kwargs):
         """
         :param mol_feat_label_loss:
         :param mol_feat_retention_order:
@@ -1364,6 +1401,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         self.n_trees_per_sequence = n_trees_per_sequence
         self.retention_order_weight = retention_order_weight
         self.n_jobs = n_jobs
+        self.aggregated_gradients = aggregated_gradients
 
         if self.retention_order_weight is None:
             self.D_rt = 1.0
@@ -1380,6 +1418,10 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         if self.n_trees_per_sequence > 1:
             raise ValueError("Currently only a single spanning tree per sequence is supported.")
+
+        if self.aggregated_gradients not in [None, "ADAM", "average"]:
+            raise ValueError("Unsupported gradient aggregation: %s. Choices are None and 'ADAM'." %
+                             self.aggregated_gradients)
 
         super().__init__(*args, **kwargs)
 
@@ -1411,6 +1453,9 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             self.alphas_ = DualVariables(C=self.C, label_space=self.training_data_.get_labelspace(),
                                          num_init_active_vars=n_init_per_example, random_state=self.random_state)
             assert self._is_feasible_matrix(self.alphas_, self.C), "Initial dual variables must be feasible."
+
+        if self.aggregated_gradients == "average":
+            self.alphas_avg_ = deepcopy(self.alphas_)
 
         # Initialize the graphs for each sequence
         self.training_graphs_ = [SpanningTrees(sequence, self.n_trees_per_sequence, i)
@@ -1468,44 +1513,69 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 _start_time = time.time()
                 if self.step_size_approach == "linesearch":
                     with self.training_data_.candidates:
-                        step_size = self._get_step_size_linesearch(I_batch, y_I_hat, [TFG for _, TFG in res])
+                        gamma_k = self._get_step_size_linesearch(I_batch, y_I_hat, [TFG for _, TFG in res])
                 elif self.step_size_approach == "linesearch_parallel":
-                    step_size = self._get_step_size_linesearch_parallel(I_batch, y_I_hat, [TFG for _, TFG in res])
+                    gamma_k = self._get_step_size_linesearch_parallel(I_batch, y_I_hat, [TFG for _, TFG in res])
 
                     # with self.training_data_.candidates:
                     #     step_size_old = self._get_step_size_linesearch(I_batch, y_I_hat, [TFG for _, TFG in res])
                     #
                     #     print(step_size, step_size_old)
                     #     assert np.isclose(step_size, step_size_old)
+                elif self.step_size_approach == "diminishing":
+                    gamma_k = self._get_step_size_diminishing(n_iterations_total, N)
+                elif self.step_size_approach == "diminishing_2":
+                    if n_iterations_total == 0:
+                        gamma_k = self.gamma_0
+                    else:
+                        gamma_k = self._get_step_size_diminishing_2(gamma_k)
                 else:
-                    step_size = self._get_step_size_diminishing(n_iterations_total, N)
+                    raise ValueError()
+
                 SSVM_LOGGER.info("Step-size determination using '%s' (took %.3fs): %.4f"
-                                 % (self.step_size_approach, time.time() - _start_time, step_size))
+                                 % (self.step_size_approach, time.time() - _start_time, gamma_k))
 
                 # Update the dual variables
-                n_iterations_total += 1
                 SSVM_LOGGER.info("Number of active dual variables (a_iy > 0)")
                 SSVM_LOGGER.info("\tBefore update: %d" % self.alphas_.n_active())
 
-                if step_size > 0:
-                    is_new = [self.alphas_.update(i, y_i_hat, step_size) for i, y_i_hat in zip(I_batch, y_I_hat)]
-                    SSVM_LOGGER.info("\tAfter update: %d" % self.alphas_.n_active())
-                    SSVM_LOGGER.info("Which active sequences are new:")
-                    for _i, _is_new in zip(I_batch, is_new):
-                        SSVM_LOGGER.info("\tExample {:>4} new? {}".format(_i, _is_new))
+                if gamma_k > 0:
                     updates_made = True
 
+                    if self.aggregated_gradients == "ADAM":
+                        raise NotImplementedError("ADAM not implemented.")
+                    else:
+                        # Update defined as:
+                        # ------------------
+                        #   alpha_kp1 = alpha_k + gamma * (s - alpha_k)
+                        is_new = [self.alphas_.update(i, y_i_hat, gamma_k) for i, y_i_hat in zip(I_batch, y_I_hat)]
+
+                        SSVM_LOGGER.info("Which active sequences are new:")
+                        for _i, _is_new in zip(I_batch, is_new):
+                            SSVM_LOGGER.info("\tExample {:>4} new? {}".format(_i, _is_new))
+
+                    # Check feasibility of the model after the update
                     assert self._is_feasible_matrix(self.alphas_, self.C), \
                         "Dual variables after update are not feasible anymore."
 
+                    if self.aggregated_gradients == "average":
+                        rho = 2 / (n_iterations_total + 2)
+                        self.alphas_avg_ = (1 - rho) * self.alphas_avg_ + rho * self.alphas_
+                        assert self._is_feasible_matrix(self.alphas_avg_, self.C), \
+                            "Averaged dual variables after update are not feasible anymore."
+
+                    SSVM_LOGGER.info("\tAfter update: %d" % self.alphas_.n_active())
                     if summary_writer is not None:
-                        self.write_log(n_iter=n_iterations_total,
+                        self.write_log(n_iter=n_iterations_total + 1,
                                        data_to_log={
-                                           "step_size": step_size,
+                                           "step_size": gamma_k,
                                            "active_variables": self.alphas_.n_active()},
                                        summary_writer=summary_writer)
 
+                # Update batch and iteration counters
                 n_batches_ran += 1
+                n_iterations_total += 1
+
                 t_batch += (time.time() - _start_time_batch)
                 SSVM_LOGGER.info("Batch run-time (avg): %.3fs" % (t_batch / n_batches_ran))
                 SSVM_LOGGER.handlers[0].flush()
@@ -1514,9 +1584,16 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             t_epoch += (time.time() - _start_time_epoch)
             SSVM_LOGGER.info("Epoch run-time (avg): %.3fs" % (t_epoch / n_epochs_ran))
 
+            # Flush the logger to ensure that logs are written on Triton as well
             SSVM_LOGGER.handlers[0].flush()
 
             if summary_writer is not None:
+                # FIXME: Hack to use the averaged model for prediction before the model training has been finalized.
+                alphas_to_restore = deepcopy(self.alphas_)
+
+                if self.aggregated_gradients == "average":
+                    self.alphas_ = deepcopy(self.alphas_avg_)
+
                 # Write out scores only after each epoch
                 self.write_log(n_iter=n_iterations_total,
                                data_to_log={
@@ -1526,8 +1603,13 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                                                                    stype="top1_map")},
                                summary_writer=summary_writer)
 
+                self.alphas_ = alphas_to_restore
+
             if not updates_made:
                 break
+
+        if self.aggregated_gradients == "average":
+            self.alphas_ = self.alphas_avg_
 
         return self
 
@@ -2203,35 +2285,19 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     # ================
     @staticmethod
     def write_log(n_iter: int, data_to_log: dict, summary_writer: tf.summary.SummaryWriter):
-        """
+        _tmp = [
+            ("step_size", "Optimizer", "Step-Size"),
+            ("active_variables", "Model", "Active dual variables"),
+            ("training_ndcg_ll", "Metrics (Training)", "NDCG (label loss)"),
+            ("training_ndcg_ohc", "Metrics (Training)", "NDCG (one-hot-coding)"),
+            ("training_top1_map", "Metrics (Training)", "Top-1 (MAP)")
+        ]
 
-        :param summary_writer:
-        :return:
-        """
-        if data_to_log.get("step_size", None):
-            with summary_writer.as_default():
-                with tf.name_scope("Optimizer"):
-                    tf.summary.scalar("Step-Size", data=data_to_log["step_size"], step=n_iter)
-
-        if data_to_log.get("active_variables", None):
-            with summary_writer.as_default():
-                with tf.name_scope("Model"):
-                    tf.summary.scalar("Active dual variables", data=data_to_log["active_variables"], step=n_iter)
-
-        if data_to_log.get("training_ndcg_ll", None):
-            with summary_writer.as_default():
-                with tf.name_scope("Metrics (Training)"):
-                    tf.summary.scalar("NDCG (label loss)", data=data_to_log["training_ndcg_ll"], step=n_iter)
-
-        if data_to_log.get("training_ndcg_ohc", None):
-            with summary_writer.as_default():
-                with tf.name_scope("Metrics (Training)"):
-                    tf.summary.scalar("NDCG (one-hot-coding)", data=data_to_log["training_ndcg_ohc"], step=n_iter)
-
-        if data_to_log.get("training_top1_map", None):
-            with summary_writer.as_default():
-                with tf.name_scope("Metrics (Training)"):
-                    tf.summary.scalar("Top-1 (MAP)", data=data_to_log["training_top1_map"], step=n_iter)
+        for score_id, scope, score_title in _tmp:
+            if data_to_log.get(score_id, None):
+                with summary_writer.as_default():
+                    with tf.name_scope(scope):
+                        tf.summary.scalar(score_title, data=data_to_log[score_id], step=n_iter)
 
     @staticmethod
     def get_mol_kernel(mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]]) \

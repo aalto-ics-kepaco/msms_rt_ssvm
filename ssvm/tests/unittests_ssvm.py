@@ -1022,28 +1022,22 @@ class TestDualVariables(unittest.TestCase):
                 ["M72", "M8"]
             ]
         ]
-        N = len(cand_ids)
-
         # Update parameters
         I_batch = [0, 1]
-        Y_bar_seq = [('M2', 'M10', 'M20', 'M2', 'M3'), ("M1", "M2", "M4", "M4", "M8")]
+        y_I_hat = [('M2', 'M10', 'M20', 'M2', 'M3'), ("M1", "M2", "M4", "M4", "M8")]
 
         for gamma in [0, 1, 0.76]:
             # Get dual variable wrapper
             alphas = DualVariables(C=16, label_space=cand_ids, random_state=1, num_init_active_vars=3)
 
             # Get update vector
-            iy_active, a = alphas.get_blocks(2)  # at index 2 we have an example those active variables are not updated
-            s = DualVariables(C=alphas.C, label_space=alphas.label_space, initialize=False).set_alphas(
-                iy=[(i, y_bar_seq) for i, y_bar_seq in list(zip(I_batch, Y_bar_seq)) + iy_active],
-                alphas=[alphas.C / N, alphas.C / N] + a
-            )
+            s = DualVariables.get_s(alphas, I_batch, y_I_hat)
 
             # Perform update using arithmetic functions
             alphas_kp1 = alphas + gamma * (s - alphas)
 
             # Perform update using update function
-            [alphas.update(i, y_bar_seq, gamma) for i, y_bar_seq in zip(I_batch, Y_bar_seq)]
+            [alphas.update(i, y_bar_seq, gamma) for i, y_bar_seq in zip(I_batch, y_I_hat)]
 
             self.assertTrue(alphas == alphas_kp1)
 
@@ -1071,36 +1065,46 @@ class TestDualVariables(unittest.TestCase):
                 ["M72", "M8"]
             ]
         ]
-        N = len(cand_ids)
-
-        for C in [1, 1.5, 10, 101]:
+        for C in [1]:  # 1.5, 10, 101
             # Update parameters
             I_batch = [0, 1]
-            Y_bar_seq = [('M2', 'M10', 'M20', 'M2', 'M3'), ("M1", "M2", "M4", "M4", "M8")]
-            gamma = 0.12
+            y_I_hat = [('M2', 'M10', 'M20', 'M2', 'M3'), ("M1", "M2", "M4", "M4", "M8")]
+            gamma = 0.75
             mu = 0.99
             nu = mu
 
+            # Get dual variable wrapper
             alphas = DualVariables(C=C, label_space=cand_ids, random_state=1, num_init_active_vars=3)
+            print(alphas.get_dual_variable_matrix().todense())
 
             # Get update vector
-            iy_active, a = alphas.get_blocks(2)  # at index 2 we have an example those active variables are not updated
-            s = DualVariables(C=alphas.C, label_space=alphas.label_space, initialize=False).set_alphas(
-                iy=[(i, y_bar_seq) for i, y_bar_seq in list(zip(I_batch, Y_bar_seq)) + iy_active],
-                alphas=[alphas.C / N, alphas.C / N] + a
-            )
+            s = DualVariables.get_s(alphas, I_batch, y_I_hat)
+            print(s.get_dual_variable_matrix().todense())
+            print((s - alphas).get_dual_variable_matrix().todense())
 
+            # Get aggregation vectors
             v = DualVariables(C=alphas.C, label_space=alphas.label_space, initialize=False).set_alphas([], [])
             d = 0.0
 
-            v_kp1 = mu * v + (1 - mu) * (s - alphas)
-            v_kp1 = (1 / (1 - mu**1)) * v_kp1
-            d_kp1 = nu * d + (1 - nu) * (s - alphas).squared_l2norm()
-            d_kp1 = (1 / (1 - mu**1)) * d_kp1
-            alphas_kp1 = alphas + (gamma / (np.sqrt(d_kp1) + 0.000000001)) * v_kp1
+            for k in range(1, 6):
+                if k > 1:
+                    gamma = gamma - ((gamma ** 2) / 2)
 
-            self.assertTrue(alphas_kp1 != alphas)
-            self.assertTrue(_StructuredSVM._is_feasible_matrix(alphas_kp1, C))
+                s_minus_alphas = s - alphas
+
+                v = mu * v + (1 - mu) * s_minus_alphas
+                v = (1 / (1 - mu**k)) * v
+                d = nu * d + (1 - nu) * s_minus_alphas.squared_l2norm()
+                d = (1 / (1 - nu**k)) * d
+                alphas = alphas - (gamma / (np.sqrt(d) + 0.000000001)) * v
+                print(gamma, d, (gamma / (np.sqrt(d) + 0.000000001)))
+                # self.assertTrue(_StructuredSVM._is_feasible_matrix(alphas, C))
+
+                # alphas = alphas + gamma * (s - alphas)
+                print(v.get_dual_variable_matrix().todense())
+
+            # self.assertTrue(alphas_kp1 != alphas)
+            # self.assertTrue(_StructuredSVM._is_feasible_matrix(alphas_kp1, C))
 
 
 if __name__ == '__main__':
