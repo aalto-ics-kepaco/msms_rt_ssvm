@@ -15,7 +15,7 @@ from matchms.Spectrum import Spectrum
 from sklearn.model_selection import GroupShuffleSplit
 
 from ssvm.data_structures import RandomSubsetCandidateSQLiteDB, FixedSubsetCandidateSQLiteDB
-from ssvm.data_structures import LabeledSequence, SequenceSample
+from ssvm.data_structures import LabeledSequence, SequenceSample, SpanningTrees
 from ssvm.ssvm import StructuredSVMSequencesFixedMS2
 
 from msmsrt_scorer.lib.data_utils import load_dataset_CASMI, load_dataset_EA
@@ -66,6 +66,9 @@ def get_cli_arguments() -> argparse.Namespace:
     arg_parser.add_argument("--lloss_fps_mode", type=str, default="binary", choices=["binary", "count"])
     arg_parser.add_argument("--n_trees_for_scoring", type=int, default=128)
     arg_parser.add_argument("--n_trees_for_training", type=int, default=1)
+    arg_parser.add_argument("--C_grid", nargs="+", type=int, default=[1, 4, 16, 32, 64, 128, 256])
+    arg_parser.add_argument("--L_min_train", type=int, default=10)
+    arg_parser.add_argument("--L_max_train", type=int, default=30)
 
     return arg_parser.parse_args()
 
@@ -79,7 +82,7 @@ def get_hparam_estimation_setting(debug: bool) -> Tuple:
     else:
         n_splits_inner = 3
         n_epochs_inner = 4
-        C_grid = [1, 4, 16, 32, 64, 128, 256]
+        C_grid = args.C_grid
         rtw_grid = [None]
 
     return n_splits_inner, n_epochs_inner, C_grid, rtw_grid
@@ -205,8 +208,8 @@ if __name__ == "__main__":
                     db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, random_state=jdx,
                     number_of_candidates=args.max_n_train_candidates, include_correct_candidate=True,
                     init_with_open_db_conn=False),
-                N=np.int(np.round(args.n_samples_train * 0.66)), L_min=10, L_max=30, random_state=jdx,
-                ms2scorer=args.ms2scorer)
+                N=np.int(np.round(args.n_samples_train * 0.66)), L_min=args.L_min_train, L_max=args.L_max_train,
+                random_state=jdx, ms2scorer=args.ms2scorer)
 
             # Train the SSVM
             # --------------
@@ -228,8 +231,8 @@ if __name__ == "__main__":
                     db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, random_state=jdx,
                     number_of_candidates=args.max_n_train_candidates, include_correct_candidate=True,
                     init_with_open_db_conn=False),
-                N=np.int(np.round(args.n_samples_train * 0.33)), L_min=10, L_max=30, random_state=jdx,
-                ms2scorer=args.ms2scorer)
+                N=np.int(np.round(args.n_samples_train * 0.33)), L_min=args.L_min_train, L_max=args.L_max_train,
+                random_state=jdx, ms2scorer=args.ms2scorer)
 
             LOGGER.info("Score hyper-parameter tuple ...")
             opt_values.append([C, jdx, ssvm.score(test_sequences, stype="ndcg_ohc")])
@@ -279,18 +282,17 @@ if __name__ == "__main__":
 
     seq_eval = LabeledSequence(spectra_eval, labels_eval, candidates=candidates, ms2scorer=args.ms2scorer)
 
-    scores = {}
-    for stype in ["topk_mm", "top1_map"]:
-        LOGGER.info("Evaluation set scoring: %s" % stype)
-        start = time.time()
-        scores[stype] = ssvm.score([seq_eval], stype=stype, average=False,
-                                   n_trees_per_sequence=args.n_trees_for_scoring).flatten()
-        LOGGER.info("Scoring time (%s): %.3fs" % (stype, time.time() - start))
+    marginals_eval = ssvm.predict(seq_eval, Gs=SpanningTrees(seq_eval, n_trees=args.n_trees_for_scoring),
+                                  n_jobs=ssvm.n_jobs)
+    scores = {
+        "topk_mm__casmi": ssvm._topk_score(seq_eval, marginals_eval, topk_method="casmi2016"),
+        "topk_mm__csi": ssvm._topk_score(seq_eval, marginals_eval, topk_method="csifingerid")
+    }
 
-    LOGGER.info("topk (raw): {}".format(scores["topk_mm"]))
-    LOGGER.info("Top-1 (MAP) = %.2f%%" % scores["top1_map"])
-    LOGGER.info("Top-1 (MM) = %.2f%%, Top-5 (MM) = %.2f%%, Top-10 (MM) = %.2f%%, Top-20 (MM) = %.2f%%"
-                % (scores["topk_mm"][0], scores["topk_mm"][4], scores["topk_mm"][9], scores["topk_mm"][19]))
+    for km in ["casmi", "csi"]:
+        _key = "topk_mm__%s" % km
+        LOGGER.info("MM (%s): Top-1 = %.2f%%, Top-5 = %.2f%%, Top-10 = %.2f%%, Top-20 = %.2f%%"
+                    % (km, scores[_key][0], scores[_key][4], scores[_key][9], scores[_key][19]))
 
     # Performance with original MS2
     candidates_with_ms2scores = {}
@@ -299,15 +301,21 @@ if __name__ == "__main__":
             candidates_with_ms2scores[s] = {"index_of_correct_structure": candidates.get_labelspace(spec).index(lab),
                                             "score": np.array(candidates.get_ms2_scores(spec, args.ms2scorer)),
                                             "n_cand": candidates.get_n_cand(spec)}
-            scores["topk_baseline"] = get_topk_performance_from_scores(candidates_with_ms2scores, method="casmi2016")[1]
-        LOGGER.info("BASELINE: Top-1 = %.2f%%, Top-5 = %.2f%%, Top-10 = %.2f%%, Top-20 = %.2f%%"
-                    % (scores["topk_baseline"][0], scores["topk_baseline"][4], scores["topk_baseline"][9],
-                       scores["topk_baseline"][19]))
+
+        scores["topk_baseline__casmi"] = get_topk_performance_from_scores(candidates_with_ms2scores, method="casmi2016")[1]
+        LOGGER.info("BASELINE (casmi): Top-1 = %.2f%%, Top-5 = %.2f%%, Top-10 = %.2f%%, Top-20 = %.2f%%"
+                    % (scores["topk_baseline__casmi"][0], scores["topk_baseline__casmi"][4],
+                       scores["topk_baseline__casmi"][9], scores["topk_baseline__casmi"][19]))
+
+        scores["topk_baseline__csi"] = get_topk_performance_from_scores(candidates_with_ms2scores, method="csifingerid")[1]
+        LOGGER.info("BASELINE (csi): Top-1 = %.2f%%, Top-5 = %.2f%%, Top-10 = %.2f%%, Top-20 = %.2f%%"
+                    % (scores["topk_baseline__csi"][0], scores["topk_baseline__csi"][4],
+                       scores["topk_baseline__csi"][9], scores["topk_baseline__csi"][19]))
 
     # Performance first candidate
     for s, (spec, lab) in enumerate(zip(spectra_eval, labels_eval)):
         candidates_with_ms2scores[s]["score"] = np.arange(candidates_with_ms2scores[s]["n_cand"], 0, -1)
-        scores["topk_first_candidate"] = get_topk_performance_from_scores(candidates_with_ms2scores, method="casmi2016")[1]
+    scores["topk_first_candidate"] = get_topk_performance_from_scores(candidates_with_ms2scores, method="casmi2016")[1]
     LOGGER.info("FIRST CANDIDATE: Top-1 = %.2f%%, Top-5 = %.2f%%, Top-10 = %.2f%%, Top-20 = %.2f%%"
                 % (scores["topk_first_candidate"][0], scores["topk_first_candidate"][4],
                    scores["topk_first_candidate"][9], scores["topk_first_candidate"][19]))
@@ -315,7 +323,7 @@ if __name__ == "__main__":
     # Performance first candidate
     for s, (spec, lab) in enumerate(zip(spectra_eval, labels_eval)):
         candidates_with_ms2scores[s]["score"] = np.random.rand(candidates_with_ms2scores[s]["n_cand"])
-        scores["topk_random"] = get_topk_performance_from_scores(candidates_with_ms2scores, method="casmi2016")[1]
+    scores["topk_random"] = get_topk_performance_from_scores(candidates_with_ms2scores, method="casmi2016")[1]
     LOGGER.info("RANDOM SCORES: Top-1 = %.2f%%, Top-5 = %.2f%%, Top-10 = %.2f%%, Top-20 = %.2f%%"
                 % (scores["topk_random"][0], scores["topk_random"][4],
                    scores["topk_random"][9], scores["topk_random"][19]))
@@ -330,11 +338,14 @@ if __name__ == "__main__":
 
     df_opt_values.to_csv(os.path.join(odir_res, "grid_search_results__spl=%03d.tsv" % eval_idx), sep="\t", index=False)
 
-    pd.DataFrame(zip(range(1, len(scores["topk_mm"]) + 1), scores["topk_mm"]), columns=["k", "top_acc_perc"]) \
+    pd.DataFrame(zip(range(1, len(scores["topk_mm__casmi"]) + 1), scores["topk_mm__casmi"], scores["topk_mm__csi"]),
+                 columns=["k", "top_acc_perc__casmi", "top_acc_perc__csi"]) \
         .to_csv(os.path.join(odir_res, "topk__spl=%03d.tsv" % eval_idx), sep="\t", index=False)
 
-    with open(os.path.join(odir_res, "top1_map__spl=%03d.tsv" % eval_idx), "w+") as ofile:
-        ofile.write("%f" % scores["top1_map"])
+    pd.DataFrame(zip(range(1, len(scores["topk_baseline__casmi"]) + 1), scores["topk_baseline__casmi"],
+                     scores["topk_baseline__csi"]),
+                 columns=["k", "top_acc_perc__casmi", "top_acc_perc__csi"]) \
+        .to_csv(os.path.join(odir_res, "topk__baseline__spl=%03d.tsv" % eval_idx), sep="\t", index=False)
 
     with open(os.path.join(odir_res, "eval_spec_ids__spl=%03d.tsv" % eval_idx), "w+") as ofile:
         ofile.write("\n".join(spec_ids_eval))
