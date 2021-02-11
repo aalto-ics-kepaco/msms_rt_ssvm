@@ -306,7 +306,8 @@ class CandidateSQLiteDB(object):
 
         return query
 
-    def _get_ms2_score_query(self, spectrum: Spectrum, ms2scorer: str, candidate_subset: Optional[List] = None) -> str:
+    def _get_ms2_score_query(self, spectrum: Spectrum, ms2scorer: str, candidate_subset: Optional[List[str]] = None) \
+            -> str:
         """
 
         :param spectrum:
@@ -537,7 +538,8 @@ class CandidateSQLiteDB(object):
         return [row[0] for row in self.db.execute(self._get_labelspace_query(spectrum, candidate_subset))]
 
     def get_ms2_scores(self, spectrum: Spectrum, ms2scorer: str, min_score_value: float = 0.0,
-                       max_score_value: float = 1.0, return_dataframe: bool = False) \
+                       max_score_value: float = 1.0, return_dataframe: bool = False,
+                       scale_scores_to_range: bool = True, **kwargs) \
             -> Union[pd.DataFrame, List[float]]:
         """
 
@@ -548,22 +550,32 @@ class CandidateSQLiteDB(object):
 
         :param min_score_value: scalar, minimum output value of the scaled scores.
 
+        :param max_score_value: scalar, maximum output value of the scaled scores.
+
         :param return_dataframe: boolean, indicating whether the score should be returned in a two-column
             pandas.DataFrame storing the molecule ids and MS2 scores.
 
         :return: list of MS2 scores, from the range [0, 1] (default) or [min_score_value, 1]
         """
+        # FIXME: This is a nasty hack to allow calling this function from a sub-class when no candidate subset has been
+        #        defined there.
+        if "__candidate_subset" in kwargs:
+            candidate_subset = kwargs["__candidate_subset"]
+        else:
+            candidate_subset = self._get_candidate_subset(spectrum)
+
         # Load the MS2 scores
         df_scores = pd.read_sql_query(
-            self._get_ms2_score_query(spectrum, ms2scorer, self._get_candidate_subset(spectrum)), self.db)
+            self._get_ms2_score_query(spectrum, ms2scorer, candidate_subset), self.db)
 
         # Fill missing MS2 scores with the minimum score
         min_score = df_scores["ms2_score"].min(skipna=True)
         df_scores["ms2_score"] = df_scores["ms2_score"].fillna(value=min_score)
 
-        # Scale scores to [min_score_value, 1]
-        df_scores["ms2_score"] = MinMaxScaler(feature_range=(min_score_value, max_score_value)) \
-            .fit_transform(df_scores["ms2_score"].values[:, np.newaxis])
+        if scale_scores_to_range:
+            # Scale scores to [min_score_value, 1]
+            df_scores["ms2_score"] = MinMaxScaler(feature_range=(min_score_value, max_score_value)) \
+                .fit_transform(df_scores["ms2_score"].values[:, np.newaxis])
 
         if not return_dataframe:
             df_scores = df_scores["ms2_score"].tolist()
@@ -696,6 +708,98 @@ class RandomSubsetCandidateSQLiteDB(CandidateSQLiteDB):
 
                 if molecule_id not in candidates_sub:
                     candidates_sub[0] = molecule_id
+
+            # Store the subset for later use
+            self._labelspace_subset[spectrum_id] = candidates_sub.tolist()
+
+        return candidates_sub
+
+    def get_n_cand(self, spectrum: Spectrum) -> int:
+        """
+        Return the number of candidates in the random label space subset for the given spectrum.
+        """
+        return len(self.get_labelspace(spectrum))
+
+    def get_labelspace(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> List[str]:
+        """
+        Return the label space of the random subset.
+        """
+        if candidate_subset is not None:
+            raise RuntimeError("Candidate subset cannot be requested in any sub-class of 'CandidateSQLiteDB'.")
+
+        return super().get_labelspace(spectrum, self._get_candidate_subset(spectrum))
+
+
+class HigherRankedCandidatesSQLiteDB(CandidateSQLiteDB):
+    def __init__(self, max_number_of_candidates: Union[int, float], ms2scorer: str,
+                 include_correct_candidate: bool = False, score_correction_factor: float = 0.95,
+                 random_state: Optional[Union[int, np.random.RandomState]] = None, *args, **kwargs):
+        """
+        :param max_number_of_candidates: scalar, If integer: minimum number of candidates per spectrum. If float, the
+            scalar represents the fraction of candidates per spectrum.
+
+        :param include_correct_candidate: boolean, indicating whether the correct candidate should be kept in the
+            candidate list.
+
+        :param random_state:
+
+        :param kwargs: dict, arguments passed to CandidateSQLiteDB
+        """
+        self.max_number_of_candidates = max_number_of_candidates
+        self.ms2scorer = ms2scorer
+        self.include_correct_candidate = include_correct_candidate
+        self.score_correction_factor = score_correction_factor
+        self.random_state = random_state
+
+        self._labelspace_subset = {}
+
+        super().__init__(*args, **kwargs)
+
+    def _get_candidate_subset(self, spectrum: Spectrum) -> List[str]:
+        """
+        :param spectrum: matchms.Spectrum, of the sequence element to get the number of candidates.
+
+        :return: list of strings, molecule identifier for the candidate subset of the given spectrum (not sorted !).
+        """
+        spectrum_id = spectrum.get("spectrum_id")
+
+        try:
+            candidates_sub = self._labelspace_subset[spectrum_id]
+        except KeyError:
+            # Load MS2 scores of all candidates
+            scores_df = super().get_ms2_scores(
+                spectrum, self.ms2scorer, return_dataframe=True, min_score_value=1e-8,
+                __candidate_subset=super().get_labelspace(spectrum, candidate_subset=None)
+            )
+
+            # Ensure the correct is in the candidate set and has a score
+            molecule_id = spectrum.get("molecule_id")
+
+            if molecule_id is None:
+                raise ValueError("Cannot ensure that the ground truth structure is included in the candidate set, "
+                                 "as no 'molecule_id' is specified in the Spectrum object.")
+
+            if molecule_id not in scores_df["identifier"].values:
+                raise ValueError("The molecule id '%s' is not in the candidate set." % molecule_id)
+
+            # Get score of correct candidate
+            score_of_correct_candidate = scores_df.loc[scores_df["identifier"] == molecule_id, "ms2_score"].item()
+
+            # Get scores of all candidates and set those to zero that are smaller than the one of the correct candidate
+            # multiplied by 0.95 (include some slightly lower scored candidates).
+            scores = scores_df["ms2_score"].values
+            scores[scores < (self.score_correction_factor * score_of_correct_candidate)] = 0
+
+            # Randomly sample (mostly, see factor of 0.95) higher ranked candidates
+            candidates_sub = check_random_state(self.random_state).choice(
+                scores_df["identifier"].values,
+                size=np.int(np.minimum(np.sum(scores > 0), self.max_number_of_candidates)),
+                replace=False,
+                p=scores / np.sum(scores))
+
+            # Put correct candidate into the sub-set, if it is missing
+            if self.include_correct_candidate and molecule_id not in candidates_sub:
+                candidates_sub[0] = molecule_id
 
             # Store the subset for later use
             self._labelspace_subset[spectrum_id] = candidates_sub.tolist()
