@@ -285,8 +285,8 @@ if __name__ == "__main__":
     marginals_eval = ssvm.predict(seq_eval, Gs=SpanningTrees(seq_eval, n_trees=args.n_trees_for_scoring),
                                   n_jobs=ssvm.n_jobs)
     scores = {
-        "topk_mm__casmi": ssvm._topk_score(seq_eval, marginals_eval, topk_method="casmi2016"),
-        "topk_mm__csi": ssvm._topk_score(seq_eval, marginals_eval, topk_method="csifingerid")
+        "topk_mm__casmi": ssvm._topk_score(seq_eval, marginals_eval, topk_method="casmi2016", max_k=50),
+        "topk_mm__csi": ssvm._topk_score(seq_eval, marginals_eval, topk_method="csifingerid", max_k=50)
     }
 
     for km in ["casmi", "csi"]:
