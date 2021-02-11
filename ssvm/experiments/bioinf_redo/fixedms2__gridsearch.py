@@ -254,7 +254,7 @@ if __name__ == "__main__":
             db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, random_state=425,
             number_of_candidates=args.max_n_train_candidates, include_correct_candidate=True,
             init_with_open_db_conn=False),
-        N=args.n_samples_train, L_min=10, L_max=30, random_state=23,
+        N=args.n_samples_train, L_min=args.L_min_train, L_max=args.L_max_train, random_state=23,
         ms2scorer=args.ms2scorer)
 
     ssvm = StructuredSVMSequencesFixedMS2(
