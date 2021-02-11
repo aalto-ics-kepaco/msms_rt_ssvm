@@ -2,11 +2,11 @@
 
 # We should reserve at least 12GB of RAM for the candidate database
 
-#SBATCH --cpus-per-task=32 --mem-per-cpu=2000
-#SBATCH --time=72:00:00
+#SBATCH --cpus-per-task=32 --mem-per-cpu=5000
+#SBATCH --time=56:00:00
 # -- SBATCH --time=01:00:00 --partition=debug
-# -- SBATCH --array=0-249
-#SBATCH --array=0,101
+#SBATCH --array=100-249
+# -- SBATCH --array=0
 
 N_THREADS=4
 N_JOBS=8
@@ -14,7 +14,7 @@ N_JOBS=8
 PROJECTDIR="/scratch/cs/kepaco/bache1/projects/rt_msms_ssvm/"
 DB_DIR="$PROJECTDIR/_CASMI_DB/"
 DB_FN="DB_LATEST.db"
-LOGDIR="$PROJECTDIR/src/ssvm/experiments/bioinf_redo/logs_triton/version_01"
+LOGDIR="$PROJECTDIR/src/ssvm/experiments/bioinf_redo/logs_triton/version_01a"
 SCRIPTPATH="$PROJECTDIR/src/ssvm/experiments/bioinf_redo/fixedms2__gridsearch.py"
 
 # Load the conda environment
@@ -27,8 +27,8 @@ LOCAL_DB_DIR="/dev/shm/$SLURM_JOB_ID"
 mkdir "$LOCAL_DB_DIR" || exit 1
 
 # Directory to store joblib-cache files
-CACHE_DIR="$LOCAL_DB_DIR/cache"
-mkdir "$CACHE_DIR" || exit 1
+# CACHE_DIR="$LOCAL_DB_DIR/cache"
+# mkdir "$CACHE_DIR" || exit 1
 
 # Set up trap to remove my results on exit from the local disk
 trap "rm -rf $LOCAL_DB_DIR; exit" TERM EXIT
@@ -37,7 +37,6 @@ trap "rm -rf $LOCAL_DB_DIR; exit" TERM EXIT
 cp "$DB_DIR/$DB_FN" "$LOCAL_DB_DIR"
 
 NUMBA_NUM_THREADS=$N_THREADS;OMP_NUM_THREADS=$N_THREADS;OPENBLAS_NUM_THREADS=$N_THREADS; \
-JOBLIB_MEMORY_CACHE_LOCATION=$CACHE_DIR; \
     srun python $SCRIPTPATH \
     "$SLURM_ARRAY_TASK_ID" \
   --n_jobs="$N_JOBS" \
@@ -50,5 +49,5 @@ JOBLIB_MEMORY_CACHE_LOCATION=$CACHE_DIR; \
   --lloss_fps_mode="count" \
   --n_trees_for_scoring=128 \
   --n_init_per_example=4 \
-  --batch_size=16 \
+  --batch_size=24 \
   --stepsize="linesearch_parallel"
