@@ -1892,7 +1892,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         return scores
 
     def topk_score(self, sequence: LabeledSequence, Gs: Optional[SpanningTrees] = None, return_percentage: bool = True,
-                   max_k: Optional[int] = None, pad_output: bool = False, n_jobs_for_trees: Optional[int] = None) \
+                   max_k: Optional[int] = None, pad_output: bool = False, n_jobs_for_trees: Optional[int] = None,
+                   topk_method="casmi2016") \
             -> Union[int, float, np.ndarray]:
         """
         Calculate top-k accuracy of the ranked candidate lists based on the max-marginals.
@@ -1913,38 +1914,18 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         :param pad_output: boolean, indicating whether the top-k accuracy output array should be padded to the length
             equal 'max_k'. The value at the end of the array is repeated.
 
+        :param n_jobs_for_trees: scalar or None, number of jobs to parallelize the marginal computation for the
+            individual spanning trees.
+
+        :param topk_method: string, which method to use for the top-k accuracy calculation
+
         :return: array-like, shape = (max_k, ), list of top-k, e.g. top-1, top-2, ..., accuracies. Note, the array is
             zero-based, i.e. at index 0 we have top-1. If max_k == 1, the output is a scalar.
         """
         # Calculate the marginals
         marginals = self.predict(sequence, Gs=Gs, map=False, n_jobs=n_jobs_for_trees)
 
-        # Need to find the index of the correct label / molecular structure in the candidate sets to determine the top-k
-        # accuracy.
-        for s in marginals:
-            marginals[s]["index_of_correct_structure"] = marginals[s]["label"].index(sequence.get_labels(s))
-
-        # Calculate the top-k performance
-        topk = get_topk_performance_from_marginals(marginals, method="casmi2016")[return_percentage]  # type: np.ndarray
-
-        # Restrict the output the maximum k requested
-        if max_k is not None:
-            assert max_k >= 1
-
-            topk = topk[:max_k]
-
-            # Pad the output to match the length with max_k,
-            #   e.g. let max_k = 7 then [12, 56, 97, 100] --> [12, 56, 97, 100, 100, 100, 100]
-            if pad_output:
-                _n_to_pad = max_k - len(topk)
-                topk = np.pad(topk, (0, _n_to_pad), mode="edge")
-                assert len(topk) == max_k
-
-        # Output scalar of only top-1 is requested.
-        if len(topk) == 1:
-            topk = topk[0].item()
-
-        return topk
+        return self._topk_score(sequence, marginals, return_percentage, max_k, pad_output, topk_method)
 
     def top1_score(self, sequence: LabeledSequence, Gs: Optional[SpanningTrees] = None, map: bool = False) -> float:
         """
@@ -2185,6 +2166,64 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     # ================
     # STATIC METHODS
     # ================
+    @staticmethod
+    def _topk_score(
+            sequence: LabeledSequence,
+            marginals: Union[Tuple[str, ...], Dict[int, Dict[str, Union[int, np.ndarray, List[str]]]]],
+            return_percentage: bool = True,
+            max_k: Optional[int] = None,
+            pad_output: bool = False,
+            topk_method="casmi2016") -> Union[int, float, np.ndarray]:
+        """
+        Calculate top-k accuracy of the ranked candidate lists based on the max-marginals.
+
+        TODO: For sklearn compatibility we need to separate the sequence data from the labels.
+        TODO: Add a logger event here.
+
+        :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
+
+        :param marginals: Dictionary, pre-computed candidate marginals for the given sequence
+
+        :param return_percentage: boolean, indicating whether the percentage of correctly ranked candidates in top-k
+            should be returned (True) or the absolute number (False).
+
+        :param max_k: scalar, up to with k the top-k performance should be returned. If None, k is set to infinite.
+
+        :param pad_output: boolean, indicating whether the top-k accuracy output array should be padded to the length
+            equal 'max_k'. The value at the end of the array is repeated.
+
+        :param topk_method: string, which method to use for the top-k accuracy calculation
+
+        :return: array-like, shape = (max_k, ), list of top-k, e.g. top-1, top-2, ..., accuracies. Note, the array is
+            zero-based, i.e. at index 0 we have top-1. If max_k == 1, the output is a scalar.
+        """
+        # Need to find the index of the correct label / molecular structure in the candidate sets to determine the top-k
+        # accuracy.
+        for s in marginals:
+            marginals[s]["index_of_correct_structure"] = marginals[s]["label"].index(sequence.get_labels(s))
+
+        # Calculate the top-k performance
+        topk = get_topk_performance_from_marginals(marginals, method=topk_method)[return_percentage]  # type: np.ndarray
+
+        # Restrict the output the maximum k requested
+        if max_k is not None:
+            assert max_k >= 1
+
+            topk = topk[:max_k]
+
+            # Pad the output to match the length with max_k,
+            #   e.g. let max_k = 7 then [12, 56, 97, 100] --> [12, 56, 97, 100, 100, 100, 100]
+            if pad_output:
+                _n_to_pad = max_k - len(topk)
+                topk = np.pad(topk, (0, _n_to_pad), mode="edge")
+                assert len(topk) == max_k
+
+        # Output scalar of only top-1 is requested.
+        if len(topk) == 1:
+            topk = topk[0].item()
+
+        return topk
+
     @staticmethod
     def write_log(n_iter: int, data_to_log: dict, summary_writer: tf.summary.SummaryWriter):
         """

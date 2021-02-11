@@ -1009,7 +1009,7 @@ class SequenceSample(object):
         if self.L_max is None:
             self._L = np.full(self.N, fill_value=self.L_min)
         else:
-            assert self.L_min < self.L_max
+            assert self.L_min <= self.L_max
             self._L = check_random_state(self.random_state).randint(self.L_min, self.L_max + 1, self.N)
 
         # Extract information from the spectra to which dataset they each belong
