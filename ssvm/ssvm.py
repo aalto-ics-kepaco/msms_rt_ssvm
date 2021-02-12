@@ -1740,14 +1740,26 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         """
         # Calculate the node potentials. If needed, augment the MS scores with the label loss
         node_potentials = OrderedDict()
+
+        # First load all MS2 scores
+        _raw_scores = []
         for s in G.nodes:  # V
-            _score = self.D_ms * np.array(sequence.get_ms2_scores(s))  # S(x_i, y) with shape (n_candidates_s, )
+            # Load the raw scores
+            _raw_scores.append(sequence.get_ms2_scores(s, scale_scores_to_range=False, return_as_ndarray=True))
+            node_potentials[s] = {"n_cand": len(_raw_scores[-1])}
 
+        # Calculate the normalization parameter based on ALL candidates
+        _c1, _c2 = CandidateSQLiteDB.get_normalization_parameters_c1_and_c2(np.hstack(_raw_scores))
+
+        # Normalize the raw scores using the global parameters to (0, 1] and transform to log-scores
+        for idx, s in enumerate(G.nodes):  # V
+            node_potentials[s]["log_score"] = \
+                self.D_ms * np.log(CandidateSQLiteDB.normalize_scores(_raw_scores[idx], _c1, _c2))
+
+            # Add label loss is loss-augmented scores are requested
             if loss_augmented:
-                _score += sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s)
-                # Delta_i(y)
-
-            node_potentials[s] = {"log_score": _score, "n_cand": len(_score)}
+                node_potentials[s]["log_score"] += \
+                    sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s)  # Delta_i(y)
 
         # Load the candidate features for all nodes
         l_Y = [sequence.get_molecule_features_for_candidates(self.mol_feat_retention_order, s) for s in G.nodes]

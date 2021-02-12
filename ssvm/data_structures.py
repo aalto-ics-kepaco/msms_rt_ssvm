@@ -537,9 +537,8 @@ class CandidateSQLiteDB(object):
         """
         return [row[0] for row in self.db.execute(self._get_labelspace_query(spectrum, candidate_subset))]
 
-    def get_ms2_scores(self, spectrum: Spectrum, ms2scorer: str, min_score_value: float = 0.0,
-                       max_score_value: float = 1.0, return_dataframe: bool = False,
-                       scale_scores_to_range: bool = True, **kwargs) \
+    def get_ms2_scores(self, spectrum: Spectrum, ms2scorer: str, scale_scores_to_range: bool = True,
+                       return_dataframe: bool = False, return_as_ndarray: bool = False, **kwargs) \
             -> Union[pd.DataFrame, List[float]]:
         """
 
@@ -548,14 +547,15 @@ class CandidateSQLiteDB(object):
         :param ms2scorer: string, identifier of the MS2 scoring method for which the scores should be loaded from the
             database.
 
-        :param min_score_value: scalar, minimum output value of the scaled scores.
-
-        :param max_score_value: scalar, maximum output value of the scaled scores.
+        :param scale_scores_to_range: boolean, indicating whether the scores should be normalized to the range (0, 1].
 
         :param return_dataframe: boolean, indicating whether the score should be returned in a two-column
             pandas.DataFrame storing the molecule ids and MS2 scores.
 
-        :return: list of MS2 scores, from the range [0, 1] (default) or [min_score_value, 1]
+        :param return_as_ndarray: boolean, indicating whether the scores (if return_dataframe = False) should be
+            returned as a numpy array.
+
+        :return: list of scalars or pandas.DataFrame, (normalized, if requested) MS2 scores
         """
         # FIXME: This is a nasty hack to allow calling this function from a sub-class when no candidate subset has been
         #        defined there.
@@ -569,16 +569,19 @@ class CandidateSQLiteDB(object):
             self._get_ms2_score_query(spectrum, ms2scorer, candidate_subset), self.db)
 
         # Fill missing MS2 scores with the minimum score
-        min_score = df_scores["ms2_score"].min(skipna=True)
-        df_scores["ms2_score"] = df_scores["ms2_score"].fillna(value=min_score)
+        df_scores["ms2_score"] = df_scores["ms2_score"].fillna(value=df_scores["ms2_score"].min(skipna=True))
 
         if scale_scores_to_range:
-            # Scale scores to [min_score_value, 1]
-            df_scores["ms2_score"] = MinMaxScaler(feature_range=(min_score_value, max_score_value)) \
-                .fit_transform(df_scores["ms2_score"].values[:, np.newaxis])
+            # Scale scores to (0, 1]
+            score_values = df_scores["ms2_score"].values
+            c1, c2 = self.get_normalization_parameters_c1_and_c2(score_values)
+            df_scores["ms2_score"] = self.normalize_scores(df_scores["ms2_score"].values, c1, c2)
 
         if not return_dataframe:
-            df_scores = df_scores["ms2_score"].tolist()
+            if return_as_ndarray:
+                df_scores = df_scores["ms2_score"].values
+            else:
+                df_scores = df_scores["ms2_score"].tolist()
 
         return df_scores
 
@@ -597,6 +600,52 @@ class CandidateSQLiteDB(object):
         :return: SQLite ready string for 'in' statement
         """
         return "(" + ",".join(["'%s'" % li for li in np.atleast_1d(li)]) + ")"
+
+    @staticmethod
+    def get_normalization_parameters_c1_and_c2(scores: np.ndarray) -> Tuple[float, float]:
+        """
+        Calculate two scalar score normalization parameters (c1 and c2) following [1]. Using these parameters the MS2
+        scores are normalized as follows:
+
+            scores = np.maximum(c2, scores + c1)
+
+        [1] "Probabilistic framework for integration of mass spectrum and retention time information in small molecule
+             identification", Bach et al. 2021
+
+        :param scores: array-like, shape = (n_samples, ), raw MS2 scores from the in-silico method. NaN scores are
+            not allowed.
+
+        :return: tuple of scalars (c1, c2)
+            - 'c1' is the abs of the smallest score if any score < 0 else 0
+            - 'c2' is ten-times smaller than the smallest positive score
+        """
+        if np.any(np.isnan(scores)):
+            raise ValueError("NaN scores are not allowed. Cannot compute the regularization parameters.")
+
+        # Parameter to lift scores to values >= 0
+        min_score = np.min(scores)
+        c1 = np.abs(min_score) if min_score < 0 else 0.0
+
+        if np.all(scores == scores[0]):  # all scores are equal
+            return c1, 1e-6
+
+        # Parameter to avoid zero entries
+        c2 = (np.min(scores[(scores + c1) > 0]) + c1) / 10
+
+        return c1, c2
+
+    @staticmethod
+    def normalize_scores(scores: Union[List, np.ndarray], c1: float, c2: float) -> np.ndarray:
+        """
+        :param scores: array-like, shape = (n_samples, ), raw MS2 scores from the in-silico method
+        """
+        if not isinstance(scores, np.ndarray):
+            scores = np.array(scores)
+
+        scores = np.maximum(c2, scores + c1)  # all scores are >= c2 > 0
+        scores /= np.max(scores)  # maximum score is one
+
+        return scores
 
 
 class FixedSubsetCandidateSQLiteDB(CandidateSQLiteDB):
@@ -731,7 +780,7 @@ class RandomSubsetCandidateSQLiteDB(CandidateSQLiteDB):
 
 
 class HigherRankedCandidatesSQLiteDB(CandidateSQLiteDB):
-    def __init__(self, max_number_of_candidates: Union[int, float], ms2scorer: str,
+    def __init__(self, max_number_of_candidates: int, ms2scorer: str,
                  include_correct_candidate: bool = False, score_correction_factor: float = 0.95,
                  random_state: Optional[Union[int, np.random.RandomState]] = None, *args, **kwargs):
         """
@@ -751,6 +800,9 @@ class HigherRankedCandidatesSQLiteDB(CandidateSQLiteDB):
         self.score_correction_factor = score_correction_factor
         self.random_state = random_state
 
+        if not (0.0 <= score_correction_factor <= 1.0):
+            raise ValueError("The score correction factor must be in range [0, 1].")
+
         self._labelspace_subset = {}
 
         super().__init__(*args, **kwargs)
@@ -768,7 +820,7 @@ class HigherRankedCandidatesSQLiteDB(CandidateSQLiteDB):
         except KeyError:
             # Load MS2 scores of all candidates
             scores_df = super().get_ms2_scores(
-                spectrum, self.ms2scorer, return_dataframe=True, min_score_value=1e-8,
+                spectrum, self.ms2scorer, return_dataframe=True, scale_scores_to_range=True,
                 __candidate_subset=super().get_labelspace(spectrum, candidate_subset=None)
             )
 
@@ -795,7 +847,8 @@ class HigherRankedCandidatesSQLiteDB(CandidateSQLiteDB):
                 scores_df["identifier"].values,
                 size=np.int(np.minimum(np.sum(scores > 0), self.max_number_of_candidates)),
                 replace=False,
-                p=scores / np.sum(scores))
+                p=scores / np.sum(scores)
+            )
 
             # Put correct candidate into the sub-set, if it is missing
             if self.include_correct_candidate and molecule_id not in candidates_sub:
@@ -962,20 +1015,27 @@ class Sequence(object):
 
         return labelspace
 
-    def get_ms2_scores(self, s: Optional[int] = None) -> Union[List[List[float]], List[float]]:
+    def get_ms2_scores(self, s: Optional[int] = None, scale_scores_to_range: bool = True,
+                       return_as_ndarray: bool = False) -> Union[List[List[float]], List[float],
+                                                                 List[np.ndarray], np.ndarray]:
         """
         Get the MS2 scores for the given index
 
         :param s: scalar, sequence index for which the MS2 scores should be returned. If None, scores are returned for
             all spectra in the sequence.
+
+        :param scale_scores_to_range: boolean, indicating whether the output scores should be scaled to (0, 1]
         """
         if self.ms2scorer is None:
             raise ValueError("No MS2 scorer specified!")
 
         if s is None:
-            ms2_scores = [self.get_ms2_scores(s) for s in range(self.__len__())]
+            ms2_scores = [self.get_ms2_scores(s, scale_scores_to_range, return_as_ndarray)
+                          for s in range(self.__len__())]
         else:
-            ms2_scores = self.candidates.get_ms2_scores(self.spectra[s], self.ms2scorer)
+            ms2_scores = self.candidates.get_ms2_scores(self.spectra[s], self.ms2scorer,
+                                                        scale_scores_to_range=scale_scores_to_range,
+                                                        return_as_ndarray=return_as_ndarray)
 
         return ms2_scores
 

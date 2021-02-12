@@ -32,6 +32,7 @@ import networkx as nx
 
 from matchms.Spectrum import Spectrum
 from joblib import Parallel, delayed
+from scipy.stats import rankdata
 
 from ssvm.data_structures import SequenceSample, CandidateSQLiteDB, RandomSubsetCandidateSQLiteDB
 from ssvm.data_structures import Sequence, HigherRankedCandidatesSQLiteDB
@@ -82,19 +83,17 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "Challenge-016"})
         candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey")
 
-        for min_score_value in [0, 0.01, 0.1]:
-            # MS2 Scorer is IOKR
-            scores = candidates.get_ms2_scores(spectrum, ms2scorer="IOKR__696a17f3", min_score_value=min_score_value)
-            self.assertEqual(2233, len(scores))
-            self.assertAlmostEqual(min_score_value, np.min(scores))
-            self.assertAlmostEqual(1.0, np.max(scores))
+        # MS2 Scorer is IOKR
+        scores = candidates.get_ms2_scores(spectrum, ms2scorer="IOKR__696a17f3")
+        self.assertEqual(2233, len(scores))
+        self.assertEqual(0.006426196626211542, np.min(scores))
+        self.assertEqual(1.0, np.max(scores))
 
-            # MS2 Scorer is MetFrag
-            scores = candidates.get_ms2_scores(spectrum, ms2scorer="MetFrag_2.4.5__8afe4a14",
-                                               min_score_value=min_score_value)
-            self.assertEqual(2233, len(scores))
-            self.assertAlmostEqual(min_score_value, np.min(scores))
-            self.assertAlmostEqual(1.0, np.max(scores))
+        # MS2 Scorer is MetFrag
+        scores = candidates.get_ms2_scores(spectrum, ms2scorer="MetFrag_2.4.5__8afe4a14")
+        self.assertEqual(2233, len(scores))
+        self.assertEqual(0.0028105936908001407, np.min(scores))
+        self.assertEqual(1.0, np.max(scores))
 
         # ----------
         # SPECTRUM 2
@@ -105,13 +104,13 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         # MS2 Scorer is IOKR
         scores = candidates.get_ms2_scores(spectrum, ms2scorer="IOKR__696a17f3")
         self.assertEqual(16, len(scores))
-        self.assertEqual(0.0, np.min(scores))
+        self.assertEqual(0.7441697188705315, np.min(scores))
         self.assertEqual(1.0, np.max(scores))
 
         # MS2 Scorer is MetFrag
         scores = candidates.get_ms2_scores(spectrum, ms2scorer="MetFrag_2.4.5__8afe4a14")
         self.assertEqual(16, len(scores))
-        self.assertEqual(0.0, np.min(scores))
+        self.assertEqual(0.18165470462229025, np.min(scores))
         self.assertEqual(1.0, np.max(scores))
 
     def test_get_molecule_features(self):
@@ -481,6 +480,55 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
             number_of_candidates=102, db_fn=DB_FN, molecule_identifier="inchikey1")
         self.assertEqual(16, candidates.get_n_cand(spectrum))
 
+    def test_normalize_scores(self):
+        # All scores are negative
+        for rep in range(30):
+            _rs = np.random.RandomState(rep)
+            scores = - _rs.random(_rs.randint(1, 50))
+            c1, c2 = CandidateSQLiteDB.get_normalization_parameters_c1_and_c2(scores)
+            scores_norm = CandidateSQLiteDB.normalize_scores(scores, c1, c2)
+            np.testing.assert_array_equal(rankdata(scores, method="ordinal"), rankdata(scores_norm, method="ordinal"))
+            self.assertEqual(1.0, np.max(scores_norm))
+            self.assertAlmostEqual(
+                ((np.sort(scores)[1] + np.abs(np.min(scores))) / 10) / (np.max(scores) + np.abs(np.min(scores))),
+                np.min(scores_norm))
+
+        # All scores are positive
+        for rep in range(20):
+            _rs = np.random.RandomState(rep)
+            scores = _rs.random(_rs.randint(1, 50))
+            c1, c2 = CandidateSQLiteDB.get_normalization_parameters_c1_and_c2(scores)
+            scores_norm = CandidateSQLiteDB.normalize_scores(scores, c1, c2)
+            np.testing.assert_array_equal(rankdata(scores, method="ordinal"), rankdata(scores_norm, method="ordinal"))
+            self.assertEqual(1.0, np.max(scores_norm))
+            self.assertAlmostEqual(np.min(scores) / np.max(scores), np.min(scores_norm))
+
+        # All scores are negative and positive
+        for rep in range(20):
+            _rs = np.random.RandomState(rep)
+            scores = _rs.random(_rs.randint(1, 50)) - 0.5
+            c1, c2 = CandidateSQLiteDB.get_normalization_parameters_c1_and_c2(scores)
+            self.assertEqual(c1, np.abs(np.min(scores)))
+            self.assertEqual(c2, np.sort(scores + c1)[1] / 10)
+            scores_norm = CandidateSQLiteDB.normalize_scores(scores, c1, c2)
+            np.testing.assert_array_equal(rankdata(scores, method="ordinal"), rankdata(scores_norm, method="ordinal"))
+            self.assertEqual(1.0, np.max(scores_norm))
+            self.assertAlmostEqual(c2 / np.max(scores + c1), np.min(scores_norm))
+
+    def test_normalize_scores_border_cases(self):
+        # All scores are equal
+        for n_cand in [1, 30]:
+            for val in [-1.1, -0.9, 0, 0.1, 2]:
+                scores = np.full(n_cand, fill_value=val)
+                c1, c2 = CandidateSQLiteDB.get_normalization_parameters_c1_and_c2(scores)
+
+                if val >= 0:
+                    self.assertEqual(0.0, c1)
+                else:
+                    self.assertEqual(np.abs(val), c1)
+                self.assertEqual(c2, 1e-6)
+                np.testing.assert_array_equal(np.ones_like(scores), CandidateSQLiteDB.normalize_scores(scores, c1, c2))
+
 
 class TestHigherRankedCandidatesSQLiteDB(unittest.TestCase):
     def test_get_labelspace(self):
@@ -592,7 +640,7 @@ class TestHigherRankedCandidatesSQLiteDB(unittest.TestCase):
                                                          "molecule_id": "InChI=1S/C9H14N2O2S/c1-8-4-6-9(7-5-8)10-14(12,13)11(2)3/h4-7,10H,1-3H3"})
 
         for max_n_cand in [10, 20, 100, np.inf]:
-            for fac, n_cand in zip([0, 0.95, 1.0], [525, 338, 316]):
+            for fac, n_cand in zip([0, 0.95, 1.0], [525, 396, 316]):
                 # Enforce correct structure to be present
                 candidates = HigherRankedCandidatesSQLiteDB(
                     max_number_of_candidates=max_n_cand, score_correction_factor=fac, ms2scorer="IOKR__696a17f3",
