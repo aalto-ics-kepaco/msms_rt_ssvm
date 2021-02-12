@@ -568,6 +568,9 @@ class TestHigherRankedCandidatesSQLiteDB(unittest.TestCase):
         self.assertEqual(labspace, fps["identifier"].to_list())
 
     def test_different_score_factors__IOKR(self):
+        # ----------
+        # SPECTRUM 1
+        # ----------
         spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "Challenge-016",
                                                          "molecule_id": "FGXWKSZFVQUSTL"})
 
@@ -582,7 +585,27 @@ class TestHigherRankedCandidatesSQLiteDB(unittest.TestCase):
                 self.assertEqual(candidates.get_n_cand(spectrum), len(set(candidates.get_labelspace(spectrum))))
                 self.assertIn(spectrum.metadata["molecule_id"], candidates.get_labelspace(spectrum))
 
+        # ----------
+        # SPECTRUM 2
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "EAX034002",
+                                                         "molecule_id": "InChI=1S/C9H14N2O2S/c1-8-4-6-9(7-5-8)10-14(12,13)11(2)3/h4-7,10H,1-3H3"})
+
+        for max_n_cand in [10, 20, 100, np.inf]:
+            for fac, n_cand in zip([0, 0.95, 1.0], [525, 338, 316]):
+                # Enforce correct structure to be present
+                candidates = HigherRankedCandidatesSQLiteDB(
+                    max_number_of_candidates=max_n_cand, score_correction_factor=fac, ms2scorer="IOKR__696a17f3",
+                    include_correct_candidate=True, db_fn=DB_FN, molecule_identifier="inchi")
+
+                self.assertEqual(np.minimum(max_n_cand, n_cand), len(candidates.get_labelspace(spectrum)))
+                self.assertEqual(candidates.get_n_cand(spectrum), len(set(candidates.get_labelspace(spectrum))))
+                self.assertIn(spectrum.metadata["molecule_id"], candidates.get_labelspace(spectrum))
+
     def test_different_score_factors__MetFrag(self):
+        # ----------
+        # SPECTRUM 1
+        # ----------
         spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "Challenge-016",
                                                          "molecule_id": "FGXWKSZFVQUSTL"})
 
@@ -593,6 +616,24 @@ class TestHigherRankedCandidatesSQLiteDB(unittest.TestCase):
                     max_number_of_candidates=max_n_cand, score_correction_factor=fac,
                     ms2scorer="MetFrag_2.4.5__8afe4a14", include_correct_candidate=True, db_fn=DB_FN,
                     molecule_identifier="inchikey1")
+
+                self.assertEqual(np.minimum(max_n_cand, n_cand), len(candidates.get_labelspace(spectrum)))
+                self.assertEqual(candidates.get_n_cand(spectrum), len(set(candidates.get_labelspace(spectrum))))
+                self.assertIn(spectrum.metadata["molecule_id"], candidates.get_labelspace(spectrum))
+
+        # ----------
+        # SPECTRUM 2
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "EAX034002",
+                                                         "molecule_id": "InChI=1S/C9H14N2O2S/c1-8-4-6-9(7-5-8)10-14(12,13)11(2)3/h4-7,10H,1-3H3"})
+
+        for max_n_cand in [10, 20, 100, np.inf]:
+            for fac, n_cand in zip([0, 0.75, 0.95, 1.0], [525, 99, 76, 76]):
+                # Enforce correct structure to be present
+                candidates = HigherRankedCandidatesSQLiteDB(
+                    max_number_of_candidates=max_n_cand, score_correction_factor=fac,
+                    ms2scorer="MetFrag_2.4.5__8afe4a14", include_correct_candidate=True, db_fn=DB_FN,
+                    molecule_identifier="inchi")
 
                 self.assertEqual(np.minimum(max_n_cand, n_cand), len(candidates.get_labelspace(spectrum)))
                 self.assertEqual(candidates.get_n_cand(spectrum), len(set(candidates.get_labelspace(spectrum))))
