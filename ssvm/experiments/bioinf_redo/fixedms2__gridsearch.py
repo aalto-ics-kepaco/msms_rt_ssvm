@@ -7,7 +7,6 @@ import argparse
 import pickle
 import gzip
 import logging
-import time
 import sys
 
 from typing import Tuple
@@ -15,6 +14,7 @@ from matchms.Spectrum import Spectrum
 from sklearn.model_selection import GroupShuffleSplit
 
 from ssvm.data_structures import RandomSubsetCandidateSQLiteDB, FixedSubsetCandidateSQLiteDB
+from ssvm.data_structures import HigherRankedCandidatesSQLiteDB
 from ssvm.data_structures import LabeledSequence, SequenceSample, SpanningTrees
 from ssvm.ssvm import StructuredSVMSequencesFixedMS2
 
@@ -69,6 +69,8 @@ def get_cli_arguments() -> argparse.Namespace:
     arg_parser.add_argument("--C_grid", nargs="+", type=int, default=[1, 4, 16, 32, 64, 128, 256])
     arg_parser.add_argument("--L_min_train", type=int, default=10)
     arg_parser.add_argument("--L_max_train", type=int, default=30)
+    arg_parser.add_argument("--training_candidate_set", type=str, choices=["random", "higher_ranked"])
+    arg_parser.add_argument("--score_correction_factor", type=float, default=0.95)
 
     return arg_parser.parse_args()
 
@@ -202,12 +204,21 @@ if __name__ == "__main__":
 
             # Get training sequences
             # ----------------------
-            training_sequences = SequenceSample(
-                spectra_train_inner, labels_train_inner,
-                RandomSubsetCandidateSQLiteDB(
+            if args.training_candidate_set == "random":
+                candidate_set_class_train = RandomSubsetCandidateSQLiteDB(
                     db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, random_state=jdx,
                     number_of_candidates=args.max_n_train_candidates, include_correct_candidate=True,
-                    init_with_open_db_conn=False),
+                    init_with_open_db_conn=False)
+            elif args.training_candidate_set == "higher_ranked":
+                candidate_set_class_train = HigherRankedCandidatesSQLiteDB(
+                    db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, random_state=jdx,
+                    score_correction_factor=args.score_correction_factor, max_number_of_candidates=args.max_n_train_candidates,
+                    include_correct_candidate=True, init_with_open_db_conn=False, ms2scorer=args.ms2scorer)
+            else:
+                raise ValueError("Invalid training candidate set definition: '%s'." % args.training_candidate_set)
+
+            training_sequences = SequenceSample(
+                spectra_train_inner, labels_train_inner, candidate_set_class_train,
                 N=np.int(np.round(args.n_samples_train * 0.66)), L_min=args.L_min_train, L_max=args.L_max_train,
                 random_state=jdx, ms2scorer=args.ms2scorer)
 
@@ -222,15 +233,24 @@ if __name__ == "__main__":
 
             # Access test set performance
             # ---------------------------
+            if args.training_candidate_set == "random":
+                candidate_set_class_test = RandomSubsetCandidateSQLiteDB(
+                    db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, random_state=jdx,
+                    number_of_candidates=args.max_n_train_candidates, include_correct_candidate=True,
+                    init_with_open_db_conn=False)
+            elif args.training_candidate_set == "higher_ranked":
+                candidate_set_class_test = HigherRankedCandidatesSQLiteDB(
+                    db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, random_state=jdx,
+                    score_correction_factor=args.score_correction_factor, max_number_of_candidates=args.max_n_train_candidates,
+                    include_correct_candidate=True, init_with_open_db_conn=False, ms2scorer=args.ms2scorer)
+            else:
+                raise ValueError("Invalid training candidate set definition: '%s'." % args.training_candidate_set)
+
             spectra_test_inner = [spectra_train[i] for i in test]
             labels_test_inner = [labels_train[i] for i in test]
 
             test_sequences = SequenceSample(
-                spectra_test_inner, labels_test_inner,
-                RandomSubsetCandidateSQLiteDB(
-                    db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, random_state=jdx,
-                    number_of_candidates=args.max_n_train_candidates, include_correct_candidate=True,
-                    init_with_open_db_conn=False),
+                spectra_test_inner, labels_test_inner, candidate_set_class_test,
                 N=np.int(np.round(args.n_samples_train * 0.33)), L_min=args.L_min_train, L_max=args.L_max_train,
                 random_state=jdx, ms2scorer=args.ms2scorer)
 
@@ -248,12 +268,21 @@ if __name__ == "__main__":
     # Train the SSVM with best hyper-parameters
     # =========================================
     LOGGER.info("=== Train SSVM with all training data ===")
-    training_sequences = SequenceSample(
-        spectra_train, labels_train,
-        RandomSubsetCandidateSQLiteDB(
+    if args.training_candidate_set == "random":
+        candidate_set_class = RandomSubsetCandidateSQLiteDB(
             db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, random_state=425,
             number_of_candidates=args.max_n_train_candidates, include_correct_candidate=True,
-            init_with_open_db_conn=False),
+            init_with_open_db_conn=False)
+    elif args.training_candidate_set == "higher_ranked":
+        candidate_set_class = HigherRankedCandidatesSQLiteDB(
+            db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, random_state=425,
+            score_correction_factor=args.score_correction_factor, max_number_of_candidates=args.max_n_train_candidates,
+            include_correct_candidate=True, init_with_open_db_conn=False, ms2scorer=args.ms2scorer)
+    else:
+        raise ValueError("Invalid training candidate set definition: '%s'." % args.training_candidate_set)
+
+    training_sequences = SequenceSample(
+        spectra_train, labels_train, candidate_set_class,
         N=args.n_samples_train, L_min=args.L_min_train, L_max=args.L_max_train, random_state=23,
         ms2scorer=args.ms2scorer)
 
