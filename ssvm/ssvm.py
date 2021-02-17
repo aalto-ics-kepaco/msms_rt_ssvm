@@ -52,7 +52,7 @@ from ssvm.data_structures import CandidateSQLiteDB
 from ssvm.loss_functions import hamming_loss, tanimoto_loss, minmax_loss
 from ssvm.evaluation_tools import get_topk_performance_csifingerid
 from ssvm.factor_graphs import get_random_spanning_tree
-from ssvm.kernel_utils import tanimoto_kernel, minmax_kernel_1__numba, generalized_tanimoto_kernel_FAST
+from ssvm.kernel_utils import tanimoto_kernel, _min_max_dense_jit, generalized_tanimoto_kernel_FAST
 
 
 DUALVARIABLES_T = TypeVar('DUALVARIABLES_T', bound='DualVariables')
@@ -2289,7 +2289,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         elif mol_kernel == "minmax":
             return generalized_tanimoto_kernel_FAST
         elif mol_kernel == "minmax_numba":
-            return minmax_kernel_1__numba
+            return _min_max_dense_jit
         else:
             raise ValueError("Invalid molecule kernel")
 

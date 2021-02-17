@@ -96,7 +96,7 @@ def check_input(X, Y, datatype=None, shallow=False):
     return X, Y, is_sparse
 
 
-def minmax_kernel(X, Y=None, shallow_input_check=False, n_jobs=4, use_numba=True):
+def minmax_kernel(X, Y=None, shallow_input_check=True, n_jobs=1, use_numba=False):
     """
     Calculates the minmax kernel value for two sets of examples
     represented by their feature vectors.
@@ -121,7 +121,7 @@ def minmax_kernel(X, Y=None, shallow_input_check=False, n_jobs=4, use_numba=True
         K_mm = _min_max_sparse_csr(X, Y, n_jobs=n_jobs)
     else:
         if use_numba:
-            K_mm = minmax_kernel_1__numba(X, Y)
+            K_mm = _min_max_dense_jit(X, Y)
         else:
             K_mm = _min_max_dense(X, Y)
 
@@ -151,27 +151,6 @@ def _min_max_dense(X, Y):
     return min_K / max_K
 
 
-@delayed
-def _min_max_sparse_csr_single_element(x_i, y_j, nonz_idc_x_i, nonz_idc_y_j):
-    min_k = 0
-    max_k = 0
-
-    # In the indices intersection we need to check min and max
-    for s in nonz_idc_x_i & nonz_idc_y_j:
-        max_k += np.maximum(x_i[0, s], y_j[0, s])
-        min_k += np.minimum(x_i[0, s], y_j[0, s])
-
-    # Indices that appear only in X[i]: minimum is zero, maximum comes from X[i]
-    for s in nonz_idc_x_i - nonz_idc_y_j:
-        max_k += x_i[0, s]
-
-    # Indices that appear only in Y[j]: minimum is zero, maximum comes from Y[j]
-    for s in nonz_idc_y_j - nonz_idc_x_i:
-        max_k += y_j[0, s]
-
-    return np.sum(min_k), np.sum(max_k)
-
-
 def _min_max_sparse_csr(X, Y, n_jobs=1):
     """
     MinMax-Kernel implementation for sparse feature vectors.
@@ -198,7 +177,28 @@ def _min_max_sparse_csr(X, Y, n_jobs=1):
     return min_k / max_k
 
 
-def tanimoto_kernel(X, Y=None, shallow_input_check=False):
+@delayed
+def _min_max_sparse_csr_single_element(x_i, y_j, nonz_idc_x_i, nonz_idc_y_j):
+    min_k = 0
+    max_k = 0
+
+    # In the indices intersection we need to check min and max
+    for s in nonz_idc_x_i & nonz_idc_y_j:
+        max_k += np.maximum(x_i[0, s], y_j[0, s])
+        min_k += np.minimum(x_i[0, s], y_j[0, s])
+
+    # Indices that appear only in X[i]: minimum is zero, maximum comes from X[i]
+    for s in nonz_idc_x_i - nonz_idc_y_j:
+        max_k += x_i[0, s]
+
+    # Indices that appear only in Y[j]: minimum is zero, maximum comes from Y[j]
+    for s in nonz_idc_y_j - nonz_idc_x_i:
+        max_k += y_j[0, s]
+
+    return np.sum(min_k), np.sum(max_k)
+
+
+def tanimoto_kernel(X, Y=None, shallow_input_check=True):
     """
     Tanimoto kernel function
 
@@ -223,12 +223,15 @@ def tanimoto_kernel(X, Y=None, shallow_input_check=False):
     return K_tan
 
 
-def generalized_tanimoto_kernel(X, Y=None, shallow_input_check=False, n_jobs=4):
+def generalized_tanimoto_kernel(X, Y=None, shallow_input_check=True, n_jobs=1):
     """
     Generalized tanimoto kernel function
 
-    :param X:
-    :param Y:
+    :param X: array-like, shape=(n_samples_A, n_features), binary feature matrix of set A
+    :param Y: array-like, shape=(n_samples_B, n_features), binary feature matrix of set B
+        or None, than Y = X
+    :param shallow_input_check: boolean, indicating whether checks regarding features values, e.g. >= 0, should be
+        skipped.
     :return:
     """
     X, Y, is_sparse = check_input(X, Y, datatype="real", shallow=shallow_input_check)
@@ -290,25 +293,35 @@ def generalized_tanimoto_kernel_FAST(X, Y):
     return K_gtan
 
 
-# --------------------------
-# Implementation using Numba
-# --------------------------
+# ===========================
+# Implementations using Numba
+# ===========================
+
+def _min_max_dense_ufunc(X, Y):
+    """
+    Min-Max Kernel using reduction
+    """
+    return _minmax__ufunc(X.astype(np.int)[:, np.newaxis, :], Y.astype(np.int)[np.newaxis, :, :])
+
+
 @guvectorize([(int64[:], int64[:], float64[:])], '(d),(d)->()', nopython=True, target="parallel")
 def _minmax__ufunc(x, y, res):
     s = np.sum(x) + np.sum(y)
     t = np.sum(np.abs(x - y))
     res[0] = (s - t) / (s + t)
 
+# ---------------------------
 
-def minmax_kernel__ufunc(X, Y):
-    return _minmax__ufunc(X.astype(np.int)[:, np.newaxis, :], Y.astype(np.int)[np.newaxis, :, :])
+
+def _min_max_dense_jit(X, Y):
+    """
+    MinMax-Kernel implementation for dense feature vectors using Jit
+    """
+    return _minmax_jit(X, Y, len(Y))
 
 
 @jit(nopython=True, parallel=True)
-def _minmax_kernel_1__numba(X, Y, n_Y):
-    """
-    MinMax-Kernel implementation for dense feature vectors.
-    """
+def _minmax_jit(X, Y, n_Y):
     XL1 = np.sum(X, axis=1).reshape(-1, 1)
     YL1 = np.sum(Y, axis=1).reshape(-1, 1)
 
@@ -322,16 +335,43 @@ def _minmax_kernel_1__numba(X, Y, n_Y):
 
     return K_mm
 
-
-def minmax_kernel_1__numba(X, Y):
-    return _minmax_kernel_1__numba(X, Y, len(Y))
+# ---------------------------
 
 
 def run_time():
     n_rep = 25
 
-    for n_A, n_B, d in [(100, 5000, 307), (1000, 1000, 307), (100, 5000, 7500), (1000, 1000, 5000)]:
+    for n_A, n_B, d in [(100, 5000, 307), (1000, 1000, 307), (5000, 100, 307),
+                        (100, 5000, 5000), (1000, 1000, 5000), (5000, 100, 5000)]:
         print(_run_time(n_A, n_B, d, n_rep))
+
+#              function  n_A   n_B    d      time
+# 0        minmax_dense  100  5000  307  1.399382
+# 1       minmax_gentan  100  5000  307  0.118079
+# 2  minmax_gentan_fast  100  5000  307  0.116313
+# 3          minmax_jit  100  5000  307  0.042270
+# 4        minmax_ufunc  100  5000  307  0.134376
+
+#              function   n_A   n_B    d      time
+# 0        minmax_dense  1000  1000  307  2.262268
+# 1       minmax_gentan  1000  1000  307  0.187768
+# 2  minmax_gentan_fast  1000  1000  307  0.185888
+# 3          minmax_jit  1000  1000  307  0.302484
+# 4        minmax_ufunc  1000  1000  307  0.315622
+
+#              function   n_A  n_B    d      time
+# 0        minmax_dense  5000  100  307  1.032933
+# 1       minmax_gentan  5000  100  307  0.097594
+# 2  minmax_gentan_fast  5000  100  307  0.096002
+# 3          minmax_jit  5000  100  307  0.284397
+# 4        minmax_ufunc  5000  100  307  0.679844
+
+#              function  n_A   n_B     d       time
+# 0        minmax_dense  100  5000  5000  22.194602
+# 1       minmax_gentan  100  5000  5000   1.974525
+# 2  minmax_gentan_fast  100  5000  5000   1.973238
+# 3          minmax_jit  100  5000  5000   2.538056
+# 4        minmax_ufunc  100  5000  5000   1.632805
 
 
 def run_time_n_vs_m():
@@ -349,7 +389,11 @@ def _run_time(n_A, n_B, d, n_rep):
     X_B = np.random.RandomState(842).randint(0, 200, size=(n_B, d))
 
     # Define functions to test
-    fun_list = [("alg_1__numba", minmax_kernel_1__numba), ("ufunc", minmax_kernel__ufunc)]
+    fun_list = [("minmax_jit", _min_max_dense_jit),
+                ("minmax_ufunc", _min_max_dense_ufunc),
+                ("minmax_dense", _min_max_dense),
+                ("minmax_gentan", generalized_tanimoto_kernel),
+                ("minmax_gentan_fast", generalized_tanimoto_kernel_FAST)]
 
     # Compile using numba
     K_ref = generalized_tanimoto_kernel_FAST(X_A, X_B)
@@ -361,7 +405,7 @@ def _run_time(n_A, n_B, d, n_rep):
 
     # Run timing
     df = []
-    for fun_name, fun in fun_list + [("cdist__FAST", generalized_tanimoto_kernel_FAST)]:
+    for fun_name, fun in fun_list:
         print("RUN - %s" % fun_name)
         for _ in range(n_rep):
             start = time.time()
@@ -390,4 +434,4 @@ if __name__ == "__main__":
     import time
     import pandas as pd
 
-    run_time_n_vs_m()
+    run_time()
