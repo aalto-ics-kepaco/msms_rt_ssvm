@@ -2215,6 +2215,12 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             marginals[s]["index_of_correct_structure"] = marginals[s]["label"].index(sequence.get_labels(s))
 
         # Calculate the top-k performance
+        if topk_method.lower().startswith("casmi"):
+            topk_method = "casmi2016"
+        elif topk_method.lower().startswith("csi"):
+            topk_method = "csifingerid"
+        else:
+            raise ValueError("Invalid topk-method '%s'." % topk_method)
         topk = get_topk_performance_from_marginals(marginals, method=topk_method)[return_percentage]  # type: np.ndarray
 
         # Restrict the output the maximum k requested
