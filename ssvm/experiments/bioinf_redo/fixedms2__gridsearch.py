@@ -67,8 +67,8 @@ def get_cli_arguments() -> argparse.Namespace:
     arg_parser.add_argument("--n_trees_for_scoring", type=int, default=128)
     arg_parser.add_argument("--n_trees_for_training", type=int, default=1)
     arg_parser.add_argument("--C_grid", nargs="+", type=int, default=[1, 4, 16, 32, 64, 128, 256])
-    arg_parser.add_argument("--L_min_train", type=int, default=10)
-    arg_parser.add_argument("--L_max_train", type=int, default=30)
+    arg_parser.add_argument("--L_min_train", type=int, default=4)
+    arg_parser.add_argument("--L_max_train", type=int, default=32)
     arg_parser.add_argument("--training_candidate_set", type=str, choices=["random", "higher_ranked"], default="random")
     arg_parser.add_argument("--score_correction_factor", type=float, default=0.95)
 
@@ -399,6 +399,6 @@ if __name__ == "__main__":
         ofile.write("C_opt = %f\n" % C_opt)
         ofile.write("rtw_grid = {}\n".format(rtw_grid))
 
-    pref_values_eval.to_csv(os.path.join(odir_res, "pref_values.tsv"), index=False, sep="\t")
+    pref_values_eval.to_csv(os.path.join(odir_res, "pref_values__spl=%03d.tsv" % eval_idx), index=False, sep="\t")
 
     sys.exit(0)

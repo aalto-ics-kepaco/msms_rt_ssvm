@@ -47,7 +47,7 @@ if __name__ == "__main__":
                                       init_with_open_db_conn=False),
         N=N, L_min=10, L_max=15, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
 
-    n_rep = 1
+    n_rep = 3
     t_np = 0.0
     t_np_mc = 0.0
     t_numba = 0.0
@@ -58,7 +58,7 @@ if __name__ == "__main__":
     # print("Numpy")
     for rep in range(n_rep):
         t = time.time()
-        run("minmax", seq_sample, 1, rep)
+        run("minmax", seq_sample, 4, rep)
         t_np += (time.time() - t)
 
     # print("Numpy (multicore)")

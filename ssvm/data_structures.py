@@ -573,8 +573,7 @@ class CandidateSQLiteDB(object):
 
         if scale_scores_to_range:
             # Scale scores to (0, 1]
-            score_values = df_scores["ms2_score"].values
-            c1, c2 = self.get_normalization_parameters_c1_and_c2(score_values)
+            c1, c2 = self.get_normalization_parameters_c1_and_c2(df_scores["ms2_score"].values)
             df_scores["ms2_score"] = self.normalize_scores(df_scores["ms2_score"].values, c1, c2)
 
         if not return_dataframe:
