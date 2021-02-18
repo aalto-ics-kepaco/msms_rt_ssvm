@@ -31,11 +31,17 @@ import itertools as it
 from numba import jit, prange, guvectorize, float64, int64
 from sklearn.metrics.pairwise import manhattan_distances, pairwise_distances
 from joblib import delayed, Parallel
+from joblib.memory import Memory
 from scipy.spatial._distance_wrap import cdist_cityblock_double_wrap
+
+
+import ssvm.cfg
 
 """
 Kernel functions here are optimized to work on matrix inputs. 
 """
+
+KERNEL_VALUE_CACHE = Memory(ssvm.cfg.KERNEL_VALUE_CACHE_LOCATION, verbose=0)
 
 
 def check_input(X, Y, datatype=None, shallow=False):
@@ -273,6 +279,7 @@ def generalized_tanimoto_kernel_OLD(X, Y=None, shallow_input_check=False):
     return K_gtan
 
 
+@KERNEL_VALUE_CACHE.cache(mmap_mode=None)
 def generalized_tanimoto_kernel_FAST(X, Y):
     """
     Generalized tanimoto kernel function

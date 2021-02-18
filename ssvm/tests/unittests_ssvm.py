@@ -227,7 +227,7 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
             rt_loop += time.time() - start
 
             start = time.time()
-            I = self.ssvm._I_jfeat_rsvm(Y_candidates)
+            I = self.ssvm._I_jfeat_rsvm(Y_candidates, 0)
             rt_vec += time.time() - start
 
             self.assertEqual((len(Y_candidates), ), I.shape)

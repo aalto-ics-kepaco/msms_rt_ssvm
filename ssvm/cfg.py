@@ -46,3 +46,7 @@ LRU_CACHE_MAX_SIZE = __lru_cache_max_size  # 0 = no caching, None = unlimited ca
 
 # Joblib Memory Cache
 JOBLIB_MEMORY_CACHE_LOCATION = os.getenv("JOBLIB_MEMORY_CACHE_LOCATION", None)
+
+# Joblib Kernel Value Memory Cache
+KERNEL_VALUE_CACHE_LOCATION = os.getenv("KERNEL_VALUE_CACHE_LOCATION", None)
+KERNEL_VALUE_CACHE_SIZE = os.getenv("KERNEL_VALUE_CACHE_SIZE", 8589935000)  # 8GB

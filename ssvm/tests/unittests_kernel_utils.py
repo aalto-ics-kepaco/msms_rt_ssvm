@@ -650,6 +650,27 @@ class TestGeneralizedTanimotoKernel(unittest.TestCase):
                 np.testing.assert_allclose(K_sci[i, j], k_ij_ref)
                 np.testing.assert_allclose(K_old[i, j], k_ij_ref)
 
+    def test_kernel_value_caching(self):
+        self.skipTest("Only needs to run when caching should be tested. Set 'KERNEL_VALUE_CACHE_SIZE' variable.")
+
+        # Fill cache
+        start = time.time()
+        for rep in range(25):
+            X_A = np.random.RandomState(rep).randint(0, 200, size=(100, 307))
+            X_B = np.random.RandomState(rep).randint(0, 200, size=(5000, 307))
+
+            _ = generalized_tanimoto_kernel_FAST(X_A, X_B)
+        print("Time to fill cache: %.3fs" % (time.time() - start))
+
+        # Use cache
+        start = time.time()
+        for rep in range(25):
+            X_A = np.random.RandomState(rep).randint(0, 200, size=(100, 307))
+            X_B = np.random.RandomState(rep).randint(0, 200, size=(5000, 307))
+
+            _ = generalized_tanimoto_kernel_FAST(X_A, X_B)
+        print("Time to use cache: %.3fs" % (time.time() - start))
+
     def test_vector_vs_parallel_performance(self):
         self.skipTest("Only needs to run when timing is needed.")
 

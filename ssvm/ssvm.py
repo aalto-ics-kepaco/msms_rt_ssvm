@@ -76,14 +76,57 @@ SSVM_LOGGER.addHandler(CH)
 # ================
 
 
-@JOBLIB_CACHE.cache(ignore=["candidates"], mmap_mode="r")
-def get_molecule_features_by_molecule_id_CACHED(candidates: CandidateSQLiteDB, molecule_ids: Tuple[str, ...],
-                                                features: str) -> np.ndarray:
+@JOBLIB_CACHE.cache(ignore=["candidates", "mol_kernel", "Y_2"], mmap_mode=None)
+def mol_kernel_from_labels_CACHED(molecule_ids_1: Tuple[str, ...],
+                                  molecule_ids_2: Tuple[str, ...],
+                                  Y_2: np.ndarray,
+                                  candidates: CandidateSQLiteDB,
+                                  features: str,
+                                  mol_kernel: Callable[[np.ndarray, np.ndarray], np.ndarray],
+                                  mol_kernel_name: str) -> np.ndarray:
     """
-    Function to load molecular features by molecule IDs from the candidate database. The method of the CandidateDB class
-    is wrapped here to allow for caching.
+    TODO
     """
-    return candidates.get_molecule_features_by_molecule_id(molecule_ids, features)
+    # Load molecular features
+    Y_1 = candidates.get_molecule_features_by_molecule_id(molecule_ids_1, features)
+    # Y_2 = candidates.get_molecule_features_by_molecule_id(molecule_ids_2, features)
+
+    # Calculate the kernel
+    return mol_kernel(Y_1, Y_2)
+
+
+@JOBLIB_CACHE.cache(ignore=["training_data", "mol_kernel", "training_graphs", "Y"],
+                    mmap_mode=None)
+def _I_jfeat_rsvm_CACHED(molecule_ids: Tuple[str, ...], Y: np.ndarray, training_data: SequenceSample,
+                         training_graphs: List[SpanningTrees], tree_index: int, C: float, N: int, features: str,
+                         mol_kernel: Callable[[np.ndarray, np.ndarray], np.ndarray], mol_kernel_name: str) -> np.ndarray:
+    """
+    :param molecule_ids: Tuple of tuples of strings, length = n_molecules, molecular ids to calculate the preference
+        values for.
+
+    :return: array-like, shape = (n_molecules, )
+    """
+    # Load molecules features of the provided candidates
+    # Y = training_data.candidates.get_molecule_features_by_molecule_id(molecule_ids, features)
+
+    # Retention time differences for all examples j over the spanning trees
+    sign_delta = np.concatenate([
+        # sign(delta t_j)
+        training_data[j].get_sign_delta_t(training_graphs[j][tree_index])
+        for j in range(N)  # shape = (|E_j|, )
+    ])
+
+    # List of the ground truth molecular structures for all examples j
+    lambda_delta = []
+    for j in range(N):
+        Y_gt_sequence = training_data[j].candidates.get_molecule_features_by_molecule_id(
+            tuple(training_data[j].get_labels()), features)  # shape = (|E_j|, n_features)
+
+        lambda_delta.append(StructuredSVMSequencesFixedMS2._get_lambda_delta_OLD(
+            Y_gt_sequence, Y, training_graphs[j][tree_index], mol_kernel))
+
+    # C / N * < sign_delta , lambda_delta >, shape = (n_molecules, )
+    return C * (sign_delta @ np.vstack(lambda_delta)) / N
 
 
 class DualVariables(object):
@@ -1332,7 +1375,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     """
     def __init__(self, mol_feat_label_loss: str, mol_feat_retention_order: str,
                  mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]],  n_trees_per_sequence: int = 1,
-                 retention_order_weight=0.5, n_jobs: int = 1, *args, **kwargs):
+                 retention_order_weight=None, n_jobs: int = 1, *args, **kwargs):
         """
         :param mol_feat_label_loss:
         :param mol_feat_retention_order:
@@ -1344,7 +1387,14 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         self.mol_feat_label_loss = mol_feat_label_loss
         self.mol_feat_retention_order = mol_feat_retention_order
+
+        # Handle input kernel
+        if isinstance(mol_kernel, str):
+            self.mol_kernel_name = mol_kernel
+        else:
+            self.mol_kernel_name = None
         self.mol_kernel = self.get_mol_kernel(mol_kernel)
+
         self.n_trees_per_sequence = n_trees_per_sequence
         self.retention_order_weight = retention_order_weight
         self.n_jobs = n_jobs
@@ -1383,6 +1433,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         :return: reference to it self.
         """
+        JOBLIB_CACHE.clear()
+
         self.training_data_ = data
         self.training_data_info_ = {}
 
@@ -1442,9 +1494,11 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
                 # Find the most violating examples for the current batch
                 _start_time = time.time()
-                res = Parallel(n_jobs=self.n_jobs)(delayed(self.inference)(
-                    self.training_data_[i], self.training_graphs_[i], loss_augmented=True, return_graphical_model=True)
-                                                   for i in I_batch)
+                res = Parallel(n_jobs=self.n_jobs)(
+                    delayed(self.inference)(
+                        self.training_data_[i], self.training_graphs_[i], loss_augmented=True,
+                        return_graphical_model=True, is_training=True)
+                    for i in I_batch)
                 y_I_hat = [y_i_hat for y_i_hat, _ in res]
                 SSVM_LOGGER.info("Finding the most violating examples took %.3fs" % (time.time() - _start_time))
 
@@ -1552,7 +1606,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             return self.max_marginals(sequence, Gs=Gs, n_jobs=n_jobs)
 
     def inference(self, sequence: Union[Sequence, LabeledSequence], Gs: Optional[SpanningTrees] = None,
-                  loss_augmented: bool = False, return_graphical_model: bool = False) \
+                  loss_augmented: bool = False, return_graphical_model: bool = False, is_training: bool = False) \
             -> Union[Tuple[str, ...], Tuple[Tuple[str, ...], TreeFactorGraph]]:
         """
         Infer the most likely label sequence for the given (MS, RT)-sequence.
@@ -1575,7 +1629,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         # Calculate the node- and edge-potentials
         with sequence.candidates, self.training_data_.candidates:
-            node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, Gs[0], loss_augmented)
+            node_potentials, edge_potentials = self._get_node_and_edge_potentials(
+                sequence, Gs[0], loss_augmented, is_training)
 
             # Find the MAP estimate
             TFG, Z_max = self._inference(node_potentials, edge_potentials, Gs[0])
@@ -1613,6 +1668,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             n_jobs = 1
 
         mms = Parallel(n_jobs=n_jobs)(delayed(self._max_marginals_joblib_wrapper)(sequence, G) for G in Gs)
+        assert isinstance(mms, list)
         mm_agg = mms[0]
 
         # Aggregate max-marginals by simply averaging them
@@ -1644,7 +1700,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         :return: array-like, shape = (n_molecules, ), preference values for all molecules.
         """
-        I = self._I_jfeat_rsvm(Y)
+        I = self._I_jfeat_rsvm(Y, 0)
 
         # Note: L_i = |E_j|
         N = len(self.training_data_)
@@ -1660,8 +1716,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             # Sj: active labels, i.e. all y in Sigma_j for which a(j, y) > 0
             # A_Sj: dual values, array-like with shape = (|S_j|, )
 
-            l_Y_act_sequence.append(get_molecule_features_by_molecule_id_CACHED(
-                self.training_data_.candidates, tuple(it.chain(*Sj)), self.mol_feat_retention_order))
+            l_Y_act_sequence.append(self.training_data_.candidates.get_molecule_features_by_molecule_id(
+                tuple(it.chain(*Sj)), self.mol_feat_retention_order))
 
         II = np.zeros((len(Y), N))  # shape = (n_molecules, )
         for j in range(N):
@@ -1683,8 +1739,68 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         return I - np.sum(II, axis=1)
 
+    def predict_molecule_preference_values_CACHED(self, molecule_ids: Tuple[str, ...], Y: np.ndarray) -> np.ndarray:
+        """
+        This function calculate the preference values of individual molecular structures:
+
+        h(y | a) = sum_j < sign_delta_j, C / N * lambda_delta_(y_j, y) - < [lambda_delta(y', y)]_{y' in Sigma_j}, a > >
+                 = sum_j < sign_delta_j, C / N * lambda_delta_(y_j, y) > - ...               # <-- I
+                    sum_j < sign_delta_j, < [lambda_delta(y', y)]_{y' in Sigma_j}, a > >     # <-- II
+
+        :param Y: array-like, shape = (n_molecules, n_features), molecular feature vectors to calculate the preference
+            values for.
+
+        :return: array-like, shape = (n_molecules, ), preference values for all molecules.
+        """
+        N = len(self.training_data_)
+
+        I = _I_jfeat_rsvm_CACHED(molecule_ids=molecule_ids,
+                                 Y=Y,
+                                 training_data=self.training_data_,
+                                 training_graphs=self.training_graphs_,
+                                 tree_index=0,
+                                 C=self.C,
+                                 N=N,
+                                 features=self.mol_feat_retention_order,
+                                 mol_kernel=self.mol_kernel,
+                                 mol_kernel_name=self.mol_kernel_name)
+        assert I.shape == (len(molecule_ids), )
+        # caching signature ignores: training_data, training_graphs, mol_kernel, Y
+
+        # List of the molecular structures belonging to the active examples, i.e. a(i, y) > 0
+        II = np.zeros((len(molecule_ids), ))  # shape = (n_molecules, )
+
+        for j in range(N):
+            Sj, A_Sj = self.alphas_.get_blocks(j)
+            _, Sj = zip(*Sj)  # type: Tuple[Tuple[str, ...]]  # length = number of active sequences for example j
+            A_Sj = np.array(A_Sj)
+
+            # Sj: active labels, i.e. all y in Sigma_j for which a(j, y) > 0
+            # A_Sj: dual values, array-like with shape = (|S_j|, )
+
+            lambda_delta = np.empty((self.training_graphs_[j].n_edges, len(molecule_ids), len(Sj)))
+            # lambda_delta = []
+            for k, Sj_k in enumerate(Sj):
+                # Calculate the molecule kernel between the molecules of active sequence and the candidates (Y)
+                K_Sj_k__Y = mol_kernel_from_labels_CACHED(molecule_ids_1=Sj_k,
+                                                          molecule_ids_2=molecule_ids,
+                                                          Y_2=Y,
+                                                          candidates=self.training_data_.candidates,
+                                                          features=self.mol_feat_retention_order,
+                                                          mol_kernel=self.mol_kernel,
+                                                          mol_kernel_name=self.mol_kernel_name)
+                # caching signature ignores: candidates, mol_kernel, Y_2
+
+                lambda_delta[:, :, k] = self._get_lambda_delta_from_kernel(K_Sj_k__Y, self.training_graphs_[j][0])
+                # lambda_delta.append(self._get_lambda_delta_from_kernel(K_Sj_k__Y, self.training_graphs_[j][0]))
+
+            II += np.einsum(
+                "i,ikj,j", self.training_data_[j].get_sign_delta_t(self.training_graphs_[j][0]), lambda_delta, A_Sj)
+
+        return I - II
+
     @lru_cache(maxsize=ssvm.cfg.LRU_CACHE_MAX_SIZE)
-    def _get_sign_delta(self, tree_index: int):
+    def _get_sign_delta_t(self, tree_index: int):
         N = len(self.training_data_)
 
         return np.concatenate([
@@ -1693,7 +1809,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             for j in range(N)  # shape = (|E_j|, )
         ])
 
-    def _I_jfeat_rsvm(self, Y: np.array) -> np.ndarray:
+    def _I_jfeat_rsvm(self, Y: np.array, tree_index: int) -> np.ndarray:
         """
         :param Y: array-like, shape = (n_molecules, n_features), molecular feature vectors to calculate the preference
             values for.
@@ -1704,7 +1820,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         N = len(self.training_data_)
 
         # List of the retention time differences for all examples j over the spanning trees
-        sign_delta = self._get_sign_delta(0)
+        sign_delta = self._get_sign_delta_t(tree_index)
 
         # List of the ground truth molecular structures for all examples j
         l_Y_gt_sequence = [
@@ -1713,7 +1829,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             # shape = (|E_j|, n_features)
         ]
         lambda_delta = np.vstack([
-            self._get_lambda_delta(l_Y_gt_sequence[j], Y, self.training_graphs_[j][0], self.mol_kernel)
+            self._get_lambda_delta(l_Y_gt_sequence[j], Y, self.training_graphs_[j][tree_index], self.mol_kernel)
             for j in range(N)  # shape = (|E_j|, n_mol), with n_mol = Y.shape[0]
         ])
 
@@ -1722,7 +1838,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         return self.C * (sign_delta @ lambda_delta) / N
 
     def _get_node_and_edge_potentials(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph,
-                                      loss_augmented: bool = False):
+                                      loss_augmented: bool = False, is_training: bool = False):
         """
 
         :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
@@ -1762,8 +1878,13 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                     sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s)  # Delta_i(y)
 
         # Load the candidate features for all nodes
-        l_Y = [sequence.get_molecule_features_for_candidates(self.mol_feat_retention_order, s) for s in G.nodes]
-        pref_scores = self.predict_molecule_preference_values(np.vstack(l_Y))
+        if is_training:
+            l_mol_ids = tuple(it.chain.from_iterable(sequence.get_labelspace(s) for s in G.nodes))
+            l_Y = [sequence.get_molecule_features_for_candidates(self.mol_feat_retention_order, s) for s in G.nodes]
+            pref_scores = self.predict_molecule_preference_values_CACHED(l_mol_ids, np.vstack(l_Y))
+        else:
+            l_Y = [sequence.get_molecule_features_for_candidates(self.mol_feat_retention_order, s) for s in G.nodes]
+            pref_scores = self.predict_molecule_preference_values(np.vstack(l_Y))
 
         # Get a map from the node to the corresponding candidate feature vector indices
         cs_n_Y = np.cumsum([0] + [len(Y) for Y in l_Y])
@@ -2076,8 +2197,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 Z = self.label_sequence_to_Z(y, s_minus_a.label_space[i])
                 nom += fac * TFG_i.likelihood(Z, log=True)  # fac = s(i, y) - a(i, y)
 
-                l_mol_features_i[y] = get_molecule_features_by_molecule_id_CACHED(
-                    self.training_data_.candidates, tuple(y), self.mol_feat_retention_order)
+                l_mol_features_i[y] = self.training_data_.candidates.get_molecule_features_by_molecule_id(
+                    tuple(y), self.mol_feat_retention_order)
 
                 # Go over all i, j for which i = j
                 l_sign_delta_t_i_T_P_i[y] = l_sign_delta_t[idx_i] @ l_P[idx_i]
@@ -2089,8 +2210,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
                 # Go over the active "dual" variables: s(i, y) - a(i, y) != 0
                 for by, fac_j in s_minus_a.iter(j):
-                    mol_features_by = get_molecule_features_by_molecule_id_CACHED(
-                        self.training_data_.candidates, tuple(by), self.mol_feat_retention_order)
+                    mol_features_by = self.training_data_.candidates.get_molecule_features_by_molecule_id(
+                        tuple(by), self.mol_feat_retention_order)
 
                     for y, fac_i in s_minus_a.iter(i):
                         L_yby = self.mol_kernel(l_mol_features_i[y], mol_features_by)
@@ -2142,8 +2263,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 nom += fac * TFG.likelihood(Z, log=True)  # fac = s(i, y) - a(i, y)
 
                 # Load the molecular features for the active sequence y
-                l_mol_features[idx][y] = get_molecule_features_by_molecule_id_CACHED(
-                    self.training_data_.candidates, tuple(y), self.mol_feat_retention_order)
+                l_mol_features[idx][y] = self.training_data_.candidates.get_molecule_features_by_molecule(
+                    tuple(y), self.mol_feat_retention_order)
 
         # ----------------
         # Denominator
@@ -2366,6 +2487,21 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         return TFG, Z_max
 
     @staticmethod
+    def _get_lambda_delta_from_kernel(K_seq_cand: np.ndarray, G: nx.Graph) -> np.ndarray:
+        """
+        Calculate the 'Lambda_Delta(y, y_s)' term, with shape = (L - 1, ) for all y_s in Y_candidates.
+
+        :param K_seq_cand: array-like, shape = (L, n_candidates), kernel between the sequence labels and the candidates.
+
+        :param G: networkx.Graph, spanning tree defined over the MRF associated with the label sequence.
+
+        :return: array-shape = (L - 1, n_molecules)
+        """
+        bS, bT = zip(*G.edges)  # each of length |E| = L - 1
+
+        return K_seq_cand[list(bS)] - K_seq_cand[list(bT)]
+
+    @staticmethod
     def _get_lambda_delta_OLD(Y_sequence: np.ndarray, Y_candidates: np.ndarray, G: nx.Graph,
                               mol_kernel: Callable[[np.ndarray, np.ndarray], np.ndarray]) -> np.ndarray:
         """
@@ -2382,14 +2518,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         :return: array-shape = (L - 1, n_molecules)
         """
-        assert len(G.nodes) > 1, "There must be at least two nodes in the graph."
-        assert len(G.edges) > 0, "There must be at least one edge in the graph."
-
-        Ky = mol_kernel(Y_sequence, Y_candidates)  # shape = (L, n_candidates)
-
-        bS, bT = zip(*G.edges)  # each of length |E| = L - 1
-
-        return Ky[list(bS)] - Ky[list(bT)]
+        return StructuredSVMSequencesFixedMS2._get_lambda_delta_from_kernel(mol_kernel(Y_sequence, Y_candidates), G)
 
     @staticmethod
     def _get_lambda_delta(Y_sequence: np.ndarray, Y_candidates: np.ndarray, G: nx.Graph,
@@ -2428,4 +2557,4 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         """
         TODO
         """
-        return get_molecule_features_by_molecule_id_CACHED(sequence.candidates, tuple(sequence.labels), features)
+        return sequence.candidates.get_molecule_features_by_molecule_id(tuple(sequence.labels), features)
