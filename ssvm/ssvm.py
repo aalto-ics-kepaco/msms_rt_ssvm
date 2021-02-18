@@ -52,7 +52,7 @@ from ssvm.data_structures import CandidateSQLiteDB
 from ssvm.loss_functions import hamming_loss, tanimoto_loss, minmax_loss
 from ssvm.evaluation_tools import get_topk_performance_csifingerid
 from ssvm.factor_graphs import get_random_spanning_tree
-from ssvm.kernel_utils import tanimoto_kernel, minmax_kernel_1__numba, generalized_tanimoto_kernel_FAST
+from ssvm.kernel_utils import tanimoto_kernel, _min_max_dense_jit, generalized_tanimoto_kernel_FAST
 
 
 DUALVARIABLES_T = TypeVar('DUALVARIABLES_T', bound='DualVariables')
@@ -1740,14 +1740,26 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         """
         # Calculate the node potentials. If needed, augment the MS scores with the label loss
         node_potentials = OrderedDict()
+
+        # First load all MS2 scores
+        _raw_scores = []
         for s in G.nodes:  # V
-            _score = self.D_ms * np.array(sequence.get_ms2_scores(s))  # S(x_i, y) with shape (n_candidates_s, )
+            # Load the raw scores
+            _raw_scores.append(sequence.get_ms2_scores(s, scale_scores_to_range=False, return_as_ndarray=True))
+            node_potentials[s] = {"n_cand": len(_raw_scores[-1])}
 
+        # Calculate the normalization parameter based on ALL candidates
+        _c1, _c2 = CandidateSQLiteDB.get_normalization_parameters_c1_and_c2(np.hstack(_raw_scores))
+
+        # Normalize the raw scores using the global parameters to (0, 1] and transform to log-scores
+        for idx, s in enumerate(G.nodes):  # V
+            node_potentials[s]["log_score"] = \
+                self.D_ms * np.log(CandidateSQLiteDB.normalize_scores(_raw_scores[idx], _c1, _c2))
+
+            # Add label loss is loss-augmented scores are requested
             if loss_augmented:
-                _score += sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s)
-                # Delta_i(y)
-
-            node_potentials[s] = {"log_score": _score, "n_cand": len(_score)}
+                node_potentials[s]["log_score"] += \
+                    sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s)  # Delta_i(y)
 
         # Load the candidate features for all nodes
         l_Y = [sequence.get_molecule_features_for_candidates(self.mol_feat_retention_order, s) for s in G.nodes]
@@ -2203,6 +2215,12 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             marginals[s]["index_of_correct_structure"] = marginals[s]["label"].index(sequence.get_labels(s))
 
         # Calculate the top-k performance
+        if topk_method.lower().startswith("casmi"):
+            topk_method = "casmi2016"
+        elif topk_method.lower().startswith("csi"):
+            topk_method = "csifingerid"
+        else:
+            raise ValueError("Invalid topk-method '%s'." % topk_method)
         topk = get_topk_performance_from_marginals(marginals, method=topk_method)[return_percentage]  # type: np.ndarray
 
         # Restrict the output the maximum k requested
@@ -2271,7 +2289,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         elif mol_kernel == "minmax":
             return generalized_tanimoto_kernel_FAST
         elif mol_kernel == "minmax_numba":
-            return minmax_kernel_1__numba
+            return _min_max_dense_jit
         else:
             raise ValueError("Invalid molecule kernel")
 

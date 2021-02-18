@@ -7,7 +7,6 @@ import argparse
 import pickle
 import gzip
 import logging
-import time
 import sys
 
 from typing import Tuple
@@ -15,6 +14,7 @@ from matchms.Spectrum import Spectrum
 from sklearn.model_selection import GroupShuffleSplit
 
 from ssvm.data_structures import RandomSubsetCandidateSQLiteDB, FixedSubsetCandidateSQLiteDB
+from ssvm.data_structures import HigherRankedCandidatesSQLiteDB
 from ssvm.data_structures import LabeledSequence, SequenceSample, SpanningTrees
 from ssvm.ssvm import StructuredSVMSequencesFixedMS2
 
@@ -67,8 +67,10 @@ def get_cli_arguments() -> argparse.Namespace:
     arg_parser.add_argument("--n_trees_for_scoring", type=int, default=128)
     arg_parser.add_argument("--n_trees_for_training", type=int, default=1)
     arg_parser.add_argument("--C_grid", nargs="+", type=int, default=[1, 4, 16, 32, 64, 128, 256])
-    arg_parser.add_argument("--L_min_train", type=int, default=10)
-    arg_parser.add_argument("--L_max_train", type=int, default=30)
+    arg_parser.add_argument("--L_min_train", type=int, default=4)
+    arg_parser.add_argument("--L_max_train", type=int, default=32)
+    arg_parser.add_argument("--training_candidate_set", type=str, choices=["random", "higher_ranked"], default="random")
+    arg_parser.add_argument("--score_correction_factor", type=float, default=0.95)
 
     return arg_parser.parse_args()
 
@@ -202,12 +204,21 @@ if __name__ == "__main__":
 
             # Get training sequences
             # ----------------------
-            training_sequences = SequenceSample(
-                spectra_train_inner, labels_train_inner,
-                RandomSubsetCandidateSQLiteDB(
+            if args.training_candidate_set == "random":
+                candidate_set_class_train = RandomSubsetCandidateSQLiteDB(
                     db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, random_state=jdx,
                     number_of_candidates=args.max_n_train_candidates, include_correct_candidate=True,
-                    init_with_open_db_conn=False),
+                    init_with_open_db_conn=False)
+            elif args.training_candidate_set == "higher_ranked":
+                candidate_set_class_train = HigherRankedCandidatesSQLiteDB(
+                    db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, random_state=jdx,
+                    score_correction_factor=args.score_correction_factor, max_number_of_candidates=args.max_n_train_candidates,
+                    include_correct_candidate=True, init_with_open_db_conn=False, ms2scorer=args.ms2scorer)
+            else:
+                raise ValueError("Invalid training candidate set definition: '%s'." % args.training_candidate_set)
+
+            training_sequences = SequenceSample(
+                spectra_train_inner, labels_train_inner, candidate_set_class_train,
                 N=np.int(np.round(args.n_samples_train * 0.66)), L_min=args.L_min_train, L_max=args.L_max_train,
                 random_state=jdx, ms2scorer=args.ms2scorer)
 
@@ -222,15 +233,24 @@ if __name__ == "__main__":
 
             # Access test set performance
             # ---------------------------
+            if args.training_candidate_set == "random":
+                candidate_set_class_test = RandomSubsetCandidateSQLiteDB(
+                    db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, random_state=jdx,
+                    number_of_candidates=args.max_n_train_candidates, include_correct_candidate=True,
+                    init_with_open_db_conn=False)
+            elif args.training_candidate_set == "higher_ranked":
+                candidate_set_class_test = HigherRankedCandidatesSQLiteDB(
+                    db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, random_state=jdx,
+                    score_correction_factor=args.score_correction_factor, max_number_of_candidates=args.max_n_train_candidates,
+                    include_correct_candidate=True, init_with_open_db_conn=False, ms2scorer=args.ms2scorer)
+            else:
+                raise ValueError("Invalid training candidate set definition: '%s'." % args.training_candidate_set)
+
             spectra_test_inner = [spectra_train[i] for i in test]
             labels_test_inner = [labels_train[i] for i in test]
 
             test_sequences = SequenceSample(
-                spectra_test_inner, labels_test_inner,
-                RandomSubsetCandidateSQLiteDB(
-                    db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, random_state=jdx,
-                    number_of_candidates=args.max_n_train_candidates, include_correct_candidate=True,
-                    init_with_open_db_conn=False),
+                spectra_test_inner, labels_test_inner, candidate_set_class_test,
                 N=np.int(np.round(args.n_samples_train * 0.33)), L_min=args.L_min_train, L_max=args.L_max_train,
                 random_state=jdx, ms2scorer=args.ms2scorer)
 
@@ -248,12 +268,21 @@ if __name__ == "__main__":
     # Train the SSVM with best hyper-parameters
     # =========================================
     LOGGER.info("=== Train SSVM with all training data ===")
-    training_sequences = SequenceSample(
-        spectra_train, labels_train,
-        RandomSubsetCandidateSQLiteDB(
+    if args.training_candidate_set == "random":
+        candidate_set_class = RandomSubsetCandidateSQLiteDB(
             db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, random_state=425,
             number_of_candidates=args.max_n_train_candidates, include_correct_candidate=True,
-            init_with_open_db_conn=False),
+            init_with_open_db_conn=False)
+    elif args.training_candidate_set == "higher_ranked":
+        candidate_set_class = HigherRankedCandidatesSQLiteDB(
+            db_fn=args.db_fn, molecule_identifier=args.molecule_identifier, random_state=425,
+            score_correction_factor=args.score_correction_factor, max_number_of_candidates=args.max_n_train_candidates,
+            include_correct_candidate=True, init_with_open_db_conn=False, ms2scorer=args.ms2scorer)
+    else:
+        raise ValueError("Invalid training candidate set definition: '%s'." % args.training_candidate_set)
+
+    training_sequences = SequenceSample(
+        spectra_train, labels_train, candidate_set_class,
         N=args.n_samples_train, L_min=args.L_min_train, L_max=args.L_max_train, random_state=23,
         ms2scorer=args.ms2scorer)
 
@@ -280,37 +309,36 @@ if __name__ == "__main__":
         for spec in spectra_eval:
             LOGGER.info("\t%s - %5d" % (spec.get("spectrum_id"), len(candidates.get_labelspace(spec))))
 
+    # Wrap the spectra in to a label-sequence
     seq_eval = LabeledSequence(spectra_eval, labels_eval, candidates=candidates, ms2scorer=args.ms2scorer)
 
+    # Calculate the marginals for all candidates sets along the sequence
     marginals_eval = ssvm.predict(seq_eval, Gs=SpanningTrees(seq_eval, n_trees=args.n_trees_for_scoring),
                                   n_jobs=ssvm.n_jobs)
-    scores = {
-        "topk_mm__casmi": ssvm._topk_score(seq_eval, marginals_eval, topk_method="casmi2016", max_k=50),
-        "topk_mm__csi": ssvm._topk_score(seq_eval, marginals_eval, topk_method="csifingerid", max_k=50)
-    }
 
+    # Calculate the top-k accuracies using the based on the marginals
+    scores = {}
     for km in ["casmi", "csi"]:
         _key = "topk_mm__%s" % km
-        LOGGER.info("MM (%s): Top-1 = %.2f%%, Top-5 = %.2f%%, Top-10 = %.2f%%, Top-20 = %.2f%%"
+        scores[_key] = ssvm._topk_score(seq_eval, marginals_eval, topk_method=km, max_k=50)
+        LOGGER.info("Max-Marg (%s): Top-1 = %.2f%%, Top-5 = %.2f%%, Top-10 = %.2f%%, Top-20 = %.2f%%"
                     % (km, scores[_key][0], scores[_key][4], scores[_key][9], scores[_key][19]))
 
-    # Performance with original MS2
+    # Calculate top-k accuracies using the original MS2 scores
     candidates_with_ms2scores = {}
     with candidates:
         for s, (spec, lab) in enumerate(zip(spectra_eval, labels_eval)):
-            candidates_with_ms2scores[s] = {"index_of_correct_structure": candidates.get_labelspace(spec).index(lab),
-                                            "score": np.array(candidates.get_ms2_scores(spec, args.ms2scorer)),
-                                            "n_cand": candidates.get_n_cand(spec)}
+            candidates_with_ms2scores[s] = {
+                "label": candidates.get_labelspace(spec),
+                "index_of_correct_structure": candidates.get_labelspace(spec).index(lab),
+                "score": np.array(candidates.get_ms2_scores(spec, args.ms2scorer)),
+                "n_cand": candidates.get_n_cand(spec)}
 
-        scores["topk_baseline__casmi"] = get_topk_performance_from_scores(candidates_with_ms2scores, method="casmi2016")[1]
-        LOGGER.info("BASELINE (casmi): Top-1 = %.2f%%, Top-5 = %.2f%%, Top-10 = %.2f%%, Top-20 = %.2f%%"
-                    % (scores["topk_baseline__casmi"][0], scores["topk_baseline__casmi"][4],
-                       scores["topk_baseline__casmi"][9], scores["topk_baseline__casmi"][19]))
-
-        scores["topk_baseline__csi"] = get_topk_performance_from_scores(candidates_with_ms2scores, method="csifingerid")[1]
-        LOGGER.info("BASELINE (csi): Top-1 = %.2f%%, Top-5 = %.2f%%, Top-10 = %.2f%%, Top-20 = %.2f%%"
-                    % (scores["topk_baseline__csi"][0], scores["topk_baseline__csi"][4],
-                       scores["topk_baseline__csi"][9], scores["topk_baseline__csi"][19]))
+        for km in ["casmi", "csi"]:
+            _key = "topk_baseline__%s" % km
+            scores[_key] = ssvm._topk_score(seq_eval, candidates_with_ms2scores, topk_method=km, max_k=50)
+            LOGGER.info("Baseline (%s): Top-1 = %.2f%%, Top-5 = %.2f%%, Top-10 = %.2f%%, Top-20 = %.2f%%"
+                        % (km, scores[_key][0], scores[_key][4], scores[_key][9], scores[_key][19]))
 
     # Performance first candidate
     for s, (spec, lab) in enumerate(zip(spectra_eval, labels_eval)):
@@ -327,6 +355,19 @@ if __name__ == "__main__":
     LOGGER.info("RANDOM SCORES: Top-1 = %.2f%%, Top-5 = %.2f%%, Top-10 = %.2f%%, Top-20 = %.2f%%"
                 % (scores["topk_random"][0], scores["topk_random"][4],
                    scores["topk_random"][9], scores["topk_random"][19]))
+
+    # ===========================================
+    # Predict preference values for GT structures
+    # ===========================================
+    with candidates, ssvm.training_data_.candidates:
+        pref_values_eval = pd.DataFrame(
+            {
+                "spectrum": spec_ids_eval,
+                "rt": seq_eval.get_retention_time(),
+                "pref_value": ssvm.predict_molecule_preference_values(seq_eval.get_molecule_features_for_labels(
+                    ssvm.mol_feat_retention_order))
+            }
+        )
 
     # =================
     # Write out results
@@ -357,5 +398,7 @@ if __name__ == "__main__":
         ofile.write("C_grid = {}\n".format(C_grid))
         ofile.write("C_opt = %f\n" % C_opt)
         ofile.write("rtw_grid = {}\n".format(rtw_grid))
+
+    pref_values_eval.to_csv(os.path.join(odir_res, "pref_values__spl=%03d.tsv" % eval_idx), index=False, sep="\t")
 
     sys.exit(0)

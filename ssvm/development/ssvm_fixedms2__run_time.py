@@ -9,21 +9,20 @@ from ssvm.data_structures import RandomSubsetCandidateSQLiteDB, SequenceSample
 from ssvm.ssvm import StructuredSVMSequencesFixedMS2
 
 
-def run(mol_kernel, seq_sample, n_jobs):
+def run(mol_kernel, seq_sample, n_jobs, rep):
     # ===================
     # Setup a SSVM
     # ===================
     ssvm = StructuredSVMSequencesFixedMS2(
         mol_feat_label_loss="iokr_fps__positive", mol_feat_retention_order="substructure_count",
-        mol_kernel=mol_kernel, C=2, step_size="linesearch", batch_size=8, n_epochs=3, label_loss="tanimoto_loss",
-        random_state=1993, retention_order_weight=0.5, n_jobs=n_jobs)
+        mol_kernel=mol_kernel, C=2, step_size_approach="linesearch_parallel", batch_size=8, n_epochs=3,
+        label_loss="tanimoto_loss", random_state=rep, n_jobs=n_jobs)
 
     ssvm.fit(seq_sample, n_init_per_example=5)
 
 
 if __name__ == "__main__":
-    # DB_FN = "/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_LATEST.db"
-    DB_FN = "/home/bach/tmp/DB_LATEST.db"
+    DB_FN = "/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_LATEST.db"
 
     # ===================
     # Get list of Spectra
@@ -40,34 +39,33 @@ if __name__ == "__main__":
 
     db.close()
 
-    N = 24
+    N = 48
     seq_sample = SequenceSample(
         spectra, labels,
         RandomSubsetCandidateSQLiteDB(db_fn=DB_FN, molecule_identifier="inchi", random_state=192,
                                       number_of_candidates=50, include_correct_candidate=True,
                                       init_with_open_db_conn=False),
-        N=N, L_min=10,
-        L_max=15, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
+        N=N, L_min=10, L_max=15, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
 
     n_rep = 3
     t_np = 0.0
     t_np_mc = 0.0
     t_numba = 0.0
 
-    print("Fill cache")
-    run("minmax", seq_sample, 1)
+    # print("Fill cache")
+    # run("minmax", seq_sample, 4)
 
-    print("Numpy")
-    for _ in range(n_rep):
+    # print("Numpy")
+    for rep in range(n_rep):
         t = time.time()
-        run("minmax", seq_sample, 1)
+        run("minmax", seq_sample, 4, rep)
         t_np += (time.time() - t)
 
-    print("Numpy (multicore)")
-    for _ in range(n_rep):
-        t = time.time()
-        run("minmax", seq_sample, 4)
-        t_np_mc += (time.time() - t)
+    # print("Numpy (multicore)")
+    # for _ in range(n_rep):
+    #     t = time.time()
+    #     run("minmax", seq_sample, 4)
+    #     t_np_mc += (time.time() - t)
 
     # print("Numba")
     # for _ in range(n_rep):
@@ -76,8 +74,8 @@ if __name__ == "__main__":
     #     t_numba += (time.time() - t)
 
     print("Numpy: %.3fs" % (t_np / n_rep))
-    print("Numpy (multicore): %.3fs" % (t_np_mc / n_rep))
-    print("Numba: %.3fs" % (t_numba / n_rep))
+    # print("Numpy (multicore): %.3fs" % (t_np_mc / n_rep))
+    # print("Numba: %.3fs" % (t_numba / n_rep))
 
     # TODO: We somehow should ensure that the database connection is always closed.
     # seq_sample.candidates.close()

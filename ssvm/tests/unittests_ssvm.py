@@ -2,7 +2,7 @@
 #
 # The MIT License (MIT)
 #
-# Copyright 2020 Eric Bach <eric.bach@aalto.fi>
+# Copyright 2020, 2021 Eric Bach <eric.bach@aalto.fi>
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -38,6 +38,7 @@ from copy import deepcopy
 
 from ssvm.ssvm import _StructuredSVM, StructuredSVMMetIdent, DualVariables, StructuredSVMSequencesFixedMS2
 from ssvm.data_structures import SequenceSample, RandomSubsetCandidateSQLiteDB, SpanningTrees
+from ssvm.kernel_utils import generalized_tanimoto_kernel_FAST
 
 DB_FN = "/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_LATEST.db"
 
@@ -117,30 +118,29 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
                                       for i, sequence in enumerate(self.ssvm.training_data_)]
 
     def test_get_lambda_delta(self):
-        def mol_kernel(x, y):
-            return x @ y.T
-
         rt_loop = 0.0
         rt_vec = 0.0
 
         n_rep = 15
         for rep in range(n_rep):
-            n_features = 231
+            n_features = 301
             n_molecules = 501
-            L = 101
+            L = 200
             G = nx.generators.trees.random_tree(L, seed=(rep + 3))
 
-            Y_sequence = np.random.RandomState(rep + 5).rand(L, n_features)
-            Y_candidates = np.random.RandomState(rep + 6).rand(n_molecules, n_features)
+            Y_sequence = np.random.RandomState(rep + 5).randn(L, n_features)
+            Y_candidates = np.random.RandomState(rep + 6).randn(n_molecules, n_features)
 
             start = time.time()
             lambda_delta_ref = np.empty((L - 1, n_molecules))
             for idx, (s, t) in enumerate(G.edges):
-                lambda_delta_ref[idx] = mol_kernel(Y_sequence[s], Y_candidates) - mol_kernel(Y_sequence[t], Y_candidates)
+                lambda_delta_ref[idx] = generalized_tanimoto_kernel_FAST(Y_sequence[s][np.newaxis, :], Y_candidates) \
+                                        - generalized_tanimoto_kernel_FAST(Y_sequence[t][np.newaxis, :], Y_candidates)
             rt_loop += time.time() - start
 
             start = time.time()
-            lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta_OLD(Y_sequence, Y_candidates, G, mol_kernel)
+            lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta_OLD(
+                Y_sequence, Y_candidates, G, generalized_tanimoto_kernel_FAST)
             rt_vec += time.time() - start
 
             self.assertEqual(lambda_delta_ref.shape, lambda_delta.shape)
@@ -151,32 +151,27 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
         print("Vec: %.3fs" % (rt_vec / n_rep))
 
     def test_get_lambda_delta_NEW(self):
-        def mol_kernel(x, y):
-            return x @ y.T
-
         rt_old = 0.0
         rt_new = 0.0
 
         n_rep = 15
         for rep in range(n_rep):
-            n_features = 231
+            n_features = 301
             n_molecules = 501
-            L = 101
+            L = 200
             G = nx.generators.trees.random_tree(L, seed=(rep + 3))
 
-            Y_candidates = np.random.RandomState(rep + 6).rand(n_molecules, n_features)
+            Y_candidates = np.random.RandomState(rep + 6).randn(n_molecules, n_features)
 
             l_Y_sequence = []
             for nS in [1, 2, 3, 4, 5]:
-                # print("Number of active sequences: %d" % nS)
-
-                l_Y_sequence.append(np.random.RandomState((nS * rep) + 5).rand(L, n_features))
+                l_Y_sequence.append(np.random.RandomState((nS * rep) + 5).randn(L, n_features))
 
                 start = time.time()
                 lambda_delta_ref = np.dstack(
                     [
                         StructuredSVMSequencesFixedMS2._get_lambda_delta_OLD(
-                            Y_sequence, Y_candidates, G, mol_kernel)
+                            Y_sequence, Y_candidates, G, generalized_tanimoto_kernel_FAST)
                         for Y_sequence in l_Y_sequence
                     ])
                 rt_old += time.time() - start
@@ -184,19 +179,8 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
 
                 start = time.time()
                 lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta(
-                    np.vstack(l_Y_sequence), Y_candidates, G, mol_kernel)
+                    np.vstack(l_Y_sequence), Y_candidates, G, generalized_tanimoto_kernel_FAST)
                 self.assertEqual(((L - 1) * nS, len(Y_candidates)), lambda_delta.shape)
-
-                # np.testing.assert_equal(
-                #     np.vstack(
-                #         [
-                #             StructuredSVMSequencesFixedMS2._get_lambda_delta_OLD(
-                #                 Y_sequence, Y_candidates, G, mol_kernel)
-                #             for Y_sequence in l_Y_sequence
-                #         ]),
-                #     lambda_delta
-                # )
-                #
 
                 # Bring output to shape = (|E_j|, |S_j|, n_molecules)
                 lambda_delta = lambda_delta.reshape(
@@ -209,11 +193,6 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
                 rt_new += time.time() - start
 
                 for nSi in range(nS):
-                    # print(lambda_delta_ref[:, :, nSi].shape)
-                    # print(lambda_delta[nSi, :, :].shape)
-                    # print(np.round(lambda_delta_ref[:10, :10, nSi], 2))
-                    # print(np.round(lambda_delta[nSi, :10, :10], 2))
-
                     np.testing.assert_allclose(lambda_delta_ref[:, :, nSi], lambda_delta[nSi, :, :])
 
         print("== get_lambda_delta ==")
