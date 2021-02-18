@@ -11,7 +11,8 @@
 # -- SBATCH --job-name=JOBNAME
 
 if [ $# -lt 1 ] ; then
-  error "USAGE: sbatch $0 TRAINING_SEQUENCE_LENGTH_L"
+  echo "USAGE: sbatch run_bioinf_redo__L_experiments.sh TRAINING_SEQUENCE_LENGTH_L"
+  exit 1
 else
   L=$1  # Might try here: 2 6 12 24
 fi
@@ -22,7 +23,7 @@ N_JOBS=8
 PROJECTDIR="/scratch/cs/kepaco/bache1/projects/rt_msms_ssvm/"
 DB_DIR="$PROJECTDIR/_CASMI_DB/"
 DB_FN="DB_LATEST.db"
-LOGDIR="$PROJECTDIR/src/ssvm/experiments/bioinf_redo/logs_triton/version_02__L_experiments/"
+LOGDIR="$PROJECTDIR/src/ssvm/experiments/bioinf_redo/logs_triton/version_02__L_experiments/L=$L"
 SCRIPTPATH="$PROJECTDIR/src/ssvm/experiments/bioinf_redo/fixedms2__gridsearch.py"
 
 # Load the conda environment
