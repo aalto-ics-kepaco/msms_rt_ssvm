@@ -33,7 +33,7 @@ import networkx as nx
 from functools import lru_cache
 from collections import OrderedDict
 from scipy.io import loadmat
-from typing import List, Tuple, Union, Dict, Optional, Callable
+from typing import List, Tuple, Union, Dict, Optional, Callable, Iterator, TypeVar
 from sqlalchemy import create_engine
 from sklearn.model_selection import GroupKFold, GroupShuffleSplit
 from sklearn.utils.validation import check_random_state
@@ -49,6 +49,8 @@ CH = logging.StreamHandler()
 FORMATTER = logging.Formatter('[%(levelname)s] %(name)s : %(message)s')
 CH.setFormatter(FORMATTER)
 LOGGER.addHandler(CH)
+
+SEQUENCE_SAMPLE_T = TypeVar('SEQUENCE_SAMPLE_T', bound='SequenceSample')
 
 
 class CandidateSetMetIdent(object):
@@ -961,7 +963,10 @@ class Sequence(object):
         """
         return self.L
 
-    def get_retention_time(self, s: Optional[int] = None):
+    def get_dataset(self) -> str:
+        return self.spectra[0].get("dataset")
+
+    def get_retention_time(self, s: Optional[int] = None) -> Union[float, List[float]]:
         if s is None:
             return [self.get_retention_time(s) for s in range(self.__len__())]
         else:
@@ -1198,7 +1203,7 @@ class SequenceSample(object):
         """
         return len(self._sampled_sequences)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[LabeledSequence]:
         return iter(self._sampled_sequences)
 
     def __getitem__(self, item):
@@ -1254,15 +1259,19 @@ class SequenceSample(object):
 
     def get_train_test_split(self, spectra_cv: Union[GroupKFold, GroupShuffleSplit, int] = 5,
                              N_train: Optional[int] = None, N_test: Optional[int] = None,
-                             L_min_test: Optional[int] = None, L_max_test: Optional[int] = None):
+                             L_min_test: Optional[int] = None, L_max_test: Optional[int] = None,
+                             candidates_test: Optional[CandidateSQLiteDB] = None) \
+            -> Tuple[SEQUENCE_SAMPLE_T, SEQUENCE_SAMPLE_T]:
         """
         Get a single training and test split
         """
-        return next(self.get_train_test_generator(spectra_cv, N_train, N_test, L_min_test, L_max_test))
+        return next(self.get_train_test_generator(spectra_cv, N_train, N_test, L_min_test, L_max_test, candidates_test))
 
     def get_train_test_generator(self, spectra_cv: Union[GroupKFold, GroupShuffleSplit, int] = 5,
                                  N_train: Optional[int] = None, N_test: Optional[int] = None,
-                                 L_min_test: Optional[int] = None, L_max_test: Optional[int] = None):
+                                 L_min_test: Optional[int] = None, L_max_test: Optional[int] = None,
+                                 candidates_test: Optional[CandidateSQLiteDB] = None) \
+            -> Tuple[SEQUENCE_SAMPLE_T, SEQUENCE_SAMPLE_T]:
         """
         Split the spectra ids into training and test sets. Thereby, all spectra belonging to the same molecular
         structure (regardless of their Massbank sub-dataset membership) are either in the test or training.
@@ -1308,6 +1317,9 @@ class SequenceSample(object):
         if L_max_test is None:
             L_max_test = self.L_max
 
+        if candidates_test is None:
+            candidates_test = self.candidates
+
         for train, test in spectra_cv.split(self.spectra, groups=self.labels):
             # Get training and test subsets of the spectra ids. Spectra belonging to the same molecular structure are
             # either in the training or the test set.
@@ -1316,7 +1328,7 @@ class SequenceSample(object):
                                candidates=self.candidates, N=N_train, L_min=self.L_min, L_max=self.L_max,
                                random_state=self.random_state, ms2scorer=self.ms2scorer),
                 SequenceSample([self.spectra[i] for i in test], [self.labels[i] for i in test],
-                               candidates=self.candidates, N=N_test, L_min=L_min_test, L_max=L_max_test,
+                               candidates=candidates_test, N=N_test, L_min=L_min_test, L_max=L_max_test,
                                random_state=self.random_state, ms2scorer=self.ms2scorer)
             )
 

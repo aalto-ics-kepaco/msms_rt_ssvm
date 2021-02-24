@@ -1547,8 +1547,9 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                             "training__cindex_pref_values": self.score(self.training_data_, stype="cindex"),
                         }
 
-                        if validation_data is not None:
-                            _data_to_log["validation__cindex_pref_values"] = self.score(validation_data, stype="cindex")
+                        if self.validation_data_ is not None:
+                            _data_to_log["validation__cindex_pref_values"] = self.score(
+                                self.validation_data_, stype="cindex")
 
                         self.write_log(n_iterations_total, _data_to_log, summary_writer)
 
@@ -2104,7 +2105,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         :return: scalar, cindex
         """
-        with sequence.candidates:
+        with sequence.candidates, self.training_data_.candidates:
             # Predict preference scores for the ground truth labels
             pref_score = self.predict_molecule_preference_values(
                 sequence.get_molecule_features_for_labels(self.mol_feat_retention_order))

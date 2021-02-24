@@ -752,7 +752,12 @@ class TestSequenceSample(unittest.TestCase):
         L_min = 10
         seq_sample = SequenceSample(self.spectra, self.labels, None, N=N, L_min=L_min, random_state=201)
         self.assertEqual(N, len(seq_sample))
-        self.assertTrue(all([len(ss) == L_min for ss in seq_sample]))
+        self.assertTrue(all([len(seq) == L_min for seq in seq_sample]))
+
+        # All spectra of one sequence are belonging to the same dataset
+        for seq in seq_sample:
+            self.assertTrue(all([seq.spectra[0].get("dataset") == seq.spectra[s].get("dataset")
+                                 for s in range(len(seq))]))
 
     def test_train_test_splitting(self):
         # Generate sequence sample
