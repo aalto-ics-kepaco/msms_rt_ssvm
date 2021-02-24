@@ -35,9 +35,8 @@ from collections import OrderedDict
 from scipy.io import loadmat
 from typing import List, Tuple, Union, Dict, Optional, Callable
 from sqlalchemy import create_engine
-from sklearn.model_selection import GroupKFold, BaseCrossValidator
+from sklearn.model_selection import GroupKFold, GroupShuffleSplit
 from sklearn.utils.validation import check_random_state
-from sklearn.preprocessing import MinMaxScaler
 from matchms.Spectrum import Spectrum
 
 import ssvm.cfg
@@ -1253,13 +1252,17 @@ class SequenceSample(object):
 
         return sequences, datasets
 
-    def get_train_test_split(self, cv=5):
+    def get_train_test_split(self, spectra_cv: Union[GroupKFold, GroupShuffleSplit, int] = 5,
+                             N_train: Optional[int] = None, N_test: Optional[int] = None,
+                             L_min_test: Optional[int] = None, L_max_test: Optional[int] = None):
         """
-        75% training and 25% test split.
+        Get a single training and test split
         """
-        return next(self.get_train_test_generator(cv=cv))
+        return next(self.get_train_test_generator(spectra_cv, N_train, N_test, L_min_test, L_max_test))
 
-    def get_train_test_generator(self, cv: Union[BaseCrossValidator, int] = 5):
+    def get_train_test_generator(self, spectra_cv: Union[GroupKFold, GroupShuffleSplit, int] = 5,
+                                 N_train: Optional[int] = None, N_test: Optional[int] = None,
+                                 L_min_test: Optional[int] = None, L_max_test: Optional[int] = None):
         """
         Split the spectra ids into training and test sets. Thereby, all spectra belonging to the same molecular
         structure (regardless of their Massbank sub-dataset membership) are either in the test or training.
@@ -1267,7 +1270,17 @@ class SequenceSample(object):
         Internally the scikit-learn function "GroupKFold" is used to split the data. As groups we use the molecular
         identifiers.
 
-        :param cv: scikit-learn cross-validation generator
+        :param spectra_cv: scalar | GroupKFold | GroupShuffleSplit
+            If scalar, a GroupKFold splitter is initialized with the scalar being the number of splits.
+            Otherwise, the provided cross-validation splitter is directly used.
+
+        :param N_train: scalar | None
+            If scalar, number of training sequences
+            Otherwise, the number of training sequences is 80% of the self.N
+
+        :param N_test: scalar | None
+            If scalar, number of test sequences
+            Otherwise, the number of test sequences is 20% of the self.N
 
         :yields:
             train : ndarray
@@ -1276,15 +1289,26 @@ class SequenceSample(object):
             test : ndarray
                 The testing set indices for that split.
         """
-        if isinstance(cv, int):
-            cv = GroupKFold(n_splits=cv)
+        if isinstance(spectra_cv, int):
+            spectra_cv = GroupKFold(n_splits=spectra_cv)
         else:
-            assert isinstance(cv, BaseCrossValidator)
+            assert isinstance(spectra_cv, (GroupKFold, GroupShuffleSplit))
 
-        for train, test in cv.split(self.spectra, groups=self.labels):
-            N_test = self.N // cv.get_n_splits()
-            N_train = self.N - N_test
+        # Handle number of training and test sequences
+        if N_train is None:
+            N_train = np.round(self.N * 0.8).astype(int)
 
+        if N_test is None:
+            N_test = np.round(self.N * 0.2).astype(int)
+
+        # Handle test sequence length specification
+        if L_min_test is None:
+            L_min_test = self.L_min
+
+        if L_max_test is None:
+            L_max_test = self.L_max
+
+        for train, test in spectra_cv.split(self.spectra, groups=self.labels):
             # Get training and test subsets of the spectra ids. Spectra belonging to the same molecular structure are
             # either in the training or the test set.
             yield (
@@ -1292,7 +1316,7 @@ class SequenceSample(object):
                                candidates=self.candidates, N=N_train, L_min=self.L_min, L_max=self.L_max,
                                random_state=self.random_state, ms2scorer=self.ms2scorer),
                 SequenceSample([self.spectra[i] for i in test], [self.labels[i] for i in test],
-                               candidates=self.candidates, N=N_test, L_min=self.L_min, L_max=self.L_max,
+                               candidates=self.candidates, N=N_test, L_min=L_min_test, L_max=L_max_test,
                                random_state=self.random_state, ms2scorer=self.ms2scorer)
             )
 

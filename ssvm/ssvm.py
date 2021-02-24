@@ -1460,17 +1460,23 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         n_iterations_total = 0
 
         if summary_writer is not None:
-            # Ranking performance scores
-            _data_to_log = {
-                "training__ndcg_ohc": self.score(self.training_data_, self.training_graphs_, stype="ndcg_ohc")
-            }
+            _data_to_log = {}
+
+            # Ranking performance scores and duality gap
+            _start_time = time.time()
+            _data_to_log["duality_gap"], _data_to_log["training__ndcg_ohc"] = self._get_ndcg_score_and_duality_gap()
+            SSVM_LOGGER.info("Train data NDCG score = %.3f; Duality gap = %f (time = %.3fs)" %
+                             (_data_to_log["training__ndcg_ohc"], _data_to_log["duality_gap"], time.time() - _start_time))
+            self.duality_gap_0_ = _data_to_log["duality_gap"]
+            _data_to_log["rel_duality_gap_decay"] = _data_to_log["duality_gap"] / self.duality_gap_0_
 
             if validation_data is not None:
+                # Ranking performance on validation set
+                _start_time = time.time()
                 _data_to_log["validation__ndcg_ohc"] = \
                     self.score(self.validation_data_, self.validation_graphs_, stype="ndcg_ohc")
-
-            # Duality gap
-            _data_to_log["duality_gap"] = self._duality_gap()
+                SSVM_LOGGER.info("Validation data NDCG score = %.3f (time = %.3fs)" %
+                                 (_data_to_log["validation__ndcg_ohc"], time.time() - _start_time))
 
             self.write_log(n_iterations_total, _data_to_log, summary_writer)
 
@@ -1557,17 +1563,23 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             SSVM_LOGGER.handlers[0].flush()
 
             if summary_writer is not None:
-                # Ranking performance scores
-                _data_to_log = {
-                    "training__ndcg_ohc": self.score(self.training_data_, self.training_graphs_, stype="ndcg_ohc")
-                }
+                _data_to_log = {}
+
+                # Ranking performance scores and duality gap
+                _start_time = time.time()
+                _data_to_log["duality_gap"], _data_to_log["training__ndcg_ohc"] = self._get_ndcg_score_and_duality_gap()
+                SSVM_LOGGER.info("Train data NDCG score = %.3f; Duality gap = %f (time = %.3fs)" %
+                                 (_data_to_log["training__ndcg_ohc"], _data_to_log["duality_gap"],
+                                  time.time() - _start_time))
+                _data_to_log["rel_duality_gap_decay"] = _data_to_log["duality_gap"] / self.duality_gap_0_
 
                 if validation_data is not None:
+                    # Ranking performance on validation set
+                    _start_time = time.time()
                     _data_to_log["validation__ndcg_ohc"] = \
                         self.score(self.validation_data_, self.validation_graphs_, stype="ndcg_ohc")
-
-                # Duality gap
-                _data_to_log["duality_gap"] = self._duality_gap()
+                    SSVM_LOGGER.info("Validation data NDCG score = %.3f (time = %.3fs)" %
+                                     (_data_to_log["validation__ndcg_ohc"], time.time() - _start_time))
 
                 self.write_log(n_iterations_total, _data_to_log, summary_writer)
 
@@ -1576,13 +1588,57 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         return self
 
+    def _joblib_wrapper(self, i: int) -> Tuple[TreeFactorGraph, Tuple[str, ...], float]:
+        with self.training_data_[i].candidates:
+            edge_potentials = self._get_edge_potentials(self.training_data_[i], self.training_graphs_[i][0])
+
+            # --------------------------------------------
+            # Run the inference needed for the duality gap
+            node_potentials_la = self._get_node_potentials(self.training_data_[i], self.training_graphs_[i][0], True)
+
+            TFG, Z_max = self._inference(node_potentials_la, edge_potentials, self.training_graphs_[i][0])
+
+            # MAP returns a list of candidate indices, we need to convert them back to actual molecules identifier
+            y_hat = tuple(self.training_data_[i].get_labelspace(s)[Z_max[s]] for s in self.training_graphs_[i][0].nodes)
+            # --------------------------------------------
+
+            # --------------------------------------------
+            # Run the NDCG scoring
+            node_potentials = self._get_node_potentials(self.training_data_[i], self.training_graphs_[i][0], False)
+            max_marginals = self._max_marginals(
+                self.training_data_[i], node_potentials, edge_potentials, self.training_graphs_[i][0])
+            ndcg_score = self.ndcg_score(self.training_data_[i], use_label_loss=False, marginals=max_marginals)
+            # --------------------------------------------
+
+        return TFG, y_hat, ndcg_score
+
+    def _get_ndcg_score_and_duality_gap(self) -> Tuple[float, float]:
+        """
+
+        """
+        N = len(self.training_data_)
+
+        res = Parallel(n_jobs=self.n_jobs)(delayed(self._joblib_wrapper)(i) for i in range(N))
+        TFG_I, y_I_hat, ndcg_scores = map(list, zip(*res))
+
+        # Calculate (s - a)
+        s_minus_a = DualVariables.get_s(self.alphas_, y_I_hat) - self.alphas_
+
+        # Evaluate <s - a, \nabla g(a)>
+        gap = np.sum(
+            Parallel(n_jobs=self.n_jobs)(
+                delayed(self._duality_gap_joblib_wrapper)(i, s_minus_a, TFG_I) for i in range(N))
+        ).item()
+
+        return gap, np.mean(ndcg_scores).item()
+
     def _get_batch_label_loss(self, I_batch: List[int], y_I_hat: List[Tuple[str, ...]]) -> float:
         """
         Function to calculate the label loss for a set of most-violating label sequences.
         """
         lloss = 0
         with self.training_data_.candidates:
-            for idx, i in I_batch:
+            for idx, i in enumerate(I_batch):
                 # Load the features of the inferred candidate sequence
                 Y_i_hat = self.training_data_[i].candidates.get_molecule_features_by_molecule_id(
                     y_I_hat[idx], features=self.mol_feat_label_loss)
@@ -1616,9 +1672,10 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         N = len(self.training_data_)
 
         # Solve the sub-problem for all training examples
-        res = Parallel(n_jobs=self.n_jobs)(delayed(self.inference)(
-            self.training_data_[i], self.training_graphs_[i], loss_augmented=True, return_graphical_model=True)
-                                           for i in range(N))
+        res = Parallel(n_jobs=self.n_jobs)(
+            delayed(self.inference)(
+                self.training_data_[i], self.training_graphs_[i], loss_augmented=True, return_graphical_model=True)
+            for i in range(N))
         y_I_hat, TFG_I = map(list, zip(*res))
 
         # Calculate (s - a)
@@ -1839,7 +1896,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         return self.C * (sign_delta @ lambda_delta) / N
 
     def _get_node_and_edge_potentials(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph,
-                                      loss_augmented: bool = False):
+                                      loss_augmented: bool = False) -> Tuple[OrderedDict, OrderedDict]:
         """
 
         :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
@@ -1854,6 +1911,13 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             nested dictionary: key = nodes of G, (nested) key = nodes of G (<- edges): (nested) values: transition
                 matrices
         )
+        """
+        return self._get_node_potentials(sequence, G, loss_augmented), self._get_edge_potentials(sequence, G)
+
+    def _get_node_potentials(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph,
+                             loss_augmented: bool = False) -> OrderedDict:
+        """
+        Calculate the Node potentials
         """
         # Calculate the node potentials. If needed, augment the MS scores with the label loss
         node_potentials = OrderedDict()
@@ -1878,6 +1942,12 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 node_potentials[s]["log_score"] += \
                     sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s)  # Delta_i(y)
 
+        return node_potentials
+
+    def _get_edge_potentials(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph) -> OrderedDict:
+        """
+
+        """
         # Load the candidate features for all nodes
         l_Y = [sequence.get_molecule_features_for_candidates(self.mol_feat_retention_order, s) for s in G.nodes]
         pref_scores = self.predict_molecule_preference_values(np.vstack(l_Y))
@@ -1893,7 +1963,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 edge_potentials[s] = OrderedDict()
 
             edge_potentials[s][t] = {
-                "log_score": self.D_rt * self._get_edge_potentials(
+                "log_score": self.D_rt * self._get_edge_potentials_rsvm(
                     # Retention times
                     sequence.get_retention_time(s),
                     sequence.get_retention_time(t),
@@ -1910,11 +1980,11 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
             edge_potentials[t][s] = {"log_score": edge_potentials[s][t]["log_score"].T}
 
-        return node_potentials, edge_potentials
+        return edge_potentials
 
-    def _get_edge_potentials(self, rt_s: float, rt_t: float,
-                             Y_s: Optional[np.ndarray] = None, Y_t: Optional[np.ndarray] = None,
-                             pref_scores_s: Optional[np.ndarray] = None, pref_scores_t: Optional[np.ndarray] = None):
+    def _get_edge_potentials_rsvm(self, rt_s: float, rt_t: float,
+                                  Y_s: Optional[np.ndarray] = None, Y_t: Optional[np.ndarray] = None,
+                                  pref_scores_s: Optional[np.ndarray] = None, pref_scores_t: Optional[np.ndarray] = None):
         """
         Predict the transition matrix M (n_cand_s x n_cand_t) for the edge = (s, t) with:
 
@@ -2011,8 +2081,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             scores = Parallel(n_jobs=n_jobs_for_data)(
                 delayed(self.ndcg_score)(sequence, Gs=Gs, use_label_loss=False) for sequence, Gs in zip(data, l_Gs))
         elif stype == "cindex":
-            scores = Parallel(n_jobs=n_jobs_for_data)(
-                delayed(self.cindex)(sequence, Gs=Gs) for sequence, Gs in zip(data, l_Gs))
+            scores = Parallel(n_jobs=n_jobs_for_data)(delayed(self.cindex)(sequence) for sequence in data)
         else:
             raise ValueError("Invalid scoring type: '%s'." % stype)
 
@@ -2105,8 +2174,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         return top1
 
-    def ndcg_score(self, sequence: LabeledSequence, Gs: Optional[SpanningTrees] = None, use_label_loss: bool = True) \
-            -> float:
+    def ndcg_score(self, sequence: LabeledSequence, Gs: Optional[SpanningTrees] = None, use_label_loss: bool = True,
+                   marginals: Optional[Dict] = None) -> float:
         """
         Compute the Normalized Discounted Cumulative Gain (NDCG) for the given (MS, RT)-sequence.
 
@@ -2136,8 +2205,13 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             return v
 
         with sequence.candidates:
-            # Calculate the marginals
-            marginals = self.predict(sequence, Gs=Gs, map=False)
+            if marginals is None:
+                # Calculate the marginals
+                marginals = self.predict(sequence, Gs=Gs, map=False)
+            else:
+                if Gs is not None:
+                    raise ValueError("When marginals are provided, than no spanning trees should be provided. It cannot "
+                                     "be ensured that the provided spanning trees have been used to calculate the marginals.")
 
             # Get the ground-truth relevance for the ranked lists
             if use_label_loss:
@@ -2395,7 +2469,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         """
         for k, v in data_to_log.items():
             with summary_writer.as_default():
-                if k in ["active_variables", "duality_gap"]:
+                if k in ["active_variables", "duality_gap", "rel_duality_gap_decay"]:
                     scope = "Model"
                 elif k in ["step_size"]:
                     scope = "Optimizer"
@@ -2474,8 +2548,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 for tree in range(n_trees_per_sequence)]
 
     @staticmethod
-    def _max_marginals(sequence: Union[Sequence, LabeledSequence], node_potentials: OrderedDict, edge_potentials: Dict,
-                       G: nx.Graph, normalize=True):
+    def _max_marginals(sequence: Union[Sequence, LabeledSequence], node_potentials: OrderedDict,
+                       edge_potentials: OrderedDict, G: nx.Graph, normalize=True) -> Dict:
         """
         Max-max_marginals
         """
@@ -2488,7 +2562,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         return {s: {"label": sequence.get_labelspace(s), "score": marg[s], "n_cand": len(marg[s])} for s in G.nodes}
 
     @staticmethod
-    def _inference(node_potentials: OrderedDict, edge_potentials: Dict, G: nx.Graph) \
+    def _inference(node_potentials: OrderedDict, edge_potentials: OrderedDict, G: nx.Graph) \
             -> Tuple[TreeFactorGraph, List[List[int]]]:
         """
         MAP inference
