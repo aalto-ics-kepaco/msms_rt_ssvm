@@ -77,8 +77,8 @@ def get_cli_arguments() -> argparse.Namespace:
     arg_parser.add_argument("--step_size_approach", type=str, default="linesearch_parallel")
     arg_parser.add_argument("--mol_kernel", type=str, default="minmax", choices=["minmax_numba", "minmax"])
     arg_parser.add_argument("--C", type=float, default=4)
-    arg_parser.add_argument("--label_loss", type=str, default="minmax_loss")
-    arg_parser.add_argument("--mol_feat_label_loss", type=str, default="iokr_fps__count")
+    arg_parser.add_argument("--label_loss", type=str, default="tanimoto_loss")
+    arg_parser.add_argument("--mol_feat_label_loss", type=str, default="iokr_fps__positive")
     arg_parser.add_argument("--mol_feat_retention_order", type=str, default="substructure_count")
 
     arg_parser.add_argument("--ms2scorer", type=str, default="MetFrag_2.4.5__8afe4a14")
@@ -121,6 +121,8 @@ def train_and_score(parameter_name: str, parameter_value: str):
         args.max_n_candidates_train = int(parameter_value)
     elif parameter_name == "step_size_approach":
         args.step_size_approach = parameter_value
+    elif parameter_name == "C":
+        args.C = float(parameter_value)
     else:
         raise ValueError("Invalid parameter name: '%s'." % parameter_name)
 
