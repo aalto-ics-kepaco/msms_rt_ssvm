@@ -46,7 +46,7 @@ if __name__ == "__main__":
         N=N, L_min=10,
         L_max=20, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
 
-    seq_sample_train, seq_sample_test = seq_sample.get_train_test_split(cv=4)
+    seq_sample_train, seq_sample_test = seq_sample.get_train_test_split(spectra_cv=4)
     print(len(seq_sample_train[0]))
 
     summary_writer = tf.summary.create_file_writer(os.path.join(tf_summary_base_dir, "test_performance",

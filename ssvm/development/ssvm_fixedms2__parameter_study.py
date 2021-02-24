@@ -1,11 +1,11 @@
-import sqlite3
 import os
-import pandas as pd
+import sqlite3
+import argparse
 import numpy as np
+import pandas as pd
 import tensorflow as tf
 
 from typing import List, Tuple
-
 from matchms.Spectrum import Spectrum
 from sklearn.model_selection import GroupShuffleSplit
 
@@ -35,7 +35,7 @@ def load_spectra_and_labels(dbfn: str, molecule_identifier: str) -> Tuple[List[S
 
 if __name__ == "__main__":
     molecule_identifier = "inchikey1"
-    N_train = 250
+    N_train = 150
     N_test = 15
 
     # Random states
@@ -56,8 +56,8 @@ if __name__ == "__main__":
     # Setup a SSVM
     # ===================
     ssvm = StructuredSVMSequencesFixedMS2(
-        mol_feat_label_loss="iokr_fps__count", mol_feat_retention_order="substructure_count",
-        mol_kernel="minmax", C=16, step_size="linesearch_parallel", batch_size=16, n_epochs=5, label_loss="minmax_loss",
+        mol_feat_label_loss="iokr_fps__count", mol_feat_retention_order="substructure_count", mol_kernel="minmax", C=4,
+        step_size_approach="linesearch_parallel", batch_size=16, n_epochs=5, label_loss="minmax_loss",
         random_state=rs_ssvm, n_jobs=4)
 
     # ===================
@@ -78,10 +78,7 @@ if __name__ == "__main__":
     # ==============
     # Train the SSVM
     # ==============
-    summary_writer = tf.summary.create_file_writer(os.path.join(tf_summary_base_dir, "parameter_exploration",
-                                                                "%d" % np.random.randint(1000)))
+    summary_writer = tf.summary.create_file_writer(os.path.join(tf_summary_base_dir, "parameter_study", "debug"))
 
-    ssvm.fit(seq_sample_train, n_init_per_example=6, summary_writer=summary_writer)
+    ssvm.fit(seq_sample_train, n_init_per_example=4, summary_writer=summary_writer, validation_data=seq_sample_test)
 
-    print("SCORING")
-    print(ssvm.score(seq_sample_test, stype="top1_map"))
