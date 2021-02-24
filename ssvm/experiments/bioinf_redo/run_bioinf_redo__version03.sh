@@ -3,9 +3,9 @@
 # We should reserve at least 12GB of RAM for the candidate database
 
 #SBATCH --cpus-per-task=32 --mem-per-cpu=5000
-#SBATCH --time=48:00:00
+#SBATCH --time=50:00:00
 # -- SBATCH --time=01:00:00 --partition=debug
-#SBATCH --array=100-249
+#SBATCH --array=0-9,100-109,150-159
 # -- SBATCH --array=0
 
 N_THREADS=4
