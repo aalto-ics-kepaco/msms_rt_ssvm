@@ -73,7 +73,7 @@ def get_cli_arguments() -> argparse.Namespace:
     # =======================
     arg_parser.add_argument("--n_epochs", type=int, default=5)
     arg_parser.add_argument("--batch_size", type=int, default=16)
-    arg_parser.add_argument("--n_init_per_example", type=int, default=6)
+    arg_parser.add_argument("--n_init_per_example", type=int, default=4)
     arg_parser.add_argument("--step_size_approach", type=str, default="linesearch_parallel")
     arg_parser.add_argument("--mol_kernel", type=str, default="minmax", choices=["minmax_numba", "minmax"])
     arg_parser.add_argument("--C", type=float, default=4)
@@ -170,7 +170,7 @@ def train_and_score(parameter_name: str, parameter_value: str):
     os.makedirs(odir, exist_ok=True)
     summary_writer = tf.summary.create_file_writer(odir)
 
-    ssvm.fit(seq_sample_train, n_init_per_example=4, summary_writer=summary_writer, validation_data=seq_sample_test)
+    ssvm.fit(seq_sample_train, n_init_per_example=args.n_init_per_example, summary_writer=summary_writer, validation_data=seq_sample_test)
 
     # ===================
     # Score test sequence
