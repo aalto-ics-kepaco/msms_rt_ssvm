@@ -3,7 +3,7 @@
 # We should reserve at least 12GB of RAM for the candidate database
 
 #SBATCH --cpus-per-task=32 --mem-per-cpu=5000
-#SBATCH --time=24:00:00
+#SBATCH --time=36:00:00
 # -- SBATCH --time=01:00:00 --partition=debug
 
 N_THREADS=4
@@ -12,8 +12,8 @@ N_JOBS=8
 PROJECTDIR="/scratch/cs/kepaco/bache1/projects/rt_msms_ssvm/"
 DB_DIR="$PROJECTDIR/_CASMI_DB/"
 DB_FN="DB_LATEST.db"
-LOGDIR="$PROJECTDIR/src/ssvm/experiments/development/logs_triton/parameter_study"
-SCRIPTPATH="$PROJECTDIR/src/ssvm/experiments/development/ssvm_fixedms2__parameter_study.py"
+LOGDIR="$PROJECTDIR/src/ssvm/development/logs_triton/parameter_study"
+SCRIPTPATH="$PROJECTDIR/src/ssvm/development/ssvm_fixedms2__parameter_study.py"
 
 # Load the conda environment
 module load miniconda
@@ -32,7 +32,7 @@ cp "$DB_DIR/$DB_FN" "$LOCAL_DB_DIR"
 
 NUMBA_NUM_THREADS=$N_THREADS;OMP_NUM_THREADS=$N_THREADS;OPENBLAS_NUM_THREADS=$N_THREADS; \
     srun python $SCRIPTPATH \
-    "label_loss" "binary_tanimoto" "count_minmax" "hamming" \
+    "C" "1" "2" "4" "8" "16" "32" \
   --n_jobs="$N_JOBS" \
   --db_fn="$LOCAL_DB_DIR/$DB_FN" \
   --output_dir="$LOGDIR" \

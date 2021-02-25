@@ -94,6 +94,8 @@ def get_cli_arguments() -> argparse.Namespace:
     arg_parser.add_argument("--n_trees_for_scoring", type=int, default=16)
     arg_parser.add_argument("--n_trees_for_training", type=int, default=1)
 
+    arg_parser.add_argument("--n_jobs", type=int, default=4)
+
     return arg_parser.parse_args()
 
 
@@ -159,7 +161,7 @@ def train_and_score(parameter_name: str, parameter_value: str):
     ssvm = StructuredSVMSequencesFixedMS2(
         mol_feat_label_loss=args.mol_feat_label_loss, mol_feat_retention_order=args.mol_feat_retention_order,
         mol_kernel=args.mol_kernel, C=args.C, step_size_approach=args.step_size_approach, batch_size=args.batch_size,
-        n_epochs=args.n_epochs, label_loss=args.label_loss, random_state=rs_ssvm, n_jobs=4)
+        n_epochs=args.n_epochs, label_loss=args.label_loss, random_state=rs_ssvm, n_jobs=args.n_jobs)
 
     # ==============
     # Train the SSVM
