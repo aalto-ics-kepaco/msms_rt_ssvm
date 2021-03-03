@@ -1,4 +1,4 @@
-db_fn = /dev/shm/59097115/DB_LATEST.db
+db_fn = /dev/shm/59222459/DB_LATEST.db
 output_dir = /scratch/cs/kepaco/bache1/projects/rt_msms_ssvm//src/ssvm/development/logs_triton/parameter_study
 parameter_to_study = label_loss
 parameter_grid = ['binary_tanimoto', 'hamming', 'count_minmax']
@@ -13,7 +13,7 @@ C = 4
 label_loss = minmax_loss
 mol_feat_label_loss = iokr_fps__count
 mol_feat_retention_order = substructure_count
-ms2scorer = MetFrag_2.4.5__8afe4a14
+ms2scorer = IOKR__696a17f3
 molecule_identifier = inchikey1
 max_n_candidates_train = 50
 max_n_candidates_test = 50
