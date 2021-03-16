@@ -125,6 +125,8 @@ def train_and_score(parameter_name: str, parameter_value: str):
         args.step_size_approach = parameter_value
     elif parameter_name == "C":
         args.C = float(parameter_value)
+    elif parameter_name == "n_epochs":
+        args.n_epochs = int(parameter_value)
     else:
         raise ValueError("Invalid parameter name: '%s'." % parameter_name)
 
