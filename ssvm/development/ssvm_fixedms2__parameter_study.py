@@ -127,6 +127,11 @@ def train_and_score(parameter_name: str, parameter_value: str):
         args.C = float(parameter_value)
     elif parameter_name == "n_epochs":
         args.n_epochs = int(parameter_value)
+    elif parameter_name == "n_trees_for_scoring":
+        args.n_trees_for_scoring = int(parameter_value)
+    elif parameter_name == "L_train":
+        args.L_min_train = int(parameter_value)
+        args.L_max_train = int(parameter_value)
     else:
         raise ValueError("Invalid parameter name: '%s'." % parameter_name)
 
