@@ -84,7 +84,7 @@ def get_cli_arguments() -> argparse.Namespace:
     arg_parser.add_argument("--ms2scorer", type=str, default="MetFrag_2.4.5__8afe4a14")
     arg_parser.add_argument("--molecule_identifier", type=str, default="inchikey1",
                             choices=["inchikey1", "inchi", "inchi2D"])
-    arg_parser.add_argument("--max_n_candidates_train", type=int, default=25)
+    arg_parser.add_argument("--max_n_candidates_train", type=int, default=50)
     arg_parser.add_argument("--max_n_candidates_test", type=int, default=50)
     arg_parser.add_argument("--L_min_train", type=int, default=4)
     arg_parser.add_argument("--L_max_train", type=int, default=32)
