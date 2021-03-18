@@ -132,6 +132,8 @@ def train_and_score(parameter_name: str, parameter_value: str):
     elif parameter_name == "L_train":
         args.L_min_train = int(parameter_value)
         args.L_max_train = int(parameter_value)
+    elif parameter_name == "n_samples_train":
+        args.n_samples_train = int(parameter_value)
     else:
         raise ValueError("Invalid parameter name: '%s'." % parameter_name)
 
