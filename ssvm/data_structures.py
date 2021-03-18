@@ -1365,7 +1365,7 @@ class SpanningTrees(object):
         :param random_state:
         """
         self.n_tress = n_trees
-        self.random_state = check_random_state(random_state)
+        self.random_state = check_random_state(random_state)  # type: np.random.RandomState
         self.n_nodes = len(sequence)
         self.n_edges = self.n_nodes - 1
 

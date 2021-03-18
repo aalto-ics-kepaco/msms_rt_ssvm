@@ -1363,7 +1363,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     """
     def __init__(self, mol_feat_label_loss: str, mol_feat_retention_order: str,
                  mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]],  n_trees_per_sequence: int = 1,
-                 retention_order_weight=0.5, n_jobs: int = 1, *args, **kwargs):
+                 retention_order_weight=None, n_jobs: int = 1, log_transform_node_potentials: bool = False,
+                 average_node_and_edge_potentials: bool = True, *args, **kwargs):
         """
         :param mol_feat_label_loss:
         :param mol_feat_retention_order:
@@ -1379,6 +1380,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         self.n_trees_per_sequence = n_trees_per_sequence
         self.retention_order_weight = retention_order_weight
         self.n_jobs = n_jobs
+        self.log_transform_node_potentials = log_transform_node_potentials
+        self.average_node_and_edge_potentials = average_node_and_edge_potentials
 
         if self.retention_order_weight is None:
             self.D_rt = 1.0
@@ -1934,14 +1937,21 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         _c1, _c2 = CandidateSQLiteDB.get_normalization_parameters_c1_and_c2(np.hstack(_raw_scores))
 
         for idx, s in enumerate(G.nodes):  # V
-            # Normalize the raw scores using the global parameters to (0, 1] and transform to log-scores
-            node_potentials[s]["log_score"] = \
-                self.D_ms * np.log(CandidateSQLiteDB.normalize_scores(_raw_scores[idx], _c1, _c2))
+            # Normalize the raw scores using the global parameters to (0, 1] (and transform to log-scores)
+            _score = CandidateSQLiteDB.normalize_scores(_raw_scores[idx], _c1, _c2)
+
+            if self.log_transform_node_potentials:
+                _score = np.log(_score)
+
+            node_potentials[s]["log_score"] = self.D_ms * _score
 
             # Add label loss is loss-augmented scores are requested
             if loss_augmented:
                 node_potentials[s]["log_score"] += \
                     sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s)  # Delta_i(y)
+
+            if self.average_node_and_edge_potentials:
+                node_potentials[s]["log_score"] /= len(G.nodes)
 
         return node_potentials
 
@@ -1973,6 +1983,9 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                     pref_scores_t=pref_scores[node_2_idc[t]]
                 )
             }
+
+            if self.average_node_and_edge_potentials:
+                edge_potentials[s][t]["log_score"] /= len(G.edges)
 
             # As we do not know in which direction the edges are traversed during the message passing, we need to add
             # the transition matrices for both directions, i.e. s -> t and t -> s.
@@ -2059,7 +2072,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             n_trees_per_sequence = self.n_trees_per_sequence
 
         if l_Gs is None:
-            l_Gs = [SpanningTrees(seq, n_trees=n_trees_per_sequence) for seq in data]
+            l_Gs = [SpanningTrees(seq, n_trees=n_trees_per_sequence,
+                                  random_state=kwargs.get("spanning_tree_random_state", None)) for seq in data]
 
         if stype == "top1_mm":
             scores = Parallel(n_jobs=n_jobs_for_data)(

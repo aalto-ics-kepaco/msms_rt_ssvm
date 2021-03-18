@@ -177,13 +177,14 @@ def train_and_score(parameter_name: str, parameter_value: str):
     os.makedirs(odir, exist_ok=True)
     summary_writer = tf.summary.create_file_writer(odir)
 
-    ssvm.fit(seq_sample_train, n_init_per_example=args.n_init_per_example, summary_writer=summary_writer, validation_data=seq_sample_test)
+    ssvm.fit(seq_sample_train, n_init_per_example=args.n_init_per_example, summary_writer=summary_writer,
+             validation_data=seq_sample_test)
 
     # ===================
     # Score test sequence
     # ===================
     scores = ssvm.score(seq_sample_test, n_trees_per_sequence=args.n_trees_for_scoring, stype="topk_mm",
-                        topk_method="csi", average=False, return_percentage=False)
+                        topk_method="csi", average=False, return_percentage=False, spanning_tree_random_state=rs_score)
 
     out = []
     for i, seq in enumerate(seq_sample_test):
@@ -205,6 +206,7 @@ if __name__ == "__main__":
     rs_cand = 391
     rs_seqspl = 25
     rs_gss = 103
+    rs_score = 2942
 
     # ===================
     # Get list of Spectra
