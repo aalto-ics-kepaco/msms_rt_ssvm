@@ -97,7 +97,8 @@ def get_cli_arguments() -> argparse.Namespace:
     arg_parser.add_argument("--n_jobs", type=int, default=4)
 
     arg_parser.add_argument("--ssvm_update_direction", type=str, default="map")
-    arg_parser.add_argument("--potential_options", type=str, default="no_avg__log")
+    arg_parser.add_argument("--average_node_and_edge_potentials", type=int, default=0)
+    arg_parser.add_argument("--log_transform_node_potentials", type=int, default=1)
 
     return arg_parser.parse_args()
 
@@ -141,17 +142,17 @@ def train_and_score(parameter_name: str, parameter_value: str):
         args.ssvm_update_direction = parameter_value
     elif parameter_name == "potential_options":
         if parameter_value == "no_avg__no_log":
-            average_node_and_edge_potentials = False
-            log_transform_node_potentials = False
+            args.average_node_and_edge_potentials = False
+            args.log_transform_node_potentials = False
         elif parameter_value == "no_avg__log":
-            average_node_and_edge_potentials = False
-            log_transform_node_potentials = True
+            args.average_node_and_edge_potentials = False
+            args.log_transform_node_potentials = True
         elif parameter_value == "avg__no_log":
-            average_node_and_edge_potentials = True
-            log_transform_node_potentials = False
+            args.average_node_and_edge_potentials = True
+            args.log_transform_node_potentials = False
         elif parameter_value == "avg__log":
-            average_node_and_edge_potentials = True
-            log_transform_node_potentials = True
+            args.average_node_and_edge_potentials = True
+            args.log_transform_node_potentials = True
         else:
             raise ValueError("Invalid parameter value for '%s': '%s'." % (parameter_name, parameter_value))
     else:
@@ -191,8 +192,8 @@ def train_and_score(parameter_name: str, parameter_value: str):
         mol_feat_label_loss=args.mol_feat_label_loss, mol_feat_retention_order=args.mol_feat_retention_order,
         mol_kernel=args.mol_kernel, C=args.C, step_size_approach=args.step_size_approach, batch_size=args.batch_size,
         n_epochs=args.n_epochs, label_loss=args.label_loss, random_state=rs_ssvm, n_jobs=args.n_jobs,
-        update_direction=args.ssvm_update_direction, average_node_and_edge_potentials=average_node_and_edge_potentials,
-        log_transform_node_potentials=log_transform_node_potentials)
+        update_direction=args.ssvm_update_direction, log_transform_node_potentials=args.log_transform_node_potentials,
+        average_node_and_edge_potentials=args.average_node_and_edge_potentials)
 
     # ==============
     # Train the SSVM
