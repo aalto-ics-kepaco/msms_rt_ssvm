@@ -1478,7 +1478,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 # Ranking performance on validation set
                 _start_time = time.time()
                 _data_to_log["validation__ndcg_ohc"] = \
-                    self.score(self.validation_data_, self.validation_graphs_, stype="ndcg_ohc")
+                    self.score(self.validation_data_, self.validation_graphs_, stype="ndcg_ohc",
+                               spanning_tree_random_state=len(self.validation_data_))
                 SSVM_LOGGER.info("Validation data NDCG score = %.3f (time = %.3fs)" %
                                  (_data_to_log["validation__ndcg_ohc"], time.time() - _start_time))
 
@@ -1583,7 +1584,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                     # Ranking performance on validation set
                     _start_time = time.time()
                     _data_to_log["validation__ndcg_ohc"] = \
-                        self.score(self.validation_data_, self.validation_graphs_, stype="ndcg_ohc")
+                        self.score(self.validation_data_, self.validation_graphs_, stype="ndcg_ohc",
+                                   spanning_tree_random_state=len(self.validation_data_))
                     SSVM_LOGGER.info("Validation data NDCG score = %.3f (time = %.3fs)" %
                                      (_data_to_log["validation__ndcg_ohc"], time.time() - _start_time))
 
@@ -2669,3 +2671,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         TODO
         """
         return get_molecule_features_by_molecule_id_CACHED(sequence.candidates, tuple(sequence.labels), features)
+
+
+# class EnsembleSSVM(object):
+#     def __init__(self, estimator: StructuredSVMSequencesFixedMS2, n_estimators: int = 1,
+#                  random_state: Optional[int, np.random.RandomState] = None):

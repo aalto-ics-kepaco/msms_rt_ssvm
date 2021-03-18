@@ -84,7 +84,7 @@ def get_cli_arguments() -> argparse.Namespace:
     arg_parser.add_argument("--ms2scorer", type=str, default="MetFrag_2.4.5__8afe4a14")
     arg_parser.add_argument("--molecule_identifier", type=str, default="inchikey1",
                             choices=["inchikey1", "inchi", "inchi2D"])
-    arg_parser.add_argument("--max_n_candidates_train", type=int, default=50)
+    arg_parser.add_argument("--max_n_candidates_train", type=int, default=25)
     arg_parser.add_argument("--max_n_candidates_test", type=int, default=50)
     arg_parser.add_argument("--L_min_train", type=int, default=4)
     arg_parser.add_argument("--L_max_train", type=int, default=32)
@@ -97,6 +97,7 @@ def get_cli_arguments() -> argparse.Namespace:
     arg_parser.add_argument("--n_jobs", type=int, default=4)
 
     arg_parser.add_argument("--ssvm_update_direction", type=str, default="map")
+    arg_parser.add_argument("--potential_options", type=str, default="no_avg__log")
 
     return arg_parser.parse_args()
 
@@ -138,6 +139,21 @@ def train_and_score(parameter_name: str, parameter_value: str):
         args.n_samples_train = int(parameter_value)
     elif parameter_name == "ssvm_update_direction":
         args.ssvm_update_direction = parameter_value
+    elif parameter_name == "potential_options":
+        if parameter_value == "no_avg__no_log":
+            average_node_and_edge_potentials = False
+            log_transform_node_potentials = False
+        elif parameter_value == "no_avg__log":
+            average_node_and_edge_potentials = False
+            log_transform_node_potentials = True
+        elif parameter_value == "avg__no_log":
+            average_node_and_edge_potentials = True
+            log_transform_node_potentials = False
+        elif parameter_value == "avg__log":
+            average_node_and_edge_potentials = True
+            log_transform_node_potentials = True
+        else:
+            raise ValueError("Invalid parameter value for '%s': '%s'." % (parameter_name, parameter_value))
     else:
         raise ValueError("Invalid parameter name: '%s'." % parameter_name)
 
@@ -175,7 +191,8 @@ def train_and_score(parameter_name: str, parameter_value: str):
         mol_feat_label_loss=args.mol_feat_label_loss, mol_feat_retention_order=args.mol_feat_retention_order,
         mol_kernel=args.mol_kernel, C=args.C, step_size_approach=args.step_size_approach, batch_size=args.batch_size,
         n_epochs=args.n_epochs, label_loss=args.label_loss, random_state=rs_ssvm, n_jobs=args.n_jobs,
-        update_direction=args.ssvm_update_direction)
+        update_direction=args.ssvm_update_direction, average_node_and_edge_potentials=average_node_and_edge_potentials,
+        log_transform_node_potentials=log_transform_node_potentials)
 
     # ==============
     # Train the SSVM
