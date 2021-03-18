@@ -1364,7 +1364,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     def __init__(self, mol_feat_label_loss: str, mol_feat_retention_order: str,
                  mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]],  n_trees_per_sequence: int = 1,
                  retention_order_weight=None, n_jobs: int = 1, log_transform_node_potentials: bool = False,
-                 average_node_and_edge_potentials: bool = True, *args, **kwargs):
+                 average_node_and_edge_potentials: bool = True, update_direction: str = "map", *args, **kwargs):
         """
         :param mol_feat_label_loss:
         :param mol_feat_retention_order:
@@ -1382,6 +1382,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         self.n_jobs = n_jobs
         self.log_transform_node_potentials = log_transform_node_potentials
         self.average_node_and_edge_potentials = average_node_and_edge_potentials
+        self.update_direction = update_direction
 
         if self.retention_order_weight is None:
             self.D_rt = 1.0
@@ -1507,7 +1508,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 # Find the most violating examples for the current batch
                 _start_time = time.time()
                 res = Parallel(n_jobs=self.n_jobs)(delayed(self.inference)(
-                    self.training_data_[i], self.training_graphs_[i], loss_augmented=True, return_graphical_model=True)
+                    self.training_data_[i], self.training_graphs_[i], loss_augmented=True, return_graphical_model=True,
+                    update_direction=self.update_direction)
                                                    for i in I_batch)
                 y_I_hat = [y_i_hat for y_i_hat, _ in res]
                 SSVM_LOGGER.info("Finding the most violating examples took %.3fs" % (time.time() - _start_time))
@@ -1730,7 +1732,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             return self.max_marginals(sequence, Gs=Gs, n_jobs=n_jobs)
 
     def inference(self, sequence: Union[Sequence, LabeledSequence], Gs: Optional[SpanningTrees] = None,
-                  loss_augmented: bool = False, return_graphical_model: bool = False) \
+                  loss_augmented: bool = False, return_graphical_model: bool = False, update_direction: str = "map") \
             -> Union[Tuple[str, ...], Tuple[Tuple[str, ...], TreeFactorGraph]]:
         """
         Infer the most likely label sequence for the given (MS, RT)-sequence.
@@ -1746,6 +1748,10 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         :param return_graphical_model: boolean, indicating whether the graphical model, e.g. the Tree-Factor-Graph, used
             to solve performance the inference should be returned.
 
+        :param update_direction: string, specifying which update direction should be returned:
+            "map" (default): solves the (loss-augmented) decoding problem ~ most violating example
+            "random": returns a random label sequence as update direction (intended for debugging purposes)
+
         :return: tuple, length = L, most likely label sequence
         """
         if Gs is None:
@@ -1756,7 +1762,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, Gs[0], loss_augmented)
 
             # Find the MAP estimate
-            TFG, Z_max = self._inference(node_potentials, edge_potentials, Gs[0])
+            TFG, Z_max = self._inference(node_potentials, edge_potentials, Gs[0], update_direction)
 
             # MAP returns a list of candidate indices, we need to convert them back to actual molecules identifier
             y_hat = tuple(sequence.get_labelspace(s)[Z_max[s]] for s in Gs[0].nodes)
@@ -2577,15 +2583,25 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         return {s: {"label": sequence.get_labelspace(s), "score": marg[s], "n_cand": len(marg[s])} for s in G.nodes}
 
     @staticmethod
-    def _inference(node_potentials: OrderedDict, edge_potentials: OrderedDict, G: nx.Graph) \
-            -> Tuple[TreeFactorGraph, List[List[int]]]:
+    def _inference(node_potentials: OrderedDict, edge_potentials: OrderedDict, G: nx.Graph,
+                   update_direction: str = "map") -> Tuple[TreeFactorGraph, List[int]]:
         """
         MAP inference
+
+        :param update_direction: string, specifying which update direction should be returned:
+            "map" (default): solves the (loss-augmented) decoding problem ~ most violating example
+            "random": returns a random label sequence as update direction (intended for debugging purposes)
         """
         # MAP inference (find most likely label sequence) for the given node- and edge-potentials
         TFG = TreeFactorGraph(candidates=node_potentials, var_conn_graph=G, make_order_probs=None,
                               order_probs=edge_potentials, D=None)
-        Z_max, _ = TFG.MAP_only()
+
+        if update_direction == "random":
+            Z_max = [np.random.choice(range(node_potentials[s]["n_cand"])) for s in node_potentials.keys()]
+        elif update_direction == "map":
+            Z_max, _ = TFG.MAP_only()
+        else:
+            raise ValueError("Invalid update direction: '%s'. Choices are 'random' and 'map'." % update_direction)
 
         return TFG, Z_max
 

@@ -96,6 +96,8 @@ def get_cli_arguments() -> argparse.Namespace:
 
     arg_parser.add_argument("--n_jobs", type=int, default=4)
 
+    arg_parser.add_argument("--ssvm_update_direction", type=str, default="map")
+
     return arg_parser.parse_args()
 
 
@@ -134,6 +136,8 @@ def train_and_score(parameter_name: str, parameter_value: str):
         args.L_max_train = int(parameter_value)
     elif parameter_name == "n_samples_train":
         args.n_samples_train = int(parameter_value)
+    elif parameter_name == "ssvm_update_direction":
+        args.ssvm_update_direction = parameter_value
     else:
         raise ValueError("Invalid parameter name: '%s'." % parameter_name)
 
@@ -170,7 +174,8 @@ def train_and_score(parameter_name: str, parameter_value: str):
     ssvm = StructuredSVMSequencesFixedMS2(
         mol_feat_label_loss=args.mol_feat_label_loss, mol_feat_retention_order=args.mol_feat_retention_order,
         mol_kernel=args.mol_kernel, C=args.C, step_size_approach=args.step_size_approach, batch_size=args.batch_size,
-        n_epochs=args.n_epochs, label_loss=args.label_loss, random_state=rs_ssvm, n_jobs=args.n_jobs)
+        n_epochs=args.n_epochs, label_loss=args.label_loss, random_state=rs_ssvm, n_jobs=args.n_jobs,
+        update_direction=args.ssvm_update_direction)
 
     # ==============
     # Train the SSVM
