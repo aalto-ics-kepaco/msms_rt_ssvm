@@ -35,7 +35,7 @@ from joblib import Parallel, delayed
 from scipy.stats import rankdata
 
 from ssvm.data_structures import SequenceSample, CandidateSQLiteDB, RandomSubsetCandidateSQLiteDB
-from ssvm.data_structures import Sequence, HigherRankedCandidatesSQLiteDB
+from ssvm.data_structures import Sequence, HigherRankedCandidatesSQLiteDB, SpanningTrees
 
 DB_FN = "/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_LATEST.db"
 
@@ -807,6 +807,33 @@ class TestBugsAndWiredStuff(unittest.TestCase):
         for idx in range(len(test_sequences_metfrag)):
             self.assertListEqual(test_sequences_metfrag[idx].get_labelspace(),
                                  test_sequences_iokr[idx].get_labelspace())
+
+
+class DummySequence(object):
+    def __init__(self):
+        self.elements = ["F", "A", "B", "C", "D", "E"]
+        self.rts = np.random.RandomState(len(self.elements)).rand(len(self.elements))
+
+    def get_retention_time(self, s: int):
+        return self.rts[s]
+
+    def __iter__(self):
+        return self.elements.__iter__()
+
+    def __len__(self):
+        return self.elements.__len__()
+
+
+class TestRandomSpanningTrees(unittest.TestCase):
+    def test_random_seed_leads_to_different_trees(self):
+        RST = SpanningTrees(DummySequence(), n_trees=4, random_state=10)
+
+        for s in range(len(RST)):
+            for t in range(len(RST)):
+                if s == t:
+                    self.assertEqual(RST[s].edges, RST[t].edges)
+                else:
+                    self.assertNotEqual(RST[s].edges, RST[t].edges)
 
 
 if __name__ == '__main__':
