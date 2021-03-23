@@ -91,7 +91,7 @@ def get_cli_arguments() -> argparse.Namespace:
     arg_parser.add_argument("--L_min_test", type=int, default=50)
     arg_parser.add_argument("--L_max_test", type=int, default=75)
 
-    arg_parser.add_argument("--n_trees_for_scoring", type=int, default=16)
+    arg_parser.add_argument("--n_trees_for_scoring", type=int, default=1)
     arg_parser.add_argument("--n_trees_for_training", type=int, default=1)
 
     arg_parser.add_argument("--n_jobs", type=int, default=4)
