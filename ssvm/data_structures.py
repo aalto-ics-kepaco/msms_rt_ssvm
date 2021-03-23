@@ -23,7 +23,6 @@
 # SOFTWARE.
 #
 ####
-import os
 import sqlite3
 import logging
 import numpy as np
@@ -32,7 +31,6 @@ import networkx as nx
 
 from functools import lru_cache
 from collections import OrderedDict
-from scipy.io import loadmat
 from typing import List, Tuple, Union, Dict, Optional, Callable, Iterator, TypeVar
 from sqlalchemy import create_engine
 from sklearn.model_selection import GroupKFold, GroupShuffleSplit
@@ -40,7 +38,6 @@ from sklearn.utils.validation import check_random_state
 from matchms.Spectrum import Spectrum
 
 import ssvm.cfg
-from ssvm.kernel_utils import tanimoto_kernel
 from ssvm.factor_graphs import get_random_spanning_tree
 
 # Setup the Logger
@@ -51,157 +48,6 @@ CH.setFormatter(FORMATTER)
 LOGGER.addHandler(CH)
 
 SEQUENCE_SAMPLE_T = TypeVar('SEQUENCE_SAMPLE_T', bound='SequenceSample')
-
-
-class CandidateSetMetIdent(object):
-    def __init__(self, mols: np.ndarray, fps: np.ndarray, mols2cand: Dict, idir: str, preload_data=False,
-                 max_n_train_candidates=np.inf):
-        self.mols = mols
-        self.fps = fps
-        self.mols2cand = mols2cand
-        self.idir = idir
-        self.mol2idx = {mol: i for i, mol in enumerate(self.mols)}
-        self.preload_data = preload_data
-        self.max_n_train_candidates = max_n_train_candidates
-
-        if self.preload_data:
-            self._cand_sets = self._preload_candidate_sets()
-        else:
-            self._cand_sets = None
-
-    def _preload_candidate_sets(self):
-        cand_sets = {}
-        for idx, mol in enumerate(self.mols):
-            cand_sets[mol] = self._load_candidate_set(mol)
-
-        return cand_sets
-
-    def _load_candidate_set(self, mol: str) -> Dict:
-        cand = loadmat(os.path.join(self.idir, "candidate_set_" + self.mols2cand[mol] + ".mat"))
-
-        # Clean up some Matlab specific stuff
-        del cand["__header__"]
-        del cand["__version__"]
-        del cand["__globals__"]
-
-        cand["fp"] = cand["fp"].toarray().T  # shape = (n_samples, n_fps)
-        cand["inchi"] = [inchi[0][0] for inchi in cand["inchi"]]  # molecule identifier
-        cand["n_cand"] = len(cand["inchi"])  # number of candidates
-        # dict: mol identifier -> index (row) in fingerprint matrix for example
-        cand["mol2idx"] = {_cand_mol: i for i, _cand_mol in enumerate(cand["inchi"])}
-
-        try:
-            cand["index_of_correct_structure"] = cand["mol2idx"][mol]
-        except KeyError:
-            raise KeyError("Cannot find correct molecular structure '%s' in candidate set '%s'." % (
-                mol, self.mols2cand[mol]))
-
-        if not np.isinf(self.max_n_train_candidates):
-            # Sample a sub-set for the training
-            subset = np.random.RandomState(cand["n_cand"]).choice(
-                cand["n_cand"], int(np.minimum(self.max_n_train_candidates, cand["n_cand"])), replace=False)
-
-            # Ensure that the current candidate is in the sub-set
-            if cand["index_of_correct_structure"] not in subset:
-                subset[0] = cand["index_of_correct_structure"]
-
-            cand["training_subset"] = subset
-        else:
-            cand["training_subset"] = np.arange(cand["n_cand"])
-
-        return cand
-
-    def n_fps(self) -> int:
-        return self.fps.shape[1]
-
-    def get_labelspace(self, mol: str, for_training=False) -> List[str]:
-        # TODO: We do not really need to load all candidates just to get the label space.
-        if self.preload_data:
-            cand = self._cand_sets[mol]
-        else:
-            cand = self._load_candidate_set(mol)
-
-        labspace = cand["inchi"]
-
-        if for_training:
-            labspace = [labspace[idx] for idx in cand["training_subset"]]
-
-        return labspace
-
-    def get_gt_fp(self, exp_mols: Optional[Union[str, np.ndarray]] = None) -> np.ndarray:
-        if exp_mols is not None:
-            exp_mols = np.atleast_1d(exp_mols)
-            idc = [self.mol2idx[_mol] for _mol in exp_mols]
-
-            if len(idc) == 1:
-                idc = idc[0]
-
-            fps = self.fps[idc]
-        else:
-            fps = self.fps
-
-        return fps
-
-    def get_candidate_fps(self, mol: str, mol_sel=None, for_training=False) -> np.ndarray:
-        if self.preload_data:
-            cand = self._cand_sets[mol]
-        else:
-            cand = self._load_candidate_set(mol)
-
-        fps = cand["fp"]
-
-        if for_training:
-            if mol_sel is not None:
-                mol_sel = np.atleast_1d(mol_sel)
-                assert len(mol_sel) == 1
-                idc = cand["mol2idx"][mol_sel[0]]
-                assert idc in cand["training_subset"]
-                fps = fps[[idc]]
-            else:
-                fps = fps[cand["training_subset"]]
-        else:
-            if mol_sel is not None:
-                mol_sel = np.atleast_1d(mol_sel)
-                idc = [cand["mol2idx"][_mol] for _mol in mol_sel]
-                fps = fps[idc]
-
-        return fps
-
-    def getMolKernel_ExpVsCand(self, exp_mols: np.ndarray, mol: str, kernel="tanimoto", for_training=False) -> \
-            np.ndarray:
-        if self.preload_data:
-            cand = self._cand_sets[mol]
-        else:
-            cand = self._load_candidate_set(mol)
-
-        cand_fps = cand["fp"]
-
-        if for_training:
-            cand_fps = cand_fps[cand["training_subset"]]
-
-        idc = [self.mol2idx[_mol] for _mol in exp_mols]
-        K = self.get_kernel(self.fps[idc], cand_fps, kernel)
-
-        if for_training:
-            assert K.shape == (len(exp_mols), len(cand["training_subset"]))
-        else:
-            assert K.shape == (len(exp_mols), cand["n_cand"])
-
-        return K
-
-    def getMolKernel_ExpVsExp(self, exp_mols: np.ndarray, kernel="tanimoto"):
-        idc = [self.mol2idx[_mol] for _mol in exp_mols]
-        K = self.get_kernel(self.fps[idc], self.fps[idc], kernel)
-        assert K.shape == (len(exp_mols), len(exp_mols))
-
-        return K
-
-    def get_kernel(self, fps_A: np.ndarray, fps_B: Optional[np.ndarray] = None, kernel="tanimoto") -> np.ndarray:
-        if kernel == "tanimoto":
-            K = tanimoto_kernel(fps_A, fps_B, shallow_input_check=True)
-        else:
-            raise ValueError("Invalid kernel '%s'. Choices are 'tanimoto'." % kernel)
-        return K
 
 
 class Molecule(object):
@@ -873,73 +719,6 @@ class HigherRankedCandidatesSQLiteDB(CandidateSQLiteDB):
             raise RuntimeError("Candidate subset cannot be requested in any sub-class of 'CandidateSQLiteDB'.")
 
         return super().get_labelspace(spectrum, self._get_candidate_subset(spectrum))
-
-
-# class CentroidCandidateSQLiteDB(CandidateSQLiteDB):
-#     def __init__(self, feature: str, number_of_candidates: Union[int, float], random_state=None, *args, **kwargs):
-#         self.feature = feature
-#         self.number_of_candidates = number_of_candidates
-#         self.random_state = random_state
-#
-#         self.candidate_subset = {}
-#
-#         if isinstance(self.number_of_candidates, float):
-#             if (self.number_of_candidates <= 0) or (self.number_of_candidates >= 1.0):
-#                 raise ValueError("If the number of candidates is given as fraction it must lay in the range (0, 1).")
-#
-#         super().__init__(*args, **kwargs)
-#
-#         self._ensure_feature_is_available(self.feature)
-#
-#     def _get_candidate_subset(self, spectrum: Spectrum) -> List[str]:
-#         """
-#         :param spectrum: matchms.Spectrum, of the sequence element to get the number of candidates.
-#
-#         :return: list of strings, molecule identifier for the candidate subset of the given spectrum.
-#         """
-#         spectrum_id = spectrum.get("spectrum_id")
-#
-#         try:
-#             candidates = self.candidate_subset[spectrum_id]
-#         except KeyError:
-#             # Load all candidate identifiers
-#             candidates = [row[0] for row in self.db.execute(self._get_labelspace_query(spectrum))]
-#
-#             if isinstance(self.number_of_candidates, float):
-#                 n_cand_out = np.round(len(candidates) * self.number_of_candidates)
-#             else:
-#                 n_cand_out = np.minimum(len(candidates), self.number_of_candidates)
-#
-#             # Load candidate features
-#             rows = self.db.execute(self._get_molecule_feature_query(spectrum, self.feature))
-#             n_cand_all = super().get_n_cand(spectrum)
-#             d = self._get_feature_dimension(self.feature)
-#             KX = generalized_tanimoto_kernel(
-#                 CandidateSQLiteDB._get_molecule_feature_matrix(rows, (n_cand_all, d), self.feature))
-#
-#             # Cluster the candidates
-#             cls = MiniBatchKMeans(
-#                 n_clusters=n_cand_out.astype(int), n_init=10, random_state=self.random_state, init='k-means++') \
-#                 .fit_predict(KX)
-#
-#             centroids = []
-#             idc = np.arange(len(cls))
-#             for c in np.unique(cls):
-#                 centroids.append(idc[cls == c][np.argsort(np.median(KX[np.ix_(cls == c, cls == c)], axis=0))[0]])
-#             candidates = [candidates[i] for i in centroids]
-#
-#             # Store the subset for later use
-#             self.candidate_subset[spectrum_id] = candidates
-#
-#         return candidates
-#
-#     def get_n_cand(self, spectrum: Spectrum) -> int:
-#         """
-#
-#         :param spectrum:
-#         :return:
-#         """
-#         return len(self.candidate_subset[spectrum.get("spectrum_id")])
 
 
 class Sequence(object):
