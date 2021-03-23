@@ -2,7 +2,7 @@
 
 # We should reserve at least 12GB of RAM for the candidate database
 
-#SBATCH --cpus-per-task=32 --mem-per-cpu=5000 --time=12:00:00
+#SBATCH --cpus-per-task=32 --mem-per-cpu=5000 --time=24:00:00
 
 # -- SBATCH --cpus-per-task=4 --mem-per-cpu=5000
 # -- SBATCH --time=01:00:00 --partition=batch
@@ -49,12 +49,6 @@ elif [ $PARAMETER_TO_STUDY = "label_loss" ] ; then
     PARAMETER_GRID=("hamming" "binary_tanimoto" "count_minmax")
 elif [ $PARAMETER_TO_STUDY = "L_train" ] ; then
     PARAMETER_GRID=("4" "8" "16" "24" "32")
-elif [ $PARAMETER_TO_STUDY = "n_init_per_example" ] ; then
-    PARAMETER_GRID=("1" "2" "4" "8")
-elif [ $PARAMETER_TO_STUDY = "n_trees_for_scoring" ] ; then
-    PARAMETER_GRID=("1" "4" "16")
-elif [ $PARAMETER_TO_STUDY = "n_samples_train" ] ; then
-    PARAMETER_GRID=("64" "128" "256" "512")
 else
     echo "Invalid parameter to study: ${PARAMETER_TO_STUDY}."
 fi
@@ -63,7 +57,7 @@ fi
 PROJECTDIR="/scratch/cs/kepaco/bache1/projects/rt_msms_ssvm/"
 DB_DIR="$PROJECTDIR/_CASMI_DB/"
 DB_FN="DB_LATEST.db"
-LOGDIR="$PROJECTDIR/src/ssvm/development/logs_triton/parameter_study/fixed_score_trees/$MS2SCORER_ID"
+LOGDIR="$PROJECTDIR/src/ssvm/development/logs_triton/parameter_study/avg__log/$MS2SCORER_ID"
 SCRIPTPATH="$PROJECTDIR/src/ssvm/development/ssvm_fixedms2__parameter_study.py"
 
 # Load the conda environment
@@ -88,4 +82,6 @@ NUMBA_NUM_THREADS=$N_THREADS;OMP_NUM_THREADS=$N_THREADS;OPENBLAS_NUM_THREADS=$N_
   --db_fn="$LOCAL_DB_DIR/$DB_FN" \
   --output_dir="$LOGDIR" \
   --mol_kernel="minmax" \
-  --ms2scorer="$MS2SCORER"
+  --ms2scorer="$MS2SCORER" \
+  --average_node_and_edge_potentials=1 \
+  --log_transform_node_potentials=1
