@@ -36,7 +36,7 @@ from typing import Tuple
 from scipy.sparse import csr_matrix
 from copy import deepcopy
 
-from ssvm.ssvm import _StructuredSVM, StructuredSVMMetIdent, DualVariables, StructuredSVMSequencesFixedMS2
+from ssvm.ssvm import _StructuredSVM, DualVariables, StructuredSVMSequencesFixedMS2
 from ssvm.data_structures import SequenceSample, RandomSubsetCandidateSQLiteDB, SpanningTrees
 from ssvm.kernel_utils import generalized_tanimoto_kernel_FAST
 
@@ -413,7 +413,7 @@ class TestDualVariables(unittest.TestCase):
                 np.testing.assert_equal(np.array(_n_max_possible_vars),
                                         np.array(np.sum(B > 0, axis=1)).flatten())
 
-                self.assertTrue(StructuredSVMMetIdent._is_feasible_matrix(alphas, C))
+                self.assertTrue(_StructuredSVM._is_feasible_matrix(alphas, C))
 
                 col = 0
                 for i in range(N):
@@ -459,7 +459,7 @@ class TestDualVariables(unittest.TestCase):
                 np.testing.assert_equal(np.array(_n_max_possible_vars),
                                         np.array(np.sum(B > 0, axis=1)).flatten())
 
-                self.assertTrue(StructuredSVMMetIdent._is_feasible_matrix(alphas, C))
+                self.assertTrue(_StructuredSVM._is_feasible_matrix(alphas, C))
 
                 col = 0
                 for i in range(N):
