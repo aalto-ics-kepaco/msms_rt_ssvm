@@ -51,6 +51,7 @@ from ssvm.data_structures import CandidateSQLiteDB
 from ssvm.loss_functions import hamming_loss, tanimoto_loss, minmax_loss
 from ssvm.factor_graphs import get_random_spanning_tree
 from ssvm.kernel_utils import tanimoto_kernel, _min_max_dense_jit, generalized_tanimoto_kernel_FAST
+from ssvm.utils import item_2_idc
 
 
 DUALVARIABLES_T = TypeVar('DUALVARIABLES_T', bound='DualVariables')
@@ -673,7 +674,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             self.alphas_prev_ = None
 
         # Initialize the graphs for each sequence
-        self.training_graphs_ = [SpanningTrees(sequence, self.n_trees_per_sequence, i)
+        self.training_graphs_ = [SpanningTrees(sequence, self.n_trees_per_sequence, i + self.random_state)
                                  for i, sequence in enumerate(self.training_data_)]
 
         self.training_graphs_info_ = {}
@@ -1205,8 +1206,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         pref_scores = self.predict_molecule_preference_values(np.vstack(l_Y))
 
         # Get a map from the node to the corresponding candidate feature vector indices
-        cs_n_Y = np.cumsum([0] + [len(Y) for Y in l_Y])
-        node_2_idc = [slice(cs_n_Y[l], cs_n_Y[l + 1]) for l in range(len(l_Y))]
+        node_2_idc = item_2_idc(l_Y)
 
         # Calculate the edge potentials
         edge_potentials = OrderedDict()
