@@ -12,6 +12,7 @@ from sklearn.model_selection import GroupShuffleSplit
 
 from ssvm.data_structures import RandomSubsetCandidateSQLiteDB, SequenceSample
 from ssvm.ssvm import StructuredSVMSequencesFixedMS2
+from ssvm.ssvm_seq_spec_cand_db import StructuredSVMSequencesFixedMS2SeqSpecCandDB
 
 # ================
 # Setup the Logger
@@ -99,6 +100,7 @@ def get_cli_arguments() -> argparse.Namespace:
     arg_parser.add_argument("--ssvm_update_direction", type=str, default="map")
     arg_parser.add_argument("--average_node_and_edge_potentials", type=int, default=0)
     arg_parser.add_argument("--log_transform_node_potentials", type=int, default=1)
+    arg_parser.add_argument("--seq_spec_cand_set", type=int, default=0)
 
     return arg_parser.parse_args()
 
@@ -155,6 +157,8 @@ def train_and_score(parameter_name: str, parameter_value: str):
             args.log_transform_node_potentials = True
         else:
             raise ValueError("Invalid parameter value for '%s': '%s'." % (parameter_name, parameter_value))
+    elif parameter_name == "seq_spec_cand_set":
+        args.seq_spec_cand_set = bool(parameter_value)
     else:
         raise ValueError("Invalid parameter name: '%s'." % parameter_name)
 
@@ -175,7 +179,8 @@ def train_and_score(parameter_name: str, parameter_value: str):
     seq_sample_train, seq_sample_test = seq_sample.get_train_test_split(
         spectra_cv=GroupShuffleSplit(random_state=rs_gss, test_size=0.33),  # 33% of the spectra a reserved for testing
         N_train=args.n_samples_train, N_test=args.n_samples_test, L_min_test=args.L_min_test,
-        L_max_test=args.L_max_test, candidates_test=candidates_test)  # type: SequenceSample, SequenceSample
+        L_max_test=args.L_max_test, candidates_test=candidates_test,
+        use_sequence_specific_candidates_for_training=args.seq_spec_cand_set)  # type: SequenceSample, SequenceSample
 
     Ls_train = [len(seq) for seq in seq_sample_train]
     Ls_test = [len(seq) for seq in seq_sample_test]
@@ -188,7 +193,12 @@ def train_and_score(parameter_name: str, parameter_value: str):
     # ===================
     # Setup a SSVM
     # ===================
-    ssvm = StructuredSVMSequencesFixedMS2(
+    if args.seq_spec_cand_set:
+        ssvm_class = StructuredSVMSequencesFixedMS2SeqSpecCandDB
+    else:
+        ssvm_class = StructuredSVMSequencesFixedMS2
+
+    ssvm = ssvm_class(
         mol_feat_label_loss=args.mol_feat_label_loss, mol_feat_retention_order=args.mol_feat_retention_order,
         mol_kernel=args.mol_kernel, C=args.C, step_size_approach=args.step_size_approach, batch_size=args.batch_size,
         n_epochs=args.n_epochs, label_loss=args.label_loss, random_state=rs_ssvm, n_jobs=args.n_jobs,

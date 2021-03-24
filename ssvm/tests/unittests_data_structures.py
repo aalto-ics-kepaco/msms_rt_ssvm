@@ -480,6 +480,37 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
             number_of_candidates=102, db_fn=DB_FN, molecule_identifier="inchikey1")
         self.assertEqual(16, candidates.get_n_cand(spectrum))
 
+    def test_get_total_number_of_candidates(self):
+        # ----------
+        # SPECTRUM 1
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "Challenge-016"})
+
+        # Molecule identifier: inchikey
+        candidates = RandomSubsetCandidateSQLiteDB(
+            number_of_candidates=1032, db_fn=DB_FN, molecule_identifier="inchikey")
+        self.assertEqual(2233, candidates.get_n_total_cand(spectrum))
+
+        # Molecule identifier: inchikey1
+        candidates = RandomSubsetCandidateSQLiteDB(
+            number_of_candidates=102, db_fn=DB_FN, molecule_identifier="inchikey1")
+        self.assertEqual(1918, candidates.get_n_total_cand(spectrum))
+
+        # ----------
+        # SPECTRUM 2
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "EAX030601"})
+
+        # Molecule identifier: inchikey
+        candidates = RandomSubsetCandidateSQLiteDB(
+            number_of_candidates=5, db_fn=DB_FN, molecule_identifier="inchikey")
+        self.assertEqual(16, candidates.get_n_total_cand(spectrum))
+
+        # Molecule identifier: inchikey1
+        candidates = RandomSubsetCandidateSQLiteDB(
+            number_of_candidates=102, db_fn=DB_FN, molecule_identifier="inchikey1")
+        self.assertEqual(16, candidates.get_n_total_cand(spectrum))
+
     def test_normalize_scores(self):
         # All scores are negative
         for rep in range(30):
@@ -773,6 +804,63 @@ class TestSequenceSample(unittest.TestCase):
         # No intersection of molecules between training and test sequences
         for i, j in it.product(test_seq, train_seq):
             self.assertTrue(len(set(i.labels) & set(j.labels)) == 0)
+
+    def test_sequence_specific_candidate_set(self):
+        # self.skipTest("Needs to be implemented.")
+        # Generate sequence sample
+        number_of_candidates = 5
+        seq_sample = SequenceSample(
+            self.spectra, self.labels,
+            RandomSubsetCandidateSQLiteDB(
+                number_of_candidates=number_of_candidates, db_fn=DB_FN, molecule_identifier="inchikey",
+                include_correct_candidate=False, random_state=1020, init_with_open_db_conn=False),
+            N=31, L_min=20,
+            random_state=789
+        )
+
+        # Get a train test split
+        train_seq, test_seq = seq_sample.get_train_test_split(use_sequence_specific_candidates_for_training=True)
+
+        # Ensure that for the training set each sequence is associated with a different candidate set DB.
+        for i in range(len(train_seq)):
+            for j in range(len(train_seq)):
+                if i == j:
+                    continue
+
+                # Candidate sets must point to different objects
+                self.assertIsNot(train_seq[i].candidates, train_seq[j].candidates)
+
+                # Get spectrum ids
+                li = [spec.get("spectrum_id") for spec in train_seq[i].spectra]
+                lj = [spec.get("spectrum_id") for spec in train_seq[j].spectra]
+
+                # Go over the intersection of the spectrum ids (if any)
+                for spec_id in (set(li) & set(lj)):
+                    idx_i = li.index(spec_id)
+                    idx_j = lj.index(spec_id)
+
+                    with train_seq[i].candidates, train_seq[j].candidates:
+                        # Size of the candidate (sub-) set must be equal
+                        self.assertEqual(train_seq[i].get_n_total_cand(idx_i), train_seq[j].get_n_total_cand(idx_j))
+                        self.assertEqual(train_seq[i].get_n_cand(idx_i), train_seq[j].get_n_cand(idx_j))
+
+                        if train_seq[i].get_n_total_cand(idx_i) <= number_of_candidates:
+                            # All candidates must be selected so the subsets must be equal
+                            self.assertEqual(train_seq[i].get_labelspace(idx_i), train_seq[j].get_labelspace(idx_j))
+                        elif number_of_candidates < train_seq[i].get_n_total_cand(idx_i) < (number_of_candidates + 5):
+                            # The total number of candidates is very small, it is likely that the same candidate sets
+                            # are sampled even randomly.
+                            pass
+                        else:
+                            self.assertNotEqual(train_seq[i].get_labelspace(idx_i), train_seq[j].get_labelspace(idx_j))
+
+        for i in range(len(test_seq)):
+            for j in range(len(test_seq)):
+                if i == j:
+                    continue
+
+                # Candidate sets must point to different objects
+                self.assertIs(test_seq[i].candidates, test_seq[j].candidates)
 
 
 class TestBugsAndWiredStuff(unittest.TestCase):

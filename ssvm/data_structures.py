@@ -30,6 +30,7 @@ import pandas as pd
 import networkx as nx
 
 from functools import lru_cache
+from copy import deepcopy
 from collections import OrderedDict
 from typing import List, Tuple, Union, Dict, Optional, Callable, Iterator, TypeVar
 from sqlalchemy import create_engine
@@ -290,6 +291,17 @@ class CandidateSQLiteDB(object):
         """
         return len(self.get_labelspace(spectrum))
 
+    def get_n_total_cand(self, spectrum: Spectrum) -> int:
+        """
+        Return the total number of available candidates for the given spectrum regardless of any candidate sub-set
+        selection.
+
+        :param spectrum: matchms.Spectrum, of the sequence element to get the number of candidates.
+
+        :return: scalar, total number of candidates
+        """
+        return self.get_n_cand(spectrum)
+
     def get_molecule_features(self, spectrum: Spectrum, features: str, return_dataframe: bool = False) \
             -> Union[np.ndarray, pd.DataFrame]:
         """
@@ -526,12 +538,6 @@ class FixedSubsetCandidateSQLiteDB(CandidateSQLiteDB):
 
         return candidates_sub
 
-    def get_n_cand(self, spectrum: Spectrum) -> int:
-        """
-        Return the number of candidates in the random label space subset for the given spectrum.
-        """
-        return len(self.get_labelspace(spectrum))
-
     def get_labelspace(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> List[str]:
         """
         Return the label space of the random subset.
@@ -591,6 +597,9 @@ class RandomSubsetCandidateSQLiteDB(CandidateSQLiteDB):
             candidates_sub = check_random_state(self.random_state).choice(candidates_all, n_cand.astype(int),
                                                                           replace=False)
 
+            # print(self.random_state, spectrum_id)
+            # print(candidates_sub)
+
             if self.include_correct_candidate:
                 molecule_id = spectrum.get("molecule_id")
 
@@ -609,11 +618,11 @@ class RandomSubsetCandidateSQLiteDB(CandidateSQLiteDB):
 
         return candidates_sub
 
-    def get_n_cand(self, spectrum: Spectrum) -> int:
+    def get_n_total_cand(self, spectrum: Spectrum) -> int:
         """
-        Return the number of candidates in the random label space subset for the given spectrum.
+        Returns the total number of candidates without sub-set selection.
         """
-        return len(self.get_labelspace(spectrum))
+        return len(super().get_labelspace(spectrum))
 
     def get_labelspace(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> List[str]:
         """
@@ -705,12 +714,6 @@ class HigherRankedCandidatesSQLiteDB(CandidateSQLiteDB):
 
         return candidates_sub
 
-    def get_n_cand(self, spectrum: Spectrum) -> int:
-        """
-        Return the number of candidates in the random label space subset for the given spectrum.
-        """
-        return len(self.get_labelspace(spectrum))
-
     def get_labelspace(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> List[str]:
         """
         Return the label space of the random subset.
@@ -780,6 +783,20 @@ class Sequence(object):
             n_cand = [self.get_n_cand(s) for s in range(self.__len__())]
         else:
             n_cand = self.candidates.get_n_cand(self.spectra[s])
+
+        return n_cand
+
+    def get_n_total_cand(self, s: Optional[int] = None) -> Union[int, List[int]]:
+        """
+        Get the total number of candidates for each spectrum in the sequence as list.
+
+        :param s: scalar, sequence index for which the MS2 scores should be returned. If None, scores are returned for
+            all spectra in the sequence.
+        """
+        if s is None:
+            n_cand = [self.get_n_total_cand(s) for s in range(self.__len__())]
+        else:
+            n_cand = self.candidates.get_n_total_cand(self.spectra[s])
 
         return n_cand
 
@@ -922,7 +939,7 @@ class SequenceSample(object):
     """
     def __init__(self, spectra: List[Spectrum], labels: List[str], candidates: CandidateSQLiteDB, N: int, L_min: int,
                  L_max: Optional[int] = None, random_state: Optional[int] = None, sort_sequence_by_rt: bool = False, 
-                 ms2scorer: Optional[str] = None):
+                 ms2scorer: Optional[str] = None, use_sequence_specific_candidates: bool = False):
         """
         :param data: list of matchms.Spectrum, spectra to sample sequences from
 
@@ -936,6 +953,8 @@ class SequenceSample(object):
 
         :param L_max: scalar, maximum length of the individual sequences
 
+        :param use_sequence_specific_candidates: boolean indicating whether for each training
+
         :param random_state:
         """
         self.spectra = spectra
@@ -947,6 +966,7 @@ class SequenceSample(object):
         self.random_state = random_state
         self.sort_sequence_by_rt = sort_sequence_by_rt
         self.ms2scorer = ms2scorer
+        self.use_sequence_specific_candidates = use_sequence_specific_candidates
 
         assert pd.Series([spectrum.get("spectrum_id") for spectrum in self.spectra]).is_unique, \
             "Spectra IDs must be unique."
@@ -1030,8 +1050,24 @@ class SequenceSample(object):
                 seq_spectra, seq_labels = zip(*sorted(zip(seq_spectra, seq_labels),
                                                       key=lambda s: s[0].get("retention_time")))
 
-            sequences.append(LabeledSequence(seq_spectra, seq_labels, candidates=self.candidates,
-                                             ms2scorer=self.ms2scorer))
+            if self.use_sequence_specific_candidates:
+                if not isinstance(self.candidates, RandomSubsetCandidateSQLiteDB):
+                    raise ValueError("Sequence specific candidate sets are only supported for random candidate subset "
+                                     "candidate databases.")
+
+                # Copy the candidate class
+                seq_candidates = deepcopy(self.candidates)
+
+                # Replace the random seed to be sequence specific
+                seq_rs = seq_candidates.__getattribute__("random_state")
+                assert isinstance(seq_rs, int)
+                seq_candidates.__setattr__("random_state", seq_rs + i)
+            else:
+                seq_candidates = self.candidates
+
+            sequences.append(
+                LabeledSequence(seq_spectra, seq_labels, candidates=seq_candidates, ms2scorer=self.ms2scorer)
+            )
             datasets.append(ds)
 
         return sequences, datasets
@@ -1039,17 +1075,21 @@ class SequenceSample(object):
     def get_train_test_split(self, spectra_cv: Union[GroupKFold, GroupShuffleSplit, int] = 5,
                              N_train: Optional[int] = None, N_test: Optional[int] = None,
                              L_min_test: Optional[int] = None, L_max_test: Optional[int] = None,
-                             candidates_test: Optional[CandidateSQLiteDB] = None) \
+                             candidates_test: Optional[CandidateSQLiteDB] = None,
+                             use_sequence_specific_candidates_for_training: bool = False) \
             -> Tuple[SEQUENCE_SAMPLE_T, SEQUENCE_SAMPLE_T]:
         """
         Get a single training and test split
         """
-        return next(self.get_train_test_generator(spectra_cv, N_train, N_test, L_min_test, L_max_test, candidates_test))
+        return next(self.get_train_test_generator(
+            spectra_cv, N_train, N_test, L_min_test, L_max_test, candidates_test,
+            use_sequence_specific_candidates_for_training=use_sequence_specific_candidates_for_training))
 
     def get_train_test_generator(self, spectra_cv: Union[GroupKFold, GroupShuffleSplit, int] = 5,
                                  N_train: Optional[int] = None, N_test: Optional[int] = None,
                                  L_min_test: Optional[int] = None, L_max_test: Optional[int] = None,
-                                 candidates_test: Optional[CandidateSQLiteDB] = None) \
+                                 candidates_test: Optional[CandidateSQLiteDB] = None,
+                                 use_sequence_specific_candidates_for_training: bool = False) \
             -> Tuple[SEQUENCE_SAMPLE_T, SEQUENCE_SAMPLE_T]:
         """
         Split the spectra ids into training and test sets. Thereby, all spectra belonging to the same molecular
@@ -1105,10 +1145,12 @@ class SequenceSample(object):
             yield (
                 SequenceSample([self.spectra[i] for i in train], [self.labels[i] for i in train],
                                candidates=self.candidates, N=N_train, L_min=self.L_min, L_max=self.L_max,
-                               random_state=self.random_state, ms2scorer=self.ms2scorer),
+                               random_state=self.random_state, ms2scorer=self.ms2scorer,
+                               use_sequence_specific_candidates=use_sequence_specific_candidates_for_training),
                 SequenceSample([self.spectra[i] for i in test], [self.labels[i] for i in test],
                                candidates=candidates_test, N=N_test, L_min=L_min_test, L_max=L_max_test,
-                               random_state=self.random_state, ms2scorer=self.ms2scorer)
+                               random_state=self.random_state, ms2scorer=self.ms2scorer,
+                               use_sequence_specific_candidates=False)
             )
 
     def get_n_samples(self):
@@ -1173,11 +1215,3 @@ class SpanningTrees(object):
 
     def get_nodes(self):
         return self.nodes
-
-
-if __name__ == "__main__":
-    # ss = SequenceSample(["A", "B", "C"], np.random.rand(3, 3), "", "")
-    # ss_train, ss_test = ss.get_train_test_split()
-    # ss_train._sample_sequences(100, 20)
-
-    SpanningTrees(["A", "B", "T"], n_trees=10)
