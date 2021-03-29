@@ -103,6 +103,8 @@ def get_cli_arguments() -> argparse.Namespace:
     arg_parser.add_argument("--log_transform_node_potentials", type=int, default=1)
     arg_parser.add_argument("--seq_spec_cand_set", type=int, default=0)
 
+    arg_parser.add_argument("--no_tensorboard_output", action="store_true")
+
     return arg_parser.parse_args()
 
 
@@ -216,10 +218,16 @@ def train_and_score(parameter_name: str, parameter_value: str):
     # ==============
     odir = os.path.join(args.output_dir, "parameter_study", parameter_name, parameter_value)
     os.makedirs(odir, exist_ok=True)
-    summary_writer = tf.summary.create_file_writer(odir)
+
+    if args.no_tensorboard_output:
+        summary_writer = None
+        validation_data = None
+    else:
+        summary_writer = tf.summary.create_file_writer(odir)
+        validation_data = seq_sample_test
 
     ssvm.fit(seq_sample_train, n_init_per_example=args.n_init_per_example, summary_writer=summary_writer,
-             validation_data=seq_sample_test)
+             validation_data=validation_data)
 
     # ===================
     # Score test sequence
