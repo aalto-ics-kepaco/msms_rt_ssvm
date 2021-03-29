@@ -76,7 +76,8 @@ def get_cli_arguments() -> argparse.Namespace:
     arg_parser.add_argument("--batch_size", type=int, default=16)
     arg_parser.add_argument("--n_init_per_example", type=int, default=4)
     arg_parser.add_argument("--step_size_approach", type=str, default="linesearch_parallel")
-    arg_parser.add_argument("--mol_kernel", type=str, default="minmax", choices=["minmax_numba", "minmax"])
+    arg_parser.add_argument("--mol_kernel", type=str, default="minmax",
+                            choices=["minmax_numba", "minmax", "minmax_ufunc"])
     arg_parser.add_argument("--C", type=float, default=4)
     arg_parser.add_argument("--label_loss", type=str, default="tanimoto_loss")
     arg_parser.add_argument("--mol_feat_label_loss", type=str, default="iokr_fps__positive")
@@ -159,6 +160,11 @@ def train_and_score(parameter_name: str, parameter_value: str):
             raise ValueError("Invalid parameter value for '%s': '%s'." % (parameter_name, parameter_value))
     elif parameter_name == "seq_spec_cand_set":
         args.seq_spec_cand_set = bool(parameter_value)
+    elif parameter_name == "mol_feat_retention_order":
+        if parameter_value == "iokr_fps__count":
+            args.mol_kernel = "minmax_ufunc"
+
+        args.mol_feat_retention_order = parameter_value
     else:
         raise ValueError("Invalid parameter name: '%s'." % parameter_name)
 
