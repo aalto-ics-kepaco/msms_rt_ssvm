@@ -3,7 +3,7 @@ channels:
   - conda-forge
   - bioconda
 dependencies:
-  - python=3.8
+  - python
   - numpy
   - scikit-learn
   - pandas
@@ -16,3 +16,4 @@ dependencies:
   - tensorflow>=2.0
   - tbb
   - numba
+  - opt_einsum

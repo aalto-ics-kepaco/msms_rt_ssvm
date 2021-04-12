@@ -380,12 +380,10 @@ class TestCandidateSQLiteDB(unittest.TestCase):
             "AZVUYIUQQIFCQK-UHFFFAOYSA-N"
         ])
 
-        print("LOAD")
         res = Parallel(n_jobs=4)(
             self._get_molecule_features_by_molecule_id(candidates, molecule_ids, "iokr_fps__positive")
             for _ in range(10000))
 
-        print("TEST")
         for i in range(len(res)):
             np.testing.assert_array_equal(res[0], res[i])
 
