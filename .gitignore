@@ -12,3 +12,4 @@ slurm-*.out
 OLD_venv
 build
 dist
+**/*.sqlite
