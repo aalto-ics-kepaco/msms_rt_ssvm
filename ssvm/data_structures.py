@@ -33,7 +33,6 @@ from functools import lru_cache
 from copy import deepcopy
 from collections import OrderedDict
 from typing import List, Tuple, Union, Dict, Optional, Callable, Iterator, TypeVar
-from sqlalchemy import create_engine
 from sklearn.model_selection import GroupKFold, GroupShuffleSplit
 from sklearn.utils.validation import check_random_state
 from matchms.Spectrum import Spectrum
@@ -112,7 +111,8 @@ class CandidateSQLiteDB(object):
         if self.cand_def != "fixed":
             raise NotImplementedError("Currently only fixed candidate set definition supported.")
 
-        self._ensure_molecule_identifier_is_available(self.molecule_identifier)
+        with self:
+            self._ensure_molecule_identifier_is_available(self.molecule_identifier)
 
     def _get_labelspace_query(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> str:
         """
@@ -213,9 +213,11 @@ class CandidateSQLiteDB(object):
 
         :param molecule_identifier: string, column name of the molecule identifier
         """
-        if molecule_identifier not in pd.read_sql_query(
-                "SELECT * FROM molecules LIMIT 1", con=create_engine("sqlite:///%s" % self.db_fn)).columns:
-            raise ValueError("Molecule identifier '%s' is not available." % molecule_identifier)
+        for row in self.db.execute("PRAGMA table_info(molecules)"):
+            if molecule_identifier == row[1]:
+                return
+
+        raise ValueError("Molecule identifier '%s' is not available." % molecule_identifier)
 
     def _get_molecule_feature_matrix(self, data: Union[pd.Series, List, Tuple], features: str) -> np.ndarray:
         """
