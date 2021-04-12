@@ -37,7 +37,7 @@ from scipy.stats import rankdata
 from ssvm.data_structures import SequenceSample, CandidateSQLiteDB, RandomSubsetCandidateSQLiteDB
 from ssvm.data_structures import Sequence, HigherRankedCandidatesSQLiteDB, SpanningTrees
 
-DB_FN = "/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_LATEST.db"
+DB_FN = "Bach2020_test_db.sqlite"
 
 
 class TestCandidateSQLiteDB(unittest.TestCase):

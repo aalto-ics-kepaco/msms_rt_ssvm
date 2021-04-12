@@ -40,7 +40,7 @@ from ssvm.ssvm import _StructuredSVM, DualVariables, StructuredSVMSequencesFixed
 from ssvm.data_structures import SequenceSample, RandomSubsetCandidateSQLiteDB, SpanningTrees
 from ssvm.kernel_utils import generalized_tanimoto_kernel_FAST
 
-DB_FN = "/home/bach/Documents/doctoral/projects/local_casmi_db/db/use_inchis/DB_LATEST.db"
+DB_FN = "Bach2020_test_db.sqlite"
 
 
 class Test_StructuredSVM(unittest.TestCase):
