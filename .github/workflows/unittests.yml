@@ -29,25 +29,25 @@ jobs:
         with:
           ref: ${{ github.ref }}
       # ------------------------------------------------------------------------
-#
-#      # ----------------------------------------
-#      # Setting up the caching for the LFS files
-#      - name: Get IDs of the files registered in the LFS
-#        run: git lfs ls-files -l | cut -d' ' -f1 | sort > .lfs-assets-id
-#
-#      - name: Restore LFS cache
-#        uses: actions/cache@v2
-#        env:
-#          # Increase this value to reset the cache manually
-#          LFS_CACHE_VERSION: 1
-#        id: lfs-cache
-#        with:
-#          path: .git/lfs
-#          key: ${{ runner.os }}-lfs-${{ hashFiles('.lfs-assets-id') }}-v${{ env.LFS_CACHE_VERSION }}
-#
-#      - name: Pull the working copies of the files registered in the LFS
-#        run: git lfs pull
-#      # ----------------------------------------
+
+      # ----------------------------------------
+      # Setting up the caching for the LFS files
+      - name: Get IDs of the files registered in the LFS
+        run: git lfs ls-files -l | cut -d' ' -f1 | sort > .lfs-assets-id
+
+      - name: Restore LFS cache
+        uses: actions/cache@v2
+        env:
+          # Increase this value to reset the cache manually
+          LFS_CACHE_VERSION: 1
+        id: lfs-cache
+        with:
+          path: .git/lfs
+          key: ${{ runner.os }}-lfs-${{ hashFiles('.lfs-assets-id') }}-v${{ env.LFS_CACHE_VERSION }}
+
+      - name: Pull the working copies of the files registered in the LFS
+        run: git lfs pull
+      # ----------------------------------------
 
       # --------------------------------------------------
       # Setting up Python using a cached Conda environment
@@ -76,24 +76,23 @@ jobs:
         run: pip install .
       # ------------------------
 
-#      # ------------------------
-#      # Decompress the test data
-#      - name: Test gunzipping the data
-#        run: |
-#          cd data
-#          gunzip --keep X.csv.gz
-#          cd ..
-#      # ------------------------
-
       # --------------------------------
       # Check the package version number
       - name: Package version number
         run: python -c "from ssvm import __version__; print('SSVM-Package version:', __version__)"
       # --------------------------------
 
+      # ------------------------
+      # Decompress the test data
+      - name: Gun-zipping the test SQLite DB
+        run: gunzip ssvm/tests/Bach2020_test_db.sqlite.gz
+      # ------------------------
+
       # -----------------
       # Run the unittests
       # TODO: Change this so it will automatically search for all unittest files!
-      - name: Run unittest on loss functions
-        run: python -m unittest ssvm/tests/unittests_loss_functions.py
+      - name: Run all unittests
+        run: |
+          cd ssvm/tests
+          python -m unittest discover -f -p "unittests_*.py"
       # -----------------
