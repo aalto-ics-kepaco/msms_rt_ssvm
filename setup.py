@@ -1,8 +1,14 @@
 from setuptools import setup, find_packages
+from distutils.util import convert_path
+
+main_ns = {}
+ver_path = convert_path('ssvm/version.py')
+with open(ver_path) as ver_file:
+    exec(ver_file.read(), main_ns)
 
 setup(
     name="ssvm",  # TODO: This name is already in PyPi. We need to choose something different.
-    version="0.1.0",
+    version=main_ns["__version__"],
     license="MIT",
     packages=find_packages(exclude=["results*", "tests", "examples", "*.ipynb"]),
 

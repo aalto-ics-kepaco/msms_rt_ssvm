@@ -367,6 +367,8 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         candidates._ensure_molecule_identifier_is_available("inchikey")
 
     def test_parallel_access(self):
+        self.skipTest("Too much memory for gh-actions.")
+
         candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey", init_with_open_db_conn=False)
         molecule_ids = tuple([
             "FGXWKSZFVQUSTL-UHFFFAOYSA-N",

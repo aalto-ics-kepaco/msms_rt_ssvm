@@ -1,0 +1,100 @@
+name: Unit-testing
+
+on:
+  pull_request:
+    branches: [ master, develop ]
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [ '3.8' ]
+
+    defaults:
+      run:
+        # Set up the default shell. This is needed for the Conda
+        shell: bash -l {0}
+
+    env:
+      GIT_LFS_SKIP_SMUDGE: 1
+
+    steps:
+      # ------------------------------------------------------------------------
+      # Checkout the branch from the github repository that triggered the action
+      - name: Checkout code
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.ref }}
+      # ------------------------------------------------------------------------
+
+      # ----------------------------------------
+      # Setting up the caching for the LFS files
+      - name: Get IDs of the files registered in the LFS
+        run: git lfs ls-files -l | cut -d' ' -f1 | sort > .lfs-assets-id
+
+      - name: Restore LFS cache
+        uses: actions/cache@v2
+        env:
+          # Increase this value to reset the cache manually
+          LFS_CACHE_VERSION: 1
+        id: lfs-cache
+        with:
+          path: .git/lfs
+          key: ${{ runner.os }}-lfs-${{ hashFiles('.lfs-assets-id') }}-v${{ env.LFS_CACHE_VERSION }}
+
+      - name: Pull the working copies of the files registered in the LFS
+        run: git lfs pull
+      # ----------------------------------------
+
+      # --------------------------------------------------
+      # Setting up Python using a cached Conda environment
+      - name: Restore Conda cache
+        uses: actions/cache@v2
+        env:
+          # Increase this value to reset the cache manually
+          CONDA_CACHE_VERSION: 1
+        id: conda-cache
+        with:
+          path: ~/conda_pkgs_dir
+          key: ${{ runner.os }}-conda-${{ matrix.python-version }}-${{ hashFiles('environment.yml') }}-v${{ env.CONDA_CACHE_VERSION }}
+
+      - name: Set up Conda with Python ${{ matrix.python-version }}
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          activate-environment: ssvm_environment
+          environment-file: environment.yml
+          channel-priority: strict
+          use-only-tar-bz2: true  # IMPORTANT: This needs to be set for caching to work properly!
+      # --------------------------------------------------
+
+      # ------------------------
+      # Install the SSVM package
+      - name: Install the SSVM package
+        run: pip install .
+      # ------------------------
+
+      # --------------------------------
+      # Check the package version number
+      - name: Package version number
+        run: python -c "from ssvm import __version__; print('SSVM-Package version:', __version__)"
+      # --------------------------------
+
+      # ------------------------
+      # Decompress the test data
+      - name: Gun-zipping the test SQLite DB
+        run: gunzip ssvm/tests/Bach2020_test_db.sqlite.gz
+      # ------------------------
+
+      # -----------------
+      # Run the unittests
+      - name: Run all unittests
+        run: |
+          cd ssvm/tests
+          python -m unittest -v unittests_data_structures.py
+          python -m unittest -v unittests_dual_variables.py
+          python -m unittest -v unittests_evaluation_tools.py
+          python -m unittest -v unittests_kernel_utils.py
+          python -m unittest -v unittests_loss_functions.py
+          python -m unittest -v unittests_utils.py
+      # -----------------

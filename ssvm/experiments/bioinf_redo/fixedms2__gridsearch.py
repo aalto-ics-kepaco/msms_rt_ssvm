@@ -219,7 +219,7 @@ if __name__ == "__main__":
 
             training_sequences = SequenceSample(
                 spectra_train_inner, labels_train_inner, candidate_set_class_train,
-                N=np.int(np.round(args.n_samples_train * 0.66)), L_min=args.L_min_train, L_max=args.L_max_train,
+                N=int(np.round(args.n_samples_train * 0.66)), L_min=args.L_min_train, L_max=args.L_max_train,
                 random_state=jdx, ms2scorer=args.ms2scorer)
 
             # Train the SSVM
@@ -251,7 +251,7 @@ if __name__ == "__main__":
 
             test_sequences = SequenceSample(
                 spectra_test_inner, labels_test_inner, candidate_set_class_test,
-                N=np.int(np.round(args.n_samples_train * 0.33)), L_min=args.L_min_train, L_max=args.L_max_train,
+                N=int(np.round(args.n_samples_train * 0.33)), L_min=args.L_min_train, L_max=args.L_max_train,
                 random_state=jdx, ms2scorer=args.ms2scorer)
 
             LOGGER.info("Score hyper-parameter tuple ...")
