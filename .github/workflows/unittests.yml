@@ -85,8 +85,15 @@ jobs:
 #          cd ..
 #      # ------------------------
 
+      # --------------------------------
+      # Check the package version number
+      - name: Package version number
+        run: python -c "from ssvm import __version__; print('SSVM-Package version:', __version__)"
+      # --------------------------------
+
       # -----------------
       # Run the unittests
-      - name: Run
+      # TODO: Change this so it will automatically search for all unittest files!
+      - name: Run unittest on loss functions
         run: python -m unittest ssvm/tests/unittests_loss_functions
       # -----------------
