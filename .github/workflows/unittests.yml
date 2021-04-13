@@ -95,5 +95,5 @@ jobs:
       # Run the unittests
       # TODO: Change this so it will automatically search for all unittest files!
       - name: Run unittest on loss functions
-        run: python -m unittest ssvm/tests/unittests_loss_functions
+        run: python -m unittest ssvm/tests/unittests_loss_functions.py
       # -----------------
