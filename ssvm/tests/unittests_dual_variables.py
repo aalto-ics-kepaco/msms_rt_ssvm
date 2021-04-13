@@ -30,7 +30,8 @@ import itertools as it
 from copy import deepcopy
 from typing import Tuple
 
-from ssvm.ssvm import _StructuredSVM, DualVariables
+from ssvm.dual_variables import DualVariables
+from ssvm.ssvm_meta import _StructuredSVM
 
 
 class TestDualVariables(unittest.TestCase):

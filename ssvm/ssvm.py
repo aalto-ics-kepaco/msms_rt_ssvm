@@ -47,11 +47,11 @@ from msmsrt_scorer.lib.cindex_measure import cindex
 import ssvm.cfg
 from ssvm.data_structures import SequenceSample, Sequence, LabeledSequence, SpanningTrees
 from ssvm.data_structures import CandidateSQLiteDB
-from ssvm.loss_functions import hamming_loss, tanimoto_loss, minmax_loss
 from ssvm.factor_graphs import get_random_spanning_tree
 from ssvm.kernel_utils import tanimoto_kernel, _min_max_dense_jit, generalized_tanimoto_kernel_FAST, _min_max_dense_ufunc
 from ssvm.utils import item_2_idc
 from ssvm.dual_variables import DualVariables
+from ssvm.ssvm_meta import _StructuredSVM
 
 
 JOBLIB_CACHE = Memory(ssvm.cfg.JOBLIB_MEMORY_CACHE_LOCATION, verbose=0)
@@ -81,89 +81,6 @@ def get_molecule_features_by_molecule_id_CACHED(candidates: CandidateSQLiteDB, m
     is wrapped here to allow for caching.
     """
     return candidates.get_molecule_features_by_molecule_id(molecule_ids, features)
-
-
-class _StructuredSVM(object):
-    """
-    Structured Support Vector Machine (SSVM) meta-class
-    """
-    def __init__(self, C: Union[int, float] = 1, n_epochs: int = 100, batch_size: Union[int, None] = 1,
-                 label_loss: str = "hamming", step_size_approach: str = "diminishing",
-                 random_state: Optional[Union[int, np.random.RandomState]] = None):
-        """
-        Structured Support Vector Machine (SSVM)
-
-        :param C: scalar, SVM regularization parameter. Must be > 0.
-
-        :param n_epochs: scalar, Number of epochs, i.e. passes over the complete dataset.
-
-        :param batch_size: scalar or None, Batch size, i.e. number of examples updated in each iteration. If None, the
-            batch encompasses the complete dataset.
-
-        :param label_loss: string, indicating which label-loss is used.
-        
-        :param step_size_approach: string, indicating which strategy is used to determine the step-size. 
-
-        :param random_state: None | int | instance of RandomState
-            If seed is None, return the RandomState singleton used by np.random.
-            If seed is an int, return a new RandomState instance seeded with seed.
-            If seed is already a RandomState instance, return it.
-            Otherwise raise ValueError.
-        """
-        self.C = C
-        self.n_epochs = n_epochs
-        self.batch_size = batch_size
-        self.label_loss = label_loss
-        self.random_state = random_state
-        self.step_size_approach = step_size_approach
-
-        if self.label_loss == "hamming":
-            self.label_loss_fun = hamming_loss
-        elif self.label_loss == "tanimoto_loss":
-            self.label_loss_fun = tanimoto_loss
-        elif self.label_loss == "minmax_loss":
-            self.label_loss_fun = minmax_loss
-        else:
-            raise ValueError("Invalid label loss '%s'. Choices are 'hamming', 'tanimoto_loss' and 'minmax_loss'.")
-
-        if self.step_size_approach not in ["diminishing", "linesearch", "linesearch_parallel"]:
-            raise ValueError("Invalid stepsize method '%s'. Choices are 'diminishing' and 'linesearch'." %
-                             self.step_size_approach)
-
-    @staticmethod
-    def _is_feasible_matrix(alphas: DualVariables, C: Union[int, float]) -> bool:
-        """
-        Check whether the given dual variables are feasible.
-
-        :param alphas: DualVariables, dual variables to test.
-
-        :param C: scalar, regularization parameter of the support vector machine
-
-        :return: boolean, indicating whether the dual variables are feasible.
-        """
-        B = alphas.get_dual_variable_matrix()
-        N = B.shape[0]
-
-        if (B < 0).getnnz():
-            return False
-
-        if not np.all(np.isclose(B.sum(axis=1), C / N)):
-            return False
-
-        return True
-
-    @staticmethod
-    def _get_step_size_diminishing(k: int, N: int) -> float:
-        """
-        Step-size calculation after [1].
-
-        :param k: scalar, number of iterations so far
-
-        :param N: scalar, number of training samples
-
-        :return: scalar, step-size
-        """
-        return (2 * N) / (k + 2 * N)
 
 
 class StructuredSVMSequencesFixedMS2(_StructuredSVM):
