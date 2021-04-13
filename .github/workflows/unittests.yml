@@ -73,7 +73,7 @@ jobs:
       # ------------------------
       # Install the SSVM package
       - name: Install the SSVM package
-        run: python install .
+        run: pip install .
       # ------------------------
 
 #      # ------------------------
