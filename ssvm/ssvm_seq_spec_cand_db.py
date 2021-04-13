@@ -48,7 +48,8 @@ from ssvm.data_structures import SequenceSample, Sequence, LabeledSequence, Span
 from ssvm.data_structures import CandidateSQLiteDB
 from ssvm.factor_graphs import get_random_spanning_tree
 from ssvm.kernel_utils import tanimoto_kernel, _min_max_dense_jit, generalized_tanimoto_kernel_FAST
-from ssvm.ssvm import DualVariables, _StructuredSVM
+from ssvm.ssvm import _StructuredSVM
+from ssvm.dual_variables import DualVariables
 
 
 DUALVARIABLES_T = TypeVar('DUALVARIABLES_T', bound='DualVariables')

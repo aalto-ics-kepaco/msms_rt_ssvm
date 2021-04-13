@@ -27,18 +27,16 @@ import sqlite3
 import numpy as np
 import unittest
 import time
-import itertools as it
 import networkx as nx
 import pandas as pd
 
 from matchms.Spectrum import Spectrum
-from typing import Tuple
 from scipy.sparse import csr_matrix
-from copy import deepcopy
 
-from ssvm.ssvm import _StructuredSVM, DualVariables, StructuredSVMSequencesFixedMS2
+from ssvm.ssvm import _StructuredSVM, StructuredSVMSequencesFixedMS2
 from ssvm.data_structures import SequenceSample, RandomSubsetCandidateSQLiteDB, SpanningTrees
 from ssvm.kernel_utils import generalized_tanimoto_kernel_FAST
+from ssvm.dual_variables import DualVariables
 
 DB_FN = "Bach2020_test_db.sqlite"
 
