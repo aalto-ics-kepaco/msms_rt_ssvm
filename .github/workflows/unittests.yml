@@ -90,9 +90,8 @@ jobs:
 
       # -----------------
       # Run the unittests
-      # TODO: Change this so it will automatically search for all unittest files!
       - name: Run all unittests
         run: |
           cd ssvm/tests
-          python -m unittest discover -f -p "unittests_*.py"
+          python -m unittest discover -fvp "unittests_*.py"
       # -----------------

@@ -702,7 +702,7 @@ class HigherRankedCandidatesSQLiteDB(CandidateSQLiteDB):
             # Randomly sample (mostly, see factor of 0.95) higher ranked candidates
             candidates_sub = check_random_state(self.random_state).choice(
                 scores_df["identifier"].values,
-                size=np.int(np.minimum(np.sum(scores > 0), self.max_number_of_candidates)),
+                size=int(np.minimum(np.sum(scores > 0), self.max_number_of_candidates)),
                 replace=False,
                 p=scores / np.sum(scores)
             )
