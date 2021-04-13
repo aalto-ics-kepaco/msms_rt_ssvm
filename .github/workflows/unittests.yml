@@ -93,7 +93,10 @@ jobs:
       - name: Run all unittests
         run: |
           cd ssvm/tests
-          python -m unittest unittests_dual_variables.py
-#
-#          python -m unittest discover -fvp "unittests_*.py"
+          python -m unittest -v unittests_data_structures.py
+          python -m unittest -v unittests_dual_variables.py
+          python -m unittest -v unittests_evaluation_tools.py
+          python -m unittest -v unittests_kernel_utils.py
+          python -m unittest -v unittests_loss_functions.py
+          python -m unittest -v unittests_utils.py
       # -----------------
