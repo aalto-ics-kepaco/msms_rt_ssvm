@@ -1,6 +1,8 @@
 name: Unit-testing
 
 on:
+  push:
+    branches: [ develop ]
   pull_request:
     branches: [ master, develop ]
 
@@ -16,9 +18,6 @@ jobs:
         # Set up the default shell. This is needed for the Conda
         shell: bash -l {0}
 
-    env:
-      GIT_LFS_SKIP_SMUDGE: 1
-
     steps:
       # ------------------------------------------------------------------------
       # Checkout the branch from the github repository that triggered the action
@@ -28,44 +27,14 @@ jobs:
           ref: ${{ github.ref }}
       # ------------------------------------------------------------------------
 
-      # ----------------------------------------
-      # Setting up the caching for the LFS files
-      - name: Get IDs of the files registered in the LFS
-        run: git lfs ls-files -l | cut -d' ' -f1 | sort > .lfs-assets-id
-
-      - name: Restore LFS cache
-        uses: actions/cache@v2
-        env:
-          # Increase this value to reset the cache manually
-          LFS_CACHE_VERSION: 1
-        id: lfs-cache
-        with:
-          path: .git/lfs
-          key: ${{ runner.os }}-lfs-${{ hashFiles('.lfs-assets-id') }}-v${{ env.LFS_CACHE_VERSION }}
-
-      - name: Pull the working copies of the files registered in the LFS
-        run: git lfs pull
-      # ----------------------------------------
-
       # --------------------------------------------------
-      # Setting up Python using a cached Conda environment
-      - name: Restore Conda cache
-        uses: actions/cache@v2
-        env:
-          # Increase this value to reset the cache manually
-          CONDA_CACHE_VERSION: 1
-        id: conda-cache
-        with:
-          path: ~/conda_pkgs_dir
-          key: ${{ runner.os }}-conda-${{ matrix.python-version }}-${{ hashFiles('environment.yml') }}-v${{ env.CONDA_CACHE_VERSION }}
-
+      # Setting up Python using a Conda environment
       - name: Set up Conda with Python ${{ matrix.python-version }}
         uses: conda-incubator/setup-miniconda@v2
         with:
           activate-environment: ssvm_environment
           environment-file: environment.yml
           channel-priority: strict
-          use-only-tar-bz2: true  # IMPORTANT: This needs to be set for caching to work properly!
       # --------------------------------------------------
 
       # ------------------------
