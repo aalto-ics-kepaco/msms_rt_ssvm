@@ -815,7 +815,7 @@ class TestSequenceSample(unittest.TestCase):
                 number_of_candidates=number_of_candidates, db_fn=DB_FN, molecule_identifier="inchikey",
                 include_correct_candidate=False, random_state=1020, init_with_open_db_conn=False),
             N=31, L_min=20,
-            random_state=789
+            random_state=484
         )
 
         # Get a train test split

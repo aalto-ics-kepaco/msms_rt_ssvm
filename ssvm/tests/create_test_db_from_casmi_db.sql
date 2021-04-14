@@ -36,6 +36,8 @@ drop table fingerprints_data;
 
 alter table fingerprints_data_dg_tmp rename to fingerprints_data;
 
+delete from fingerprints_meta where name not in ('substructure_count', 'iokr_fps__positive');
+
 -- Remove information to which mixture each spectra belongs
 drop table spectra_mix;
 
@@ -46,11 +48,10 @@ create table molecules_dg_tmp
 		primary key,
 	inchi2D VARCHAR not null,
 	inchikey VARCHAR not null,
-	inchikey1 VARCHAR not null,
-	molecular_formula VARCHAR not null
+	inchikey1 VARCHAR not null
 );
 
-insert into molecules_dg_tmp(inchi, inchi2D, inchikey, inchikey1, molecular_formula) select inchi, inchi2D, inchikey, inchikey1, molecular_formula from molecules;
+insert into molecules_dg_tmp(inchi, inchi2D, inchikey, inchikey1) select inchi, inchi2D, inchikey, inchikey1 from molecules;
 
 drop table molecules;
 
@@ -65,10 +66,30 @@ create index molecules_inchikey1_index
 create index molecules_inchikey_index
 	on molecules (inchikey);
 
-create index molecules_mf_index
-	on molecules (molecular_formula);
+-- Remove some MS2 spectra --> here 500
+delete from spectra
+    where name in (
+        select name from spectra
+            where name not in ('Challenge-016', 'EAX030601', 'Challenge-019', 'EAX034002', 'Challenge-017',
+                               'Challenge-018', 'Challenge-019', 'Challenge-001')
+            order by random()
+            limit 500
+    );
 
--- Remove not needed indices
-drop index molecules_mf_index;
+-- Remove now unused candidate scores and candidate associations
+delete from spectra_candidate_scores
+    where spectrum not in (select name from spectra);
+
+delete from candidates_spectra
+    where spectrum not in (select name from spectra);
+
+-- Remove molecules that appear nowhere anymore
+-- --> Start with the fingerprints
+delete from fingerprints_data
+    where molecule not in (select candidate from candidates_spectra);
+
+-- --> Then go to the molecules
+delete from molecules
+    where inchi not in (select candidate from candidates_spectra);
 
 -- Do not forget to ran VACUUM after removing all the data.
