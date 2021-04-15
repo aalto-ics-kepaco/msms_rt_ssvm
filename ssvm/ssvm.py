@@ -90,7 +90,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     def __init__(self, mol_feat_label_loss: str, mol_feat_retention_order: str,
                  mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]],  n_trees_per_sequence: int = 1,
                  retention_order_weight=None, n_jobs: int = 1, log_transform_node_potentials: bool = True,
-                 average_node_and_edge_potentials: bool = False, update_direction: str = "map", *args, **kwargs):
+                 average_node_and_edge_potentials: bool = True, update_direction: str = "map", *args, **kwargs):
         """
         :param mol_feat_label_loss:
         :param mol_feat_retention_order:
