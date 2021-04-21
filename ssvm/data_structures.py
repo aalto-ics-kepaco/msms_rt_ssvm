@@ -243,6 +243,34 @@ class CandidateSQLiteDB(object):
 
         return query
 
+    def _get_molecule_feature_by_id_query(self, molecule_ids: Union[List[str], Tuple[str, ...]], features: str) -> str:
+        """
+        Function to construct the SQLite query to load the molecule features (e.g. fingerprint vectors) for the given
+        molecule identifier.
+
+        Note: The rows will be ordered as given in the molecule ids.
+
+        Note (2): We use the "GROUP BY identifier" clause to group the features associated with different candidates
+            which have the same molecule identifier. The SQLite implementation does not ensure any particular order of
+            the results and _any_ of the feature vector within a group could be returned. Keep this in mind, when your
+            features encode properties of the molecules within a group differently (e.g. stereo-chemistry).
+        """
+        # Build string to order SQLite output as defined by the given molecule-ids.
+        # Note: The order in which we provide the molecule ids is preserved in the output. But, if a molecule id appears
+        #       multiple times, than its first appearance defines its position in the output.
+        # Read: https://www.sqlite.org/lang_expr.html#case
+        _order_query_str = "\n".join(["WHEN '%s' THEN %d" % (mid, i) for i, mid in enumerate(molecule_ids, start=1)])
+
+        query = "SELECT %s AS identifier, %s AS molecular_feature FROM molecules" \
+                "   INNER JOIN fingerprints_data fd ON fd.molecule = molecules.inchi" \
+                "   WHERE identifier IN %s" \
+                "   GROUP BY identifier" \
+                "   ORDER BY CASE identifier" \
+                "         %s" \
+                "      END" % (self.molecule_identifier, features, self._in_sql(molecule_ids), _order_query_str)
+
+        return query
+
     def _get_candidate_subset(self, spectrum: Spectrum) -> None:
         """
         The baseclass does not restrict the candidate set.
@@ -256,16 +284,16 @@ class CandidateSQLiteDB(object):
         :return: Tuple = (scalar, string), dimensionality of the feature and feature mode
         """
         return self.db.execute(
-            "SELECT length, mode FROM fingerprints_meta WHERE name IS '%s'" % (feature, )
+            "SELECT length, mode FROM fingerprints_meta WHERE name IS ?", (feature, )
         ).fetchone()
 
-    def _get_feature_dimension(self, feature: str) -> int:
+    def _get_d_feature(self, feature: str) -> int:
         """
         :param feature: string, identifier of the requested molecule feature.
 
         :return: scalar, dimensionality of the feature
         """
-        return self.db.execute("SELECT length FROM fingerprints_meta WHERE name IS '%s'" % (feature, )).fetchone()[0]
+        return self._get_feature_meta_data(feature)[0]
 
     def _ensure_feature_is_available(self, feature: str) -> None:
         """
@@ -394,7 +422,7 @@ class CandidateSQLiteDB(object):
         :param return_dataframe: boolean, indicating whether the score should be returned in a pandas.DataFrame storing
             the molecule ids and molecule features (shape = (n_samples, d_features + 1)).
 
-        :return: array-like, shape = (n_cand, feature_dimension), feature matrix
+        :return: array-like, shape = (n_cand, d_feature), feature matrix
         """
         self._ensure_feature_is_available(features)
 
@@ -418,6 +446,11 @@ class CandidateSQLiteDB(object):
         """
         Load the molecular features for the specified molecule identifiers from the database.
 
+        Note: We use the "GROUP BY identifier" clause to group the features associated with different candidates
+            which have the same molecule identifier. The SQLite implementation does not ensure any particular order of
+            the results and _any_ of the feature vector within a group could be returned. Keep this in mind, when your
+            features encode properties of the molecules within a group differently (e.g. stereo-chemistry).
+
         :param molecule_ids: list or tuple of strings, molecule identifier
 
         :param features: string, molecular feature identifier
@@ -425,25 +458,14 @@ class CandidateSQLiteDB(object):
         :param return_dataframe: boolean, indicating whether the score should be returned in a pandas.DataFrame storing
             the molecule ids and molecule features (shape = (n_samples, d_features + 1)).
 
-        :return: array-like, shape = (n_mol, feature_dimension), feature matrix. Each row i corresponds to molecule i.
+        :return: array-like, shape = (n_mol, d_feature), feature matrix. Row i corresponds to molecule i.
         """
         self._ensure_feature_is_available(features)
 
         # Query data from DB
-        _order_query_str = "\n".join(["WHEN '%s' THEN %d" % (mid, i) for i, mid in enumerate(molecule_ids, start=1)])
-
-        # TODO: Test the grouping by identifier ...
-        res = self.db.execute(
-            "SELECT %s AS identifier, %s AS molecular_feature FROM molecules"
-            "   INNER JOIN fingerprints_data fd ON fd.molecule = molecules.inchi"
-            "   WHERE identifier IN %s"
-            "   GROUP BY identifier"
-            "   ORDER BY CASE identifier"
-            "         %s"
-            "      END"
-            % (self.molecule_identifier, features, self._in_sql(molecule_ids), _order_query_str)).fetchall()
-
-        identifiers, feature_rows = zip(*res)
+        identifiers, feature_rows = zip(
+            *self.db.execute(self._get_molecule_feature_by_id_query(molecule_ids, features)).fetchall()
+        )
 
         # Parse feature strings into a matrix
         feature_matrix = self._get_molecule_feature_matrix(feature_rows, features)
@@ -847,7 +869,7 @@ class Sequence(object):
         :param features: string, identifier of the feature to load from the database.
 
         :return: array-like or list of array-likes, (list of) feature matrix (matrices)
-            with shape = (n_cand_s, feature_dimension)
+            with shape = (n_cand_s, d_feature)
         """
         if s is None:
             return [self.get_molecule_features_for_candidates(features, s) for s in range(self.__len__())]
