@@ -1,5 +1,16 @@
 # Version History
 
+## v1.0.2 (Patch)
+
+Processing large candidate sets occasionally caused the SSVM library to crash due to "MemoryError". That was due to a 
+large matrix that is allocated in the '_I_feat_rsvm' function, which computes the constant part of the candidate scores
+against the training data. 
+
+- Wrapped the call of '_I_feat_rsvm' into a try-except environment to load an alternative implementation in case of a
+  MemoryError
+- Alternative implementation uses loops to go over all training data.
+- Test added to compare the output of '_I_feat_rsvm' and '_I_feat_rsvm__FOR_LARGE_MEMORY'
+
 ## v1.0.1 (Patch)
 
 The static top-k scoring function ('_topk_score' in SSVM class) can be used without labeled spectra sequence object. 

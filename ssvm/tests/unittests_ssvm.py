@@ -237,6 +237,20 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
         print("Loop: %.3fs" % (rt_loop / 5))
         print("Vec: %.3fs" % (rt_vec / 5))
 
+    def test_I_rsvm_jfeat__FOR_LARGE_MEMORY(self):
+        N_E = np.sum([len(self.ssvm.training_graphs_[j][0].edges) for j in range(self.N)])  # total number of edges
+
+        for i in range(10):  # inspect only the first 10 label sequences
+            Y_candidates = self.ssvm.training_data_[i].get_molecule_features_for_candidates("substructure_count", 2)
+
+            I = self.ssvm._I_jfeat_rsvm__FOR_LARGE_MEMORY(Y_candidates)
+            I_ref = self.ssvm._I_jfeat_rsvm(Y_candidates)
+
+            self.assertEqual((len(Y_candidates), ), I.shape)
+            np.testing.assert_allclose(I_ref, I)
+            self.assertTrue(np.all((I / self.ssvm.C * self.N) >= -N_E))
+            self.assertTrue(np.all((I / self.ssvm.C * self.N) <= N_E))
+
     def test_predict_molecule_preference_values(self):
         for i in range(5):  # inspect only the first 5 label sequences
             Y_candidates = self.ssvm.training_data_[i].get_molecule_features_for_candidates("substructure_count", 2)

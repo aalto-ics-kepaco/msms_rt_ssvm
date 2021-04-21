@@ -34,7 +34,7 @@ import time
 from functools import lru_cache
 from collections import OrderedDict
 from copy import deepcopy
-from typing import List, Tuple, Dict, Union, Optional, TypeVar, Callable
+from typing import List, Tuple, Dict, Union, Optional, Callable
 from sklearn.utils.validation import check_random_state
 from sklearn.metrics import ndcg_score
 from joblib.parallel import Parallel, delayed
@@ -556,7 +556,11 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         :return: array-like, shape = (n_molecules, ), preference values for all molecules.
         """
-        I = self._I_jfeat_rsvm(Y)
+        try:
+            I = self._I_jfeat_rsvm(Y)
+        except MemoryError:
+            SSVM_LOGGER.info("Use large memory implementation of '_I_jfeat_rsvm'.")
+            I = self._I_jfeat_rsvm__FOR_LARGE_MEMORY(Y)
 
         # Note: L_i = |E_j|
         N = len(self.training_data_)
@@ -632,6 +636,36 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         # TODO: This term is constant regardless of the dual variables.
         # C / N * < sign_delta , lambda_delta >, shape = (n_molecules, )
         return self.C * (sign_delta @ lambda_delta) / N
+
+    def _I_jfeat_rsvm__FOR_LARGE_MEMORY(self, Y: np.array) -> np.ndarray:
+        """
+        :param Y: array-like, shape = (n_molecules, n_features), molecular feature vectors to calculate the preference
+            values for.
+
+        :return: array-like, shape = (n_molecules, )
+        """
+        # Note: L_i = |E_j|
+        N = len(self.training_data_)
+
+        I_jfeat_rsvm = np.zeros(len(Y))
+
+        for j in range(N):
+            # List of the retention time differences for all examples j over the spanning trees
+            sign_delta_j = self.training_data_[j].get_sign_delta_t(self.training_graphs_[j][0])  # shape = (|E_j|, )
+
+            # List of the ground truth molecular structures for all examples j
+            l_Y_gt_sequence_j = self._get_molecule_features_for_labels(
+                self.training_data_[j], self.mol_feat_retention_order
+            )  # shape = (|E_j|, n_features)
+
+            lambda_delta_j = self._get_lambda_delta(
+                l_Y_gt_sequence_j, Y, self.training_graphs_[j][0], self.mol_kernel
+            )  # shape = (|E_j|, n_mol), with n_mol = Y.shape[0]
+
+            I_jfeat_rsvm += (sign_delta_j @ lambda_delta_j)
+
+        # C / N * < sign_delta , lambda_delta >, shape = (n_molecules, )
+        return self.C * I_jfeat_rsvm / N
 
     def _get_node_and_edge_potentials(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph,
                                       loss_augmented: bool = False) -> Tuple[OrderedDict, OrderedDict]:
