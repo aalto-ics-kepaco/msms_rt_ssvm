@@ -89,14 +89,42 @@ class Molecule(object):
 
 
 class CandidateSQLiteDB(object):
+    """
+    Wrapper class around the candidate SQLite database (DB).
+
+    The database is assumed to hold the following information:
+
+        - (some kind of) in-silico matching scores for the (MS/MS-spectrum, molecular-candidate)-tuples
+        - Retention time (RT) information for MS/MS spectra
+        - Grouping information for the MS/MS spectra, e.g. their association with a dataset (= measurement setup)
+
+    The wrapper class provides high-level accessing / query functions to retrieve information from DB needed for the
+    Structure Support Vector Machine (SSVM) training respectively running the evaluation.
+    """
     def __init__(self, db_fn: str, cand_def: str = "fixed", molecule_identifier: str = "inchikey",
                  init_with_open_db_conn: bool = True):
         """
-        :param db_fn:
+        :param db_fn: string, pathname of the candidate database.
 
-        :param cand_def:
+        :param cand_def: string, specifying the candidate set definition:
 
-        :param molecule_identifier:
+            'fixed': Candidate sets are pre-defined. This requires the presence of a DB table establishing the relation-
+                ship between the MS/MS-spectra and the their corresponding candidates. This association table is
+                assumed to be called 'candidates_spectra'.
+
+        :param molecule_identifier: string, specifying the name of the identifier used to distinguish between two
+            different molecules (~ candidates) in the DB. For example, if 'inchikey's are used, than two molecules are
+            considered to be different, if there 'inchikey' differs. If otherwise, the identifier is specified to be
+            'inchikey1' than only the first part of the inchikey of two molecules is considered, which for example
+            results in two stereo-isomers being considered equal. If multiple molecules (~ candidates) in the DV have
+            the same identifier, than for example their MS/MS scores are aggregated (maximum score is returned), when
+            the MS/MS scores are queried from the DB.
+
+        :param init_with_open_db_conn: boolean, indicating whether a connection to the database should be established
+            (i.e. an SQLite connection is opened) when the DB class is instantiated. If False, the connections needs to
+            be established whenever any information is queried from the DB (e.g. using the implemented context-manager).
+             This is useful, if the DB is shared across parallel processes using joblib.Parallel (with loky backend),
+             where the data to be shared across the processes needs to be pickleable (which sqlite3.connections are not).
         """
         self.db_fn = db_fn
         self.cand_def = cand_def
@@ -116,9 +144,15 @@ class CandidateSQLiteDB(object):
 
     def _get_labelspace_query(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> str:
         """
+        Function to construct the SQLite query to load the label-space (= molecule identifiers of the candidates)
+        associated with the given MS/MS spectrum.
 
-        :param spectrum:
-        :return:
+        Note: The query always request the result to be "ORDER BY identifier", which means that the label-space is
+            ordered by the molecule identifier.
+
+        :param spectrum: matchms.Spectrum, MS/MS spectrum for which the label-space should be loaded.
+
+        :return: string, SQLite query
         """
         query = "SELECT m.%s as identifier FROM candidates_spectra " \
                 "   INNER JOIN molecules m ON m.inchi = candidates_spectra.candidate" \
@@ -135,11 +169,25 @@ class CandidateSQLiteDB(object):
     def _get_molecule_feature_query(self, spectrum: Spectrum, feature: str, candidate_subset: Optional[List] = None) \
             -> str:
         """
+        Function to construct the SQLite query to load the molecule features (e.g. fingerprint vectors) of the
+        candidates associated with the given MS/MS spectrum.
 
-        :param spectrum:
-        :param feature:
-        :param candidate_subset:
-        :return:
+        Note: The query always request the result to be "ORDER BY identifier", which means that the label-space is
+            ordered by the molecule identifier.
+
+        Note (2): We use the "GROUP BY identifier" clause to group the features associated with different candidates
+            which have the same molecule identifier. The SQLite implementation does not ensure any particular order of
+            the results and _any_ of the feature vector within a group could be returned. Keep this in mind, when your
+            features encode properties of the molecules within a group differently (e.g. stereo-chemistry).
+
+        :param spectrum: matchms.Spectrum, MS/MS spectrum for which the molecule features should be loaded.
+
+        :param feature: string, name of the molecule feature to load.
+
+        :param candidate_subset: list of strings, molecule identifiers to restrict the candidate set for which the
+            features are returned.
+
+        :return: string, SQLite query
         """
         query = "SELECT m.%s AS identifier, %s AS molecular_feature FROM candidates_spectra" \
                 "   INNER JOIN molecules m ON m.inchi = candidates_spectra.candidate" \
@@ -157,11 +205,26 @@ class CandidateSQLiteDB(object):
     def _get_ms2_score_query(self, spectrum: Spectrum, ms2scorer: str, candidate_subset: Optional[List[str]] = None) \
             -> str:
         """
+        Function to construct the SQLite query to load the MS/MS spectra in-silico scores of the candidates associated
+        with the given MS/MS spectrum.
 
-        :param spectrum:
-        :param ms2scorer:
-        :param candidate_subset:
-        :return:
+        Note: The query always request the result to be "ORDER BY identifier", which means that the label-space is
+            ordered by the molecule identifier.
+
+        Note (2): We use the "GROUP BY identifier" clause to group the MS/MS scores associated with different candidates
+            which have the same molecule identifier. We return the maximum MS/MS score within each group.
+
+        Note (3): If a candidate is associated with a spectrum, but has not been scored by the specified in-silico
+            method, its MS/MS score is returned as None.
+
+        :param spectrum: matchms.Spectrum, MS/MS spectrum for which the MS/MS scores should be loaded.
+
+        :param ms2scorer: string, identifier of the in-silico method used to produce the MS/MS scores.
+
+        :param candidate_subset: list of strings, molecule identifiers to restrict the candidate set for which the
+            features are returned.
+
+        :return: string, SQLite query
         """
         query = "SELECT m.%s AS identifier, MAX(score) AS ms2_score" \
                 "   FROM (SELECT * FROM candidates_spectra WHERE candidates_spectra.spectrum IS '%s') cs" \
@@ -224,12 +287,13 @@ class CandidateSQLiteDB(object):
         Function to parse the molecular features stored as strings in the candidate database and load them into a numpy
         array.
 
-        :param data: pandas.DataFrame, table with two columns (identifier, molecular_feature).
+        :param data: pd.Series | List | Tuples, shape = (n_molecules, ), molecule features represented as strings as
+            stored in the candidate DB.
 
         :param features: string, identifier of the molecular feature. This information is needed to properly parse the
             feature string representation and store it in a numpy array.
 
-        :return:
+        :return: array-like, shape = (n_molecules, d_features)
         """
         # Set up an output array
         n = len(data)
@@ -249,6 +313,9 @@ class CandidateSQLiteDB(object):
         return X
 
     def _get_connection_uri(self) -> str:
+        """
+        Returns the sqlite3 connection URI to open the candidate DB in read-only mode.
+        """
         return "file:" + self.db_fn + "?mode=ro"
 
     def connect_to_db(self) -> sqlite3.Connection:
