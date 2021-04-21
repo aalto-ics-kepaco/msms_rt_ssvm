@@ -1,5 +1,10 @@
 # Version History
 
+## v1.0.1 (Patch)
+
+The static top-k scoring function ('_topk_score' in SSVM class) can be used without labeled spectra sequence object. 
+This requires the marginals dictionary to hold the information about the index of the correct candidate.
+
 ## v1.0.0
 
 ### Default Behavior

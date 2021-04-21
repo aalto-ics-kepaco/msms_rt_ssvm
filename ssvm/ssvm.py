@@ -896,7 +896,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         # Calculate the marginals
         marginals = self.predict(sequence, Gs=Gs, map=False, n_jobs=n_jobs_for_trees)
 
-        return self._topk_score(sequence, marginals, return_percentage, max_k, pad_output, topk_method)
+        return self._topk_score(marginals, sequence, return_percentage, max_k, pad_output, topk_method)
 
     def top1_score(self, sequence: LabeledSequence, Gs: Optional[SpanningTrees] = None, map: bool = False) -> float:
         """
@@ -1145,8 +1145,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     # ================
     @staticmethod
     def _topk_score(
-            sequence: LabeledSequence,
             marginals: Union[Tuple[str, ...], Dict[int, Dict[str, Union[int, np.ndarray, List[str]]]]],
+            sequence: Optional[LabeledSequence] = None,
             return_percentage: bool = True,
             max_k: Optional[int] = None,
             pad_output: bool = False,
@@ -1157,9 +1157,11 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         TODO: For sklearn compatibility we need to separate the sequence data from the labels.
         TODO: Add a logger event here.
 
-        :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
-
         :param marginals: Dictionary, pre-computed candidate marginals for the given sequence
+
+        :param sequence: LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets. The sequences is
+            used to determine the index of the correct candidate structure in the marginals. If None, it is assumed
+            that the marginals dictionary already contains that information ('index_of_correct_structure').
 
         :param return_percentage: boolean, indicating whether the percentage of correctly ranked candidates in top-k
             should be returned (True) or the absolute number (False).
@@ -1177,7 +1179,11 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         # Need to find the index of the correct label / molecular structure in the candidate sets to determine the top-k
         # accuracy.
         for s in marginals:
-            marginals[s]["index_of_correct_structure"] = marginals[s]["label"].index(sequence.get_labels(s))
+            if "index_of_correct_structure" not in marginals[s]:
+                if sequence is None:
+                    raise ValueError("Cannot determine the index of the correct structure without labelled sequence.")
+
+                marginals[s]["index_of_correct_structure"] = marginals[s]["label"].index(sequence.get_labels(s))
 
         # Calculate the top-k performance
         if topk_method.lower().startswith("casmi"):
