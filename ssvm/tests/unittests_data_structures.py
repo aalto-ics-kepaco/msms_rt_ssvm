@@ -34,7 +34,7 @@ from matchms.Spectrum import Spectrum
 from joblib import Parallel, delayed
 from scipy.stats import rankdata
 
-from ssvm.data_structures import SequenceSample, CandidateSQLiteDB, RandomSubsetCandidateSQLiteDB
+from ssvm.data_structures import SequenceSample, CandSQLiteDB_Bach2020, RandomSubsetCandSQLiteDB_Bach2020
 from ssvm.data_structures import Sequence, SpanningTrees
 
 DB_FN = "Bach2020_test_db.sqlite"
@@ -56,11 +56,11 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "Challenge-016"})
 
         # Molecule identifier: inchikey
-        candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey")
+        candidates = CandSQLiteDB_Bach2020(DB_FN, molecule_identifier="inchikey")
         self.assertEqual(2233, candidates.get_n_cand(spectrum))
 
         # Molecule identifier: inchikey1
-        candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey1")
+        candidates = CandSQLiteDB_Bach2020(DB_FN, molecule_identifier="inchikey1")
         self.assertEqual(1918, candidates.get_n_cand(spectrum))
 
         # ----------
@@ -69,11 +69,11 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "EAX030601"})
 
         # Molecule identifier: inchikey
-        candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey")
+        candidates = CandSQLiteDB_Bach2020(DB_FN, molecule_identifier="inchikey")
         self.assertEqual(16, candidates.get_n_cand(spectrum))
 
         # Molecule identifier: inchikey1
-        candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey1")
+        candidates = CandSQLiteDB_Bach2020(DB_FN, molecule_identifier="inchikey1")
         self.assertEqual(16, candidates.get_n_cand(spectrum))
 
     def test_get_ms2_scores(self):
@@ -81,7 +81,7 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         # SPECTRUM 1
         # ----------
         spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "Challenge-016"})
-        candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey")
+        candidates = CandSQLiteDB_Bach2020(DB_FN, molecule_identifier="inchikey")
 
         # MS2 Scorer is IOKR
         scores = candidates.get_ms2_scores(spectrum, ms2scorer="IOKR__696a17f3")
@@ -99,7 +99,7 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         # SPECTRUM 2
         # ----------
         spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "EAX030601"})
-        candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey")
+        candidates = CandSQLiteDB_Bach2020(DB_FN, molecule_identifier="inchikey")
 
         # MS2 Scorer is IOKR
         scores = candidates.get_ms2_scores(spectrum, ms2scorer="IOKR__696a17f3")
@@ -118,7 +118,7 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         # SPECTRUM 1
         # ----------
         spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "Challenge-019"})
-        candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey1")
+        candidates = CandSQLiteDB_Bach2020(DB_FN, molecule_identifier="inchikey1")
 
         # IOKR features
         fps = candidates.get_molecule_features(spectrum, features="iokr_fps__positive")
@@ -146,7 +146,7 @@ class TestCandidateSQLiteDB(unittest.TestCase):
             "AZVUYIUQQIFCQK-UHFFFAOYSA-N"
         ]
 
-        candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey", init_with_open_db_conn=False)
+        candidates = CandSQLiteDB_Bach2020(DB_FN, molecule_identifier="inchikey", init_with_open_db_conn=False)
 
         conn = sqlite3.connect(DB_FN)
         mol_ids_from_query, _ = zip(
@@ -193,7 +193,7 @@ class TestCandidateSQLiteDB(unittest.TestCase):
             "AZVUYIUQQIFCQK-UHFFFAOYSA-N"
         ]
 
-        candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey")
+        candidates = CandSQLiteDB_Bach2020(DB_FN, molecule_identifier="inchikey")
         df_features = candidates.get_molecule_features_by_molecule_id(molecule_ids, "iokr_fps__positive", True)
         feature_matrix = candidates.get_molecule_features_by_molecule_id(molecule_ids, "iokr_fps__positive", False)
 
@@ -227,7 +227,7 @@ class TestCandidateSQLiteDB(unittest.TestCase):
             "AZVUYIUQQIFCQK"
         ]
 
-        candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey1")
+        candidates = CandSQLiteDB_Bach2020(DB_FN, molecule_identifier="inchikey1")
         df_features = candidates.get_molecule_features_by_molecule_id(molecule_ids, "iokr_fps__positive", True)
         feature_matrix = candidates.get_molecule_features_by_molecule_id(molecule_ids, "iokr_fps__positive", False)
 
@@ -261,7 +261,7 @@ class TestCandidateSQLiteDB(unittest.TestCase):
             "AZVUYIUQQIFCQK"
         ]
 
-        candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey1")
+        candidates = CandSQLiteDB_Bach2020(DB_FN, molecule_identifier="inchikey1")
         df_features = candidates.get_molecule_features_by_molecule_id(molecule_ids, "substructure_count", True)
         feature_matrix = candidates.get_molecule_features_by_molecule_id(molecule_ids, "substructure_count", False)
 
@@ -278,7 +278,7 @@ class TestCandidateSQLiteDB(unittest.TestCase):
             self.assertListEqual([molecule_ids[i] for i in rnd_idc], df_features_shf["identifier"].to_list())
 
     def test_get_molecule_feature_by_molecule_id__ids_as_tuple(self):
-        candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey")
+        candidates = CandSQLiteDB_Bach2020(DB_FN, molecule_identifier="inchikey")
 
         # ---------------------------------
         # REPEATED IDS
@@ -344,7 +344,7 @@ class TestCandidateSQLiteDB(unittest.TestCase):
             self.assertListEqual([molecule_ids[i] for i in rnd_idc], df_features_shf["identifier"].to_list())
 
     def test_get_molecule_feature_by_molecule_id(self):
-        candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey")
+        candidates = CandSQLiteDB_Bach2020(DB_FN, molecule_identifier="inchikey")
         molecule_ids = tuple([
             "FGXWKSZFVQUSTL-UHFFFAOYSA-N",
             "BFFTVFNQHIJUQT-MRXNPFEDSA-N",
@@ -449,7 +449,7 @@ class TestCandidateSQLiteDB(unittest.TestCase):
                                                          "molecule_id": "FGXWKSZFVQUSTL-UHFFFAOYSA-N"})
 
         # Do not enforce the ground truth structure to be in the candidate set
-        candidates = CandidateSQLiteDB(db_fn=DB_FN, molecule_identifier="inchikey")
+        candidates = CandSQLiteDB_Bach2020(db_fn=DB_FN, molecule_identifier="inchikey")
 
         scores = candidates.get_ms2_scores(spectrum, "MetFrag_2.4.5__8afe4a14", return_dataframe=True)
         fps = candidates.get_molecule_features(spectrum, "iokr_fps__positive", return_dataframe=True)
@@ -460,7 +460,7 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         self.assertEqual(labspace, fps["identifier"].to_list())
 
     def test_ensure_feature_is_available(self):
-        candidates = CandidateSQLiteDB(db_fn=DB_FN)
+        candidates = CandSQLiteDB_Bach2020(db_fn=DB_FN)
 
         with self.assertRaises(ValueError):
             candidates._ensure_feature_is_available("bla")
@@ -471,7 +471,7 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         candidates._ensure_feature_is_available("iokr_fps__positive")
 
     def test_ensure_molecule_identifier_is_available(self):
-        candidates = CandidateSQLiteDB(db_fn=DB_FN)
+        candidates = CandSQLiteDB_Bach2020(db_fn=DB_FN)
 
         with self.assertRaises(ValueError):
             candidates._ensure_molecule_identifier_is_available("inchistr")
@@ -484,7 +484,7 @@ class TestCandidateSQLiteDB(unittest.TestCase):
     def test_parallel_access(self):
         self.skipTest("Too much memory for gh-actions.")
 
-        candidates = CandidateSQLiteDB(DB_FN, molecule_identifier="inchikey", init_with_open_db_conn=False)
+        candidates = CandSQLiteDB_Bach2020(DB_FN, molecule_identifier="inchikey", init_with_open_db_conn=False)
         molecule_ids = tuple([
             "FGXWKSZFVQUSTL-UHFFFAOYSA-N",
             "BFFTVFNQHIJUQT-MRXNPFEDSA-N",
@@ -514,13 +514,13 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
                                                          "molecule_id": "FGXWKSZFVQUSTL-UHFFFAOYSA-N"})
 
         # Do not enforce the ground truth structure to be in the candidate set
-        candidates = RandomSubsetCandidateSQLiteDB(
+        candidates = RandomSubsetCandSQLiteDB_Bach2020(
             number_of_candidates=102, db_fn=DB_FN, molecule_identifier="inchikey", include_correct_candidate=False)
         self.assertEqual(102, len(candidates.get_labelspace(spectrum)))
         self.assertEqual(candidates.get_n_cand(spectrum), len(np.unique(candidates.get_labelspace(spectrum))))
 
         # Enforce correct structure to be present
-        candidates = RandomSubsetCandidateSQLiteDB(
+        candidates = RandomSubsetCandSQLiteDB_Bach2020(
             number_of_candidates=102, db_fn=DB_FN, molecule_identifier="inchikey", include_correct_candidate=True)
         self.assertEqual(102, len(candidates.get_labelspace(spectrum)))
         self.assertEqual(candidates.get_n_cand(spectrum), len(np.unique(candidates.get_labelspace(spectrum))))
@@ -533,13 +533,13 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
                                                          "molecule_id": "FGXWKSZFVQUSTL"})
 
         # Do not enforce the ground truth structure to be in the candidate set
-        candidates = RandomSubsetCandidateSQLiteDB(
+        candidates = RandomSubsetCandSQLiteDB_Bach2020(
             number_of_candidates=102, db_fn=DB_FN, molecule_identifier="inchikey1", include_correct_candidate=False)
         self.assertEqual(102, len(candidates.get_labelspace(spectrum)))
         self.assertEqual(candidates.get_n_cand(spectrum), len(np.unique(candidates.get_labelspace(spectrum))))
 
         # Enforce correct structure to be present
-        candidates = RandomSubsetCandidateSQLiteDB(
+        candidates = RandomSubsetCandSQLiteDB_Bach2020(
             number_of_candidates=102, db_fn=DB_FN, molecule_identifier="inchikey1", include_correct_candidate=True)
         self.assertEqual(102, len(candidates.get_labelspace(spectrum)))
         self.assertEqual(candidates.get_n_cand(spectrum), len(np.unique(candidates.get_labelspace(spectrum))))
@@ -553,7 +553,7 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
                                                          "molecule_id": "FGXWKSZFVQUSTL-UHFFFAOYSA-N"})
 
         # Do not enforce the ground truth structure to be in the candidate set
-        candidates = RandomSubsetCandidateSQLiteDB(
+        candidates = RandomSubsetCandSQLiteDB_Bach2020(
             number_of_candidates=102, db_fn=DB_FN, molecule_identifier="inchikey", include_correct_candidate=True)
 
         scores = candidates.get_ms2_scores(spectrum, "MetFrag_2.4.5__8afe4a14", return_dataframe=True)
@@ -571,12 +571,12 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
         spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "Challenge-016"})
 
         # Molecule identifier: inchikey
-        candidates = RandomSubsetCandidateSQLiteDB(
+        candidates = RandomSubsetCandSQLiteDB_Bach2020(
             number_of_candidates=102, db_fn=DB_FN, molecule_identifier="inchikey")
         self.assertEqual(102, candidates.get_n_cand(spectrum))
 
         # Molecule identifier: inchikey1
-        candidates = RandomSubsetCandidateSQLiteDB(
+        candidates = RandomSubsetCandSQLiteDB_Bach2020(
             number_of_candidates=102, db_fn=DB_FN, molecule_identifier="inchikey1")
         self.assertEqual(102, candidates.get_n_cand(spectrum))
 
@@ -586,12 +586,12 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
         spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "EAX030601"})
 
         # Molecule identifier: inchikey
-        candidates = RandomSubsetCandidateSQLiteDB(
+        candidates = RandomSubsetCandSQLiteDB_Bach2020(
             number_of_candidates=102, db_fn=DB_FN, molecule_identifier="inchikey")
         self.assertEqual(16, candidates.get_n_cand(spectrum))
 
         # Molecule identifier: inchikey1
-        candidates = RandomSubsetCandidateSQLiteDB(
+        candidates = RandomSubsetCandSQLiteDB_Bach2020(
             number_of_candidates=102, db_fn=DB_FN, molecule_identifier="inchikey1")
         self.assertEqual(16, candidates.get_n_cand(spectrum))
 
@@ -602,12 +602,12 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
         spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "Challenge-016"})
 
         # Molecule identifier: inchikey
-        candidates = RandomSubsetCandidateSQLiteDB(
+        candidates = RandomSubsetCandSQLiteDB_Bach2020(
             number_of_candidates=1032, db_fn=DB_FN, molecule_identifier="inchikey")
         self.assertEqual(2233, candidates.get_n_total_cand(spectrum))
 
         # Molecule identifier: inchikey1
-        candidates = RandomSubsetCandidateSQLiteDB(
+        candidates = RandomSubsetCandSQLiteDB_Bach2020(
             number_of_candidates=102, db_fn=DB_FN, molecule_identifier="inchikey1")
         self.assertEqual(1918, candidates.get_n_total_cand(spectrum))
 
@@ -617,12 +617,12 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
         spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "EAX030601"})
 
         # Molecule identifier: inchikey
-        candidates = RandomSubsetCandidateSQLiteDB(
+        candidates = RandomSubsetCandSQLiteDB_Bach2020(
             number_of_candidates=5, db_fn=DB_FN, molecule_identifier="inchikey")
         self.assertEqual(16, candidates.get_n_total_cand(spectrum))
 
         # Molecule identifier: inchikey1
-        candidates = RandomSubsetCandidateSQLiteDB(
+        candidates = RandomSubsetCandSQLiteDB_Bach2020(
             number_of_candidates=102, db_fn=DB_FN, molecule_identifier="inchikey1")
         self.assertEqual(16, candidates.get_n_total_cand(spectrum))
 
@@ -631,8 +631,8 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
         for rep in range(30):
             _rs = np.random.RandomState(rep)
             scores = - _rs.random(_rs.randint(1, 50))
-            c1, c2 = CandidateSQLiteDB.get_normalization_parameters_c1_and_c2(scores)
-            scores_norm = CandidateSQLiteDB.normalize_scores(scores, c1, c2)
+            c1, c2 = CandSQLiteDB_Bach2020.get_normalization_parameters_c1_and_c2(scores)
+            scores_norm = CandSQLiteDB_Bach2020.normalize_scores(scores, c1, c2)
             np.testing.assert_array_equal(rankdata(scores, method="ordinal"), rankdata(scores_norm, method="ordinal"))
             self.assertEqual(1.0, np.max(scores_norm))
             self.assertAlmostEqual(
@@ -643,8 +643,8 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
         for rep in range(20):
             _rs = np.random.RandomState(rep)
             scores = _rs.random(_rs.randint(1, 50))
-            c1, c2 = CandidateSQLiteDB.get_normalization_parameters_c1_and_c2(scores)
-            scores_norm = CandidateSQLiteDB.normalize_scores(scores, c1, c2)
+            c1, c2 = CandSQLiteDB_Bach2020.get_normalization_parameters_c1_and_c2(scores)
+            scores_norm = CandSQLiteDB_Bach2020.normalize_scores(scores, c1, c2)
             np.testing.assert_array_equal(rankdata(scores, method="ordinal"), rankdata(scores_norm, method="ordinal"))
             self.assertEqual(1.0, np.max(scores_norm))
             self.assertAlmostEqual(np.min(scores) / np.max(scores), np.min(scores_norm))
@@ -653,10 +653,10 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
         for rep in range(20):
             _rs = np.random.RandomState(rep)
             scores = _rs.random(_rs.randint(1, 50)) - 0.5
-            c1, c2 = CandidateSQLiteDB.get_normalization_parameters_c1_and_c2(scores)
+            c1, c2 = CandSQLiteDB_Bach2020.get_normalization_parameters_c1_and_c2(scores)
             self.assertEqual(c1, np.abs(np.min(scores)))
             self.assertEqual(c2, np.sort(scores + c1)[1] / 10)
-            scores_norm = CandidateSQLiteDB.normalize_scores(scores, c1, c2)
+            scores_norm = CandSQLiteDB_Bach2020.normalize_scores(scores, c1, c2)
             np.testing.assert_array_equal(rankdata(scores, method="ordinal"), rankdata(scores_norm, method="ordinal"))
             self.assertEqual(1.0, np.max(scores_norm))
             self.assertAlmostEqual(c2 / np.max(scores + c1), np.min(scores_norm))
@@ -666,14 +666,14 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
         for n_cand in [1, 30]:
             for val in [-1.1, -0.9, 0, 0.1, 2]:
                 scores = np.full(n_cand, fill_value=val)
-                c1, c2 = CandidateSQLiteDB.get_normalization_parameters_c1_and_c2(scores)
+                c1, c2 = CandSQLiteDB_Bach2020.get_normalization_parameters_c1_and_c2(scores)
 
                 if val >= 0:
                     self.assertEqual(0.0, c1)
                 else:
                     self.assertEqual(np.abs(val), c1)
                 self.assertEqual(c2, 1e-6)
-                np.testing.assert_array_equal(np.ones_like(scores), CandidateSQLiteDB.normalize_scores(scores, c1, c2))
+                np.testing.assert_array_equal(np.ones_like(scores), CandSQLiteDB_Bach2020.normalize_scores(scores, c1, c2))
 
 
 class TestSequence(unittest.TestCase):
@@ -682,7 +682,7 @@ class TestSequence(unittest.TestCase):
         self.rts = np.random.RandomState(len(self.spectra_ids)).randint(low=1, high=21, size=len(self.spectra_ids))
         self.spectra = [Spectrum(np.array([]), np.array([]), {"spectrum_id": spectrum_id, "retention_time": rt})
                         for spectrum_id, rt in zip(self.spectra_ids, self.rts)]
-        self.sequence = Sequence(spectra=self.spectra, candidates=CandidateSQLiteDB(DB_FN))
+        self.sequence = Sequence(spectra=self.spectra, candidates=CandSQLiteDB_Bach2020(DB_FN))
 
     def test_get_number_of_candidates(self):
         n_cand = self.sequence.get_n_cand()
@@ -768,7 +768,7 @@ class TestSequenceSample(unittest.TestCase):
         number_of_candidates = 5
         seq_sample = SequenceSample(
             self.spectra, self.labels,
-            RandomSubsetCandidateSQLiteDB(
+            RandomSubsetCandSQLiteDB_Bach2020(
                 number_of_candidates=number_of_candidates, db_fn=DB_FN, molecule_identifier="inchikey",
                 include_correct_candidate=False, random_state=1020, init_with_open_db_conn=False),
             N=31, L_min=20,
@@ -841,12 +841,12 @@ class TestBugsAndWiredStuff(unittest.TestCase):
 
         test_sequences_metfrag = SequenceSample(
             [self.spectra[idx] for idx in test], [self.labels[idx] for idx in test],
-            CandidateSQLiteDB(db_fn=DB_FN, molecule_identifier="inchikey1", init_with_open_db_conn=True),
+            CandSQLiteDB_Bach2020(db_fn=DB_FN, molecule_identifier="inchikey1", init_with_open_db_conn=True),
             N=50, L_min=30, L_max=50, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
 
         test_sequences_iokr = SequenceSample(
             [self.spectra[idx] for idx in test], [self.labels[idx] for idx in test],
-            CandidateSQLiteDB(db_fn=DB_FN, molecule_identifier="inchikey1", init_with_open_db_conn=True),
+            CandSQLiteDB_Bach2020(db_fn=DB_FN, molecule_identifier="inchikey1", init_with_open_db_conn=True),
             N=50, L_min=30, L_max=50, random_state=19, ms2scorer="IOKR__696a17f3")
 
         for idx in range(len(test_sequences_metfrag)):

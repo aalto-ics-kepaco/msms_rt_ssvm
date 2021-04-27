@@ -46,7 +46,7 @@ from msmsrt_scorer.lib.cindex_measure import cindex
 
 import ssvm.cfg
 from ssvm.data_structures import SequenceSample, Sequence, LabeledSequence, SpanningTrees
-from ssvm.data_structures import CandidateSQLiteDB
+from ssvm.data_structures import ABCCandSQLiteDB_Bach2020
 from ssvm.factor_graphs import get_random_spanning_tree
 from ssvm.kernel_utils import tanimoto_kernel, _min_max_dense_jit, generalized_tanimoto_kernel_FAST
 from ssvm.ssvm_meta import _StructuredSVM
@@ -72,7 +72,7 @@ SSVM_LOGGER.addHandler(CH)
 
 
 @JOBLIB_CACHE.cache(ignore=["candidates"], mmap_mode="r")
-def get_molecule_features_by_molecule_id_CACHED(candidates: CandidateSQLiteDB, molecule_ids: Tuple[str, ...],
+def get_molecule_features_by_molecule_id_CACHED(candidates: ABCCandSQLiteDB_Bach2020, molecule_ids: Tuple[str, ...],
                                                 features: str) -> np.ndarray:
     """
     Function to load molecular features by molecule IDs from the candidate database. The method of the CandidateDB class
@@ -676,11 +676,11 @@ class StructuredSVMSequencesFixedMS2MultiTrees(_StructuredSVM):
             node_potentials[s] = {"n_cand": len(_raw_scores[-1])}
 
         # Calculate the normalization parameter based on ALL candidates
-        _c1, _c2 = CandidateSQLiteDB.get_normalization_parameters_c1_and_c2(np.hstack(_raw_scores))
+        _c1, _c2 = ABCCandSQLiteDB_Bach2020.get_normalization_parameters_c1_and_c2(np.hstack(_raw_scores))
 
         for idx, s in enumerate(G.nodes):  # V
             # Normalize the raw scores using the global parameters to (0, 1] (and transform to log-scores)
-            _score = CandidateSQLiteDB.normalize_scores(_raw_scores[idx], _c1, _c2)
+            _score = ABCCandSQLiteDB_Bach2020.normalize_scores(_raw_scores[idx], _c1, _c2)
 
             if self.log_transform_node_potentials:
                 _score = np.log(_score)

@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 import networkx as nx
 
+from abc import ABC, abstractmethod
 from functools import lru_cache
 from copy import deepcopy
 from collections import OrderedDict
@@ -88,7 +89,7 @@ class Molecule(object):
         return self.__getattribute__(self.identifier)
 
 
-class CandidateSQLiteDB(object):
+class ABCCandSQLiteDB(ABC):
     """
     Wrapper class around the candidate SQLite database (DB).
 
@@ -142,6 +143,7 @@ class CandidateSQLiteDB(object):
         with self:
             self._ensure_molecule_identifier_is_available(self.molecule_identifier)
 
+    @abstractmethod
     def _get_labelspace_query(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> str:
         """
         Function to construct the SQLite query to load the label-space (= molecule identifiers of the candidates)
@@ -154,18 +156,9 @@ class CandidateSQLiteDB(object):
 
         :return: string, SQLite query
         """
-        query = "SELECT m.%s as identifier FROM candidates_spectra " \
-                "   INNER JOIN molecules m ON m.inchi = candidates_spectra.candidate" \
-                "   WHERE spectrum IS '%s'" % (self.molecule_identifier, spectrum.get("spectrum_id"))
+        pass
 
-        if candidate_subset is not None:
-            query += " AND identifier IN %s" % self._in_sql(candidate_subset)
-
-        query += "  GROUP BY identifier" \
-                 "  ORDER BY identifier"
-
-        return query
-
+    @abstractmethod
     def _get_molecule_feature_query(self, spectrum: Spectrum, feature: str, candidate_subset: Optional[List] = None) \
             -> str:
         """
@@ -189,19 +182,9 @@ class CandidateSQLiteDB(object):
 
         :return: string, SQLite query
         """
-        query = "SELECT m.%s AS identifier, %s AS molecular_feature FROM candidates_spectra" \
-                "   INNER JOIN molecules m ON m.inchi = candidates_spectra.candidate" \
-                "   INNER JOIN fingerprints_data fd ON fd.molecule = candidates_spectra.candidate" \
-                "   WHERE spectrum IS '%s'" % (self.molecule_identifier, feature, spectrum.get("spectrum_id"))
+        pass
 
-        if candidate_subset is not None:
-            query += " AND identifier IN %s" % self._in_sql(candidate_subset)
-
-        query += "  GROUP BY identifier" \
-                 "  ORDER BY identifier"
-
-        return query
-
+    @abstractmethod
     def _get_ms2_score_query(self, spectrum: Spectrum, ms2scorer: str, candidate_subset: Optional[List[str]] = None) \
             -> str:
         """
@@ -226,23 +209,9 @@ class CandidateSQLiteDB(object):
 
         :return: string, SQLite query
         """
-        query = "SELECT m.%s AS identifier, MAX(score) AS ms2_score" \
-                "   FROM (SELECT * FROM candidates_spectra WHERE candidates_spectra.spectrum IS '%s') cs" \
-                "   INNER JOIN molecules m ON m.inchi = cs.candidate" \
-                "   LEFT OUTER JOIN (" \
-                "       SELECT candidate, score FROM spectra_candidate_scores" \
-                "       WHERE participant IS '%s' AND spectrum IS '%s') scs ON cs.candidate = scs.candidate" \
-                % (self.molecule_identifier, spectrum.get("spectrum_id"), ms2scorer, spectrum.get("spectrum_id"))
+        pass
 
-        # Restrict candidate subset if needed
-        if candidate_subset is not None:
-            query += "   WHERE identifier in %s" % self._in_sql(candidate_subset)
-
-        query += "  GROUP BY identifier" \
-                 "  ORDER BY identifier"
-
-        return query
-
+    @abstractmethod
     def _get_molecule_feature_by_id_query(self, molecule_ids: Union[List[str], Tuple[str, ...]], features: str) -> str:
         """
         Function to construct the SQLite query to load the molecule features (e.g. fingerprint vectors) for the given
@@ -255,29 +224,17 @@ class CandidateSQLiteDB(object):
             the results and _any_ of the feature vector within a group could be returned. Keep this in mind, when your
             features encode properties of the molecules within a group differently (e.g. stereo-chemistry).
         """
-        # Build string to order SQLite output as defined by the given molecule-ids.
-        # Note: The order in which we provide the molecule ids is preserved in the output. But, if a molecule id appears
-        #       multiple times, than its first appearance defines its position in the output.
-        # Read: https://www.sqlite.org/lang_expr.html#case
-        _order_query_str = "\n".join(["WHEN '%s' THEN %d" % (mid, i) for i, mid in enumerate(molecule_ids, start=1)])
+        pass
 
-        query = "SELECT %s AS identifier, %s AS molecular_feature FROM molecules" \
-                "   INNER JOIN fingerprints_data fd ON fd.molecule = molecules.inchi" \
-                "   WHERE identifier IN %s" \
-                "   GROUP BY identifier" \
-                "   ORDER BY CASE identifier" \
-                "         %s" \
-                "      END" % (self.molecule_identifier, features, self._in_sql(molecule_ids), _order_query_str)
-
-        return query
-
-    def _get_candidate_subset(self, spectrum: Spectrum) -> None:
+    @abstractmethod
+    def _get_candidate_subset(self, spectrum: Spectrum) -> Optional[List[str]]:
         """
-        The baseclass does not restrict the candidate set.
+        Returns the candidate subset for the given spectrum. In an actual implementation this could be for example a
+        random candidate subset.
         """
-        return None
+        pass
 
-    def _get_feature_meta_data(self, feature: str) -> Tuple[int, str]:
+    def _get_d_and_mode_feature(self, feature: str) -> Tuple[int, str]:
         """
         :param feature: string, identifier of the requested molecule feature.
 
@@ -293,7 +250,15 @@ class CandidateSQLiteDB(object):
 
         :return: scalar, dimensionality of the feature
         """
-        return self._get_feature_meta_data(feature)[0]
+        return self._get_d_and_mode_feature(feature)[0]
+
+    def _get_mode_feature(self, feature: str) -> str:
+        """
+        :param feature: string, identifier of the requested molecule feature.
+
+        :return: string, data-type mode of the feature
+        """
+	return self._get_d_and_mode_feature(feature)[1]
 
     def _ensure_feature_is_available(self, feature: str) -> None:
         """
@@ -320,6 +285,7 @@ class CandidateSQLiteDB(object):
 
         raise ValueError("Molecule identifier '%s' is not available." % molecule_identifier)
 
+    @abstractmethod
     def _get_molecule_feature_matrix(self, data: Union[pd.Series, List, Tuple], features: str) -> np.ndarray:
         """
         Function to parse the molecular features stored as strings in the candidate database and load them into a numpy
@@ -334,24 +300,25 @@ class CandidateSQLiteDB(object):
         :return: array-like, shape = (n_molecules, d_features)
         """
         # Set up an output array
-        n = len(data)
-        d, mode = self._get_feature_meta_data(features)
-
-        if mode == "count":
-            X = np.zeros((n, d), dtype=int)
-            for i, row in enumerate(data):
-                for _fp_str in row.split(","):
-                    _idx, _cnt = _fp_str.split(":")
-                    X[i, int(_idx)] = int(_cnt)
-        elif mode in ["binary", "binarized"]:
-            X = np.zeros((n, d))
-            for i, row in enumerate(data):
-                _ids = list(map(int, row.split(",")))
-                X[i, _ids] = 1
-        else:
-            raise ValueError("Invalid fingerprint mode: %s" % mode)
-
-        return X
+        # n = len(data)
+        # d, mode = self._get_d_and_mode_feature(features) 
+        #
+        # if mode == "count":
+        #    X = np.zeros((n, d), dtype=int)
+        #    for i, row in enumerate(data):
+        #        for _fp_str in row.split(","):
+        #            _idx, _cnt = _fp_str.split(":")
+        #            X[i, int(_idx)] = int(_cnt)
+        # elif mode in ["binary", "binarized"]:
+        #    X = np.zeros((n, d))
+        #    for i, row in enumerate(data):
+        #        _ids = list(map(int, row.split(",")))
+        #        X[i, _ids] = 1
+        # else:
+        #    raise ValueError("Invalid fingerprint mode: %s" % mode)
+        #
+        # return X
+	pass
 
     def _get_connection_uri(self) -> str:
         """
@@ -529,7 +496,9 @@ class CandidateSQLiteDB(object):
 
         # Load the MS2 scores
         df_scores = pd.read_sql_query(
-            self._get_ms2_score_query(spectrum, ms2scorer, candidate_subset), self.db)
+            self._get_ms2_score_query(spectrum, ms2scorer, candidate_subset),
+            self.db
+        )
 
         # Fill missing MS2 scores with the minimum score
         df_scores["ms2_score"] = df_scores["ms2_score"].fillna(value=df_scores["ms2_score"].min(skipna=True))
@@ -610,8 +579,271 @@ class CandidateSQLiteDB(object):
         return scores
 
 
-class FixedSubsetCandidateSQLiteDB(CandidateSQLiteDB):
+class ABCCandSQLiteDB_Bach2020(ABCCandSQLiteDB):
+    """
+    Specific instance of the candidate set SQLite DB wrapper for the DB layout used by Bach et al. 2020
+
+    Bach et al. 2020: https://doi.org/10.1093/bioinformatics/btaa998
+    """
+    def __init__(self, *args, **kwargs):
+        """
+        No additional parameters.
+        """
+        super().__init__(*args, **kwargs)
+
+    def _get_labelspace_query(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> str:
+        """
+        See base-class.
+        """
+        query = "SELECT m.%s as identifier FROM candidates_spectra " \
+                "   INNER JOIN molecules m ON m.inchi = candidates_spectra.candidate" \
+                "   WHERE spectrum IS '%s'" % (self.molecule_identifier, spectrum.get("spectrum_id"))
+
+        if candidate_subset is not None:
+            query += " AND identifier IN %s" % self._in_sql(candidate_subset)
+
+        query += "  GROUP BY identifier" \
+                 "  ORDER BY identifier"
+
+        return query
+
+    def _get_molecule_feature_query(self, spectrum: Spectrum, feature: str, candidate_subset: Optional[List] = None) \
+            -> str:
+        """
+        See base-class.
+        """
+        query = "SELECT m.%s AS identifier, %s AS molecular_feature FROM candidates_spectra" \
+                "   INNER JOIN molecules m ON m.inchi = candidates_spectra.candidate" \
+                "   INNER JOIN fingerprints_data fd ON fd.molecule = candidates_spectra.candidate" \
+                "   WHERE spectrum IS '%s'" % (self.molecule_identifier, feature, spectrum.get("spectrum_id"))
+
+        if candidate_subset is not None:
+            query += " AND identifier IN %s" % self._in_sql(candidate_subset)
+
+        query += "  GROUP BY identifier" \
+                 "  ORDER BY identifier"
+
+        return query
+
+    def _get_ms2_score_query(self, spectrum: Spectrum, ms2scorer: str, candidate_subset: Optional[List[str]] = None) \
+            -> str:
+        """
+        See base-class.
+        """
+        query = "SELECT m.%s AS identifier, MAX(score) AS ms2_score" \
+                "   FROM (SELECT * FROM candidates_spectra WHERE candidates_spectra.spectrum IS '%s') cs" \
+                "   INNER JOIN molecules m ON m.inchi = cs.candidate" \
+                "   LEFT OUTER JOIN (" \
+                "       SELECT candidate, score FROM spectra_candidate_scores" \
+                "       WHERE participant IS '%s' AND spectrum IS '%s') scs ON cs.candidate = scs.candidate" \
+                % (self.molecule_identifier, spectrum.get("spectrum_id"), ms2scorer, spectrum.get("spectrum_id"))
+
+        # Restrict candidate subset if needed
+        if candidate_subset is not None:
+            query += "   WHERE identifier in %s" % self._in_sql(candidate_subset)
+
+        query += "  GROUP BY identifier" \
+                 "  ORDER BY identifier"
+
+        return query
+
+    def _get_molecule_feature_by_id_query(self, molecule_ids: Union[List[str], Tuple[str, ...]], features: str) -> str:
+        """
+        See base-class.
+        """
+        # Build string to order SQLite output as defined by the given molecule-ids.
+        # Note: The order in which we provide the molecule ids is preserved in the output. But, if a molecule id appears
+        #       multiple times, than its first appearance defines its position in the output.
+        # Read: https://www.sqlite.org/lang_expr.html#case
+        _order_query_str = "\n".join(["WHEN '%s' THEN %d" % (mid, i) for i, mid in enumerate(molecule_ids, start=1)])
+
+        query = "SELECT %s AS identifier, %s AS molecular_feature FROM molecules" \
+                "   INNER JOIN fingerprints_data fd ON fd.molecule = molecules.inchi" \
+                "   WHERE identifier IN %s" \
+                "   GROUP BY identifier" \
+                "   ORDER BY CASE identifier" \
+                "         %s" \
+                "      END" % (self.molecule_identifier, features, self._in_sql(molecule_ids), _order_query_str)
+
+        return query
+
+    def _get_molecule_feature_matrix(self, data: Union[pd.Series, List, Tuple], features: str) -> np.ndarray:
+        """
+        See base-class.
+        """
+        # Set up an output array
+        n = len(data)
+        d = self._get_d_feature(features)
+        X = np.zeros((n, d))
+
+        if features in ["substructure_count", "iokr_fps__count"]:
+            for i, row in enumerate(data):
+                for _fp_str in row.split(","):
+                    _idx, _cnt = _fp_str.split(":")
+                    X[i, int(_idx)] = int(_cnt)
+        else:
+            for i, row in enumerate(data):
+                _ids = list(map(int, row.split(",")))
+                X[i, _ids] = 1
+
+        return X
+
+
+class ABCCandSQLiteDB_Massbank(ABCCandSQLiteDB):
+    """
+    Specific instance of the candidate set SQLite DB wrapper for the DB layout by massbank2db [1].
+
+    [1] https://github.com/bachi55/massbank2db_FILES
+    """
+    def __init__(self, *args, **kwargs):
+        """
+        No additional parameters.
+        """
+        super().__init__(*args, **kwargs)
+
+    def _get_labelspace_query(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> str:
+        """
+        See base-class.
+        """
+        query = "SELECT m.%s as identifier FROM candidates_spectra " \
+                "   INNER JOIN molecules m ON m.cid = candidates_spectra.candidate" \
+                "   WHERE spectrum IS '%s'" % (self.molecule_identifier, spectrum.get("spectrum_id"))
+
+        if candidate_subset is not None:
+            query += " AND identifier IN %s" % self._in_sql(candidate_subset)
+
+        query += "  GROUP BY identifier" \
+                 "  ORDER BY identifier"
+
+        return query
+
+    def _get_molecule_feature_query(self, spectrum: Spectrum, feature: str, candidate_subset: Optional[List] = None) \
+            -> str:
+        """
+        See base-class.
+        """
+        query = "SELECT m.%s AS identifier, fingerprint AS molecular_feature FROM candidates_spectra" \
+                "   INNER JOIN molecules m ON m.cid = candidates_spectra.candidate" \
+                "   INNER JOIN fingerprints_data fd ON fd.molecule = candidates_spectra.candidate" \
+                "   WHERE spectrum IS '%s' AND fd.name IS '%s'" \
+                % (self.molecule_identifier, spectrum.get("spectrum_id"), feature)
+
+        if candidate_subset is not None:
+            query += " AND identifier IN %s" % self._in_sql(candidate_subset)
+
+        query += "  GROUP BY identifier" \
+                 "  ORDER BY identifier"
+
+        return query
+
+    def _get_ms2_score_query(self, spectrum: Spectrum, ms2scorer: str, candidate_subset: Optional[List[str]] = None) \
+            -> str:
+        """
+        See base-class.
+        """
+        query = "SELECT m.%s AS identifier, MAX(score) AS ms2_score" \
+                "   FROM (SELECT * FROM candidates_spectra WHERE candidates_spectra.spectrum IS '%s') cs" \
+                "   INNER JOIN molecules m ON m.cid = cs.candidate" \
+                "   LEFT OUTER JOIN (" \
+                "       SELECT candidate, score FROM spectra_candidate_scores" \
+                "       WHERE scoring_method IS '%s' AND spectrum IS '%s') scs ON cs.candidate = scs.candidate" \
+                % (self.molecule_identifier, spectrum.get("spectrum_id"), ms2scorer, spectrum.get("spectrum_id"))
+
+        # Restrict candidate subset if needed
+        if candidate_subset is not None:
+            query += "   WHERE identifier in %s" % self._in_sql(candidate_subset)
+
+        query += "  GROUP BY identifier" \
+                 "  ORDER BY identifier"
+
+        return query
+
+    def _get_molecule_feature_by_id_query(self, molecule_ids: Union[List[str], Tuple[str, ...]], features: str) -> str:
+        """
+        See base-class.
+        """
+        # Build string to order SQLite output as defined by the given molecule-ids.
+        # Note: The order in which we provide the molecule ids is preserved in the output. But, if a molecule id appears
+        #       multiple times, than its first appearance defines its position in the output.
+        # Read: https://www.sqlite.org/lang_expr.html#case
+        _order_query_str = "\n".join(["WHEN '%s' THEN %d" % (mid, i) for i, mid in enumerate(molecule_ids, start=1)])
+
+        query = "SELECT %s AS identifier, fingerprint AS molecular_feature FROM molecules" \
+                "   INNER JOIN fingerprints_data fd ON fd.molecule = molecules.cid" \
+                "   WHERE identifier IN %s AND fd.name is '%s'" \
+                "   GROUP BY identifier" \
+                "   ORDER BY CASE identifier" \
+                "         %s" \
+                "      END" % (self.molecule_identifier, self._in_sql(molecule_ids), features, _order_query_str)
+
+        return query
+
+    def _get_molecule_feature_matrix(self, data: Union[pd.Series, List, Tuple], features: str) -> np.ndarray:
+        """
+        See base-class.
+        """
+        # Get dimensionality and data-type of the output matrix
+        n = len(data)
+        d, mode = self._get_d_and_mode_feature(features)
+
+        dtype = np.int if mode in ["binary", "count"] else np.float  # real
+        X = np.zeros((n, d), dtype=dtype)
+
+        # TODO
+
+        # # Parse the feature strings
+        # if mode == "binary":
+        #     for i, row in enumerate(data):
+        #         _ids = list(map(int, row.split(",")))
+        #         X[i, _ids] = 1
+        # elif mode == "count":
+        #     for i, row in enumerate(data):
+        #         for _fp_str in row.split(","):
+        #             _idx, _cnt = _fp_str.split(":")
+        #             X[i, int(_idx)] = int(_cnt)
+        #
+        #
+        # if mode == "count":
+        #     for i, row in enumerate(data):
+        #         for _fp_str in row.split(","):
+        #             _idx, _cnt = _fp_str.split(":")
+        #             X[i, int(_idx)] = int(_cnt)
+        # else:
+        #     for i, row in enumerate(data):
+        #         _ids = list(map(int, row.split(",")))
+        #         X[i, _ids] = 1
+        #
+        # return X
+
+
+class CandSQLiteDB_Bach2020(ABCCandSQLiteDB_Bach2020):
+    def __init__(self, *args, **kwargs):
+        """
+        No additional parameters.
+        """
+        super().__init__(*args, **kwargs)
+
+    def _get_candidate_subset(self, spectrum: Spectrum) -> Optional[List[str]]:
+        """
+        In the base-setting the candidates are not restricted. This is expressed by the return value None.
+        """
+        return None
+
+
+class FixedSubsetCandSQLiteDB_Bach2020(ABCCandSQLiteDB_Bach2020):
+    """
+    This class allows to specify a fixed candidate subset for a given set of spectra.
+    """
+
     def __init__(self, labelspace_subset: Dict[str, List[str]], assert_correct_candidate: bool = True, *args, **kwargs):
+        """
+        :param labelspace_subset: dictionary (spectrum_id: candidate_subset), storing the candidates subsets as list of
+            strings for each spectrum identified by its spectrum id.
+
+        :parma assert_correct_candidate: boolean, indicating whether it should be ensured that the ground-truth (gt)
+            molecular structure, associated with each spectrum, is present in the candidate subsets. For that, the
+            gt structure must be specified (see '_get_candidate_subset').
+        """
         self.assert_correct_candidate = assert_correct_candidate
         self._labelspace_subset = labelspace_subset
 
@@ -644,7 +876,7 @@ class FixedSubsetCandidateSQLiteDB(CandidateSQLiteDB):
 
     def get_labelspace(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> List[str]:
         """
-        Return the label space of the random subset.
+        Return the fixed label space (candidate subset)
         """
         if candidate_subset is not None:
             raise RuntimeError("Candidate subset cannot be requested in any sub-class of 'CandidateSQLiteDB'.")
@@ -652,7 +884,12 @@ class FixedSubsetCandidateSQLiteDB(CandidateSQLiteDB):
         return super().get_labelspace(spectrum, self._get_candidate_subset(spectrum))
 
 
-class RandomSubsetCandidateSQLiteDB(CandidateSQLiteDB):
+class ABCRandomSubsetCandSQLiteDB(ABCCandSQLiteDB):
+    """
+    This class allows to generate (and fix) a random candidate subset for each spectrum. For that, the first time a
+    subset is requested for a spectrum (identified by its id) is sampled. The subset size can be specified in as
+    absolute size or fraction of the available candidates.
+    """
     def __init__(self, number_of_candidates: Union[int, float], include_correct_candidate: bool = False,
                  random_state: Optional[Union[int, np.random.RandomState]] = None, *args, **kwargs):
         """
@@ -738,8 +975,21 @@ class RandomSubsetCandidateSQLiteDB(CandidateSQLiteDB):
         return super().get_labelspace(spectrum, self._get_candidate_subset(spectrum))
 
 
+class RandomSubsetCandSQLiteDB_Bach2020(ABCRandomSubsetCandSQLiteDB, ABCCandSQLiteDB_Bach2020):
+    """
+    This class allows to generate (and fix) a random candidate subset for each spectrum. For that, the first time a
+    subset is requested for a spectrum (identified by its id) is sampled. The subset size can be specified in as
+    absolute size or fraction of the available candidates.
+    """
+    def __init__(self, *args, **kwargs):
+        """
+        No additional parameters.
+        """
+        super().__init__(*args, **kwargs)
+
+
 class Sequence(object):
-    def __init__(self, spectra: List[Spectrum], candidates: CandidateSQLiteDB, ms2scorer: Optional[str] = None):
+    def __init__(self, spectra: List[Spectrum], candidates: ABCCandSQLiteDB_Bach2020, ms2scorer: Optional[str] = None):
         self.spectra = spectra
         self.candidates = candidates
         self.ms2scorer = ms2scorer
@@ -866,7 +1116,7 @@ class LabeledSequence(Sequence):
     """
     Class representing the a _labeled_ (MS, RT)-sequence (x, t, y) with associated molecular candidate set C.
     """
-    def __init__(self, spectra: List[Spectrum], labels: List[str], candidates: CandidateSQLiteDB,
+    def __init__(self, spectra: List[Spectrum], labels: List[str], candidates: ABCCandSQLiteDB_Bach2020,
                  ms2scorer: Optional[str] = None):
         """
         :param spectra: list of strings, spectrum-ids belonging sequence
@@ -951,8 +1201,8 @@ class SequenceSample(object):
     """
     Class representing a sequence sample.
     """
-    def __init__(self, spectra: List[Spectrum], labels: List[str], candidates: CandidateSQLiteDB, N: int, L_min: int,
-                 L_max: Optional[int] = None, random_state: Optional[int] = None, sort_sequence_by_rt: bool = False, 
+    def __init__(self, spectra: List[Spectrum], labels: List[str], candidates: ABCCandSQLiteDB_Bach2020, N: int, L_min: int,
+                 L_max: Optional[int] = None, random_state: Optional[int] = None, sort_sequence_by_rt: bool = False,
                  ms2scorer: Optional[str] = None, use_sequence_specific_candidates: bool = False):
         """
         :param data: list of matchms.Spectrum, spectra to sample sequences from
@@ -1065,7 +1315,7 @@ class SequenceSample(object):
                                                       key=lambda s: s[0].get("retention_time")))
 
             if self.use_sequence_specific_candidates:
-                if not isinstance(self.candidates, RandomSubsetCandidateSQLiteDB):
+                if not isinstance(self.candidates, RandomSubsetCandSQLiteDB_Bach2020):
                     raise ValueError("Sequence specific candidate sets are only supported for random candidate subset "
                                      "candidate databases.")
 
@@ -1089,7 +1339,7 @@ class SequenceSample(object):
     def get_train_test_split(self, spectra_cv: Union[GroupKFold, GroupShuffleSplit, int] = 5,
                              N_train: Optional[int] = None, N_test: Optional[int] = None,
                              L_min_test: Optional[int] = None, L_max_test: Optional[int] = None,
-                             candidates_test: Optional[CandidateSQLiteDB] = None,
+                             candidates_test: Optional[ABCCandSQLiteDB_Bach2020] = None,
                              use_sequence_specific_candidates_for_training: bool = False) \
             -> Tuple[SEQUENCE_SAMPLE_T, SEQUENCE_SAMPLE_T]:
         """
@@ -1102,7 +1352,7 @@ class SequenceSample(object):
     def get_train_test_generator(self, spectra_cv: Union[GroupKFold, GroupShuffleSplit, int] = 5,
                                  N_train: Optional[int] = None, N_test: Optional[int] = None,
                                  L_min_test: Optional[int] = None, L_max_test: Optional[int] = None,
-                                 candidates_test: Optional[CandidateSQLiteDB] = None,
+                                 candidates_test: Optional[ABCCandSQLiteDB_Bach2020] = None,
                                  use_sequence_specific_candidates_for_training: bool = False) \
             -> Tuple[SEQUENCE_SAMPLE_T, SEQUENCE_SAMPLE_T]:
         """

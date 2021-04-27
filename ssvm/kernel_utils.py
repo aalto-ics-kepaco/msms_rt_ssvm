@@ -28,7 +28,7 @@ import numpy as np
 import scipy.sparse as sp
 import itertools as it
 
-from numba import jit, prange, guvectorize, float64, int64
+from numba import jit, prange, guvectorize, float64, int64, int32
 from sklearn.metrics.pairwise import manhattan_distances, pairwise_distances
 from joblib import delayed, Parallel
 from scipy.spatial._distance_wrap import cdist_cityblock_double_wrap
@@ -306,7 +306,7 @@ def generalized_tanimoto_kernel_FAST(X, Y):
 # Implementations using Numba
 # ===========================
 
-def _min_max_dense_ufunc(X, Y):
+def _min_max_dense_ufunc(X: np.ndarray, Y: np.ndarray):
     """
     Min-Max Kernel using reduction
     """
@@ -535,52 +535,6 @@ def profiling(fun, n_A=100, n_B=5000, d=307):
 
     for _ in range(50):
         fun(X_A, X_B)
-
-
-def _use_binary_encoding(n_A, n_B, d, n_rep, dtype):
-    X_A = (np.random.RandomState(93).rand(n_A, d) > 0.5).astype(dtype)
-    X_B = (np.random.RandomState(92).rand(n_B, d) > 0.5).astype(dtype)
-
-    # Define functions to test
-    fun_list = [
-        ("minmax_gentan_fast", generalized_tanimoto_kernel_FAST),
-        ("tanimoto", tanimoto_kernel_FAST),
-    ]
-
-    # Compile using numba
-    K_ref = generalized_tanimoto_kernel_FAST(X_A, X_B)
-    print("Compile ... ", end="")
-    for fun_name, fun in fun_list:
-        print(fun_name, end="; ", flush=True)
-        np.testing.assert_allclose(K_ref, fun(X_A, X_B))
-    print()
-
-    # Run timing
-    df = []
-    for fun_name, fun in fun_list:
-        print("RUN - %s" % fun_name)
-        for _ in range(n_rep):
-            start = time.time()
-            fun(X_A, X_B)
-            df.append([fun_name, n_A, n_B, d, (time.time() - start), dtype])
-
-    df = pd.DataFrame(df, columns=["function", "n_A", "n_B", "d", "time", "dtype"]) \
-        .groupby(["function", "n_A", "n_B", "d", "dtype"]) \
-        .aggregate(np.mean) \
-        .reset_index()
-
-    return df
-
-
-#              function  n_A  n_B      d      time
-# 0  minmax_gentan_fast  160  400  38000  1.952541
-# 1        minmax_ufunc  160  400  38000  1.564143
-# 2            tanimoto  160  400  38000  0.071877
-#
-#              function  n_A  n_B     d      time
-# 0  minmax_gentan_fast  160  400  1208  0.061411
-# 1        minmax_ufunc  160  400  1208  0.075999
-# 2            tanimoto  160  400  1208  0.002795
 
 
 if __name__ == "__main__":
