@@ -304,6 +304,13 @@ def _min_max_dense_ufunc(X, Y):
     return _minmax__ufunc(X.astype(np.int)[:, np.newaxis, :], Y.astype(np.int)[np.newaxis, :, :])
 
 
+def _min_max_dense_ufunc_int(X, Y):
+    """
+    Min-Max Kernel using reduction
+    """
+    return _minmax__ufunc(X[:, np.newaxis, :], Y[np.newaxis, :, :])
+
+
 @guvectorize([(int64[:], int64[:], float64[:])], '(d),(d)->()', nopython=True, target="parallel")
 def _minmax__ufunc(x, y, res):
     s = np.sum(x) + np.sum(y)
@@ -336,6 +343,27 @@ def _minmax_jit(X, Y, n_Y):
     return K_mm
 
 # ---------------------------
+
+
+def run_time__practical_dimensions():
+    n_rep = 25
+
+    for n_A, n_B, d in [(30, 800, 7600), (300, 800, 7600)]:
+        print(_run_time(n_A, n_B, d, n_rep))
+
+#              function  n_A  n_B     d      time
+# 0        minmax_dense   30  800  7600  1.384670
+# 1       minmax_gentan   30  800  7600  0.169328
+# 2  minmax_gentan_fast   30  800  7600  0.166315
+# 3          minmax_jit   30  800  7600  0.122361
+# 4        minmax_ufunc   30  800  7600  0.113622
+
+#              function  n_A  n_B     d       time
+# 0        minmax_dense  300  800  7600  13.629886
+# 1       minmax_gentan  300  800  7600   1.441526
+# 2  minmax_gentan_fast  300  800  7600   1.414300
+# 3          minmax_jit  300  800  7600   2.277988
+# 4        minmax_ufunc  300  800  7600   1.081151
 
 
 def run_time():
@@ -434,4 +462,4 @@ if __name__ == "__main__":
     import time
     import pandas as pd
 
-    run_time()
+    run_time__practical_dimensions()

@@ -1,5 +1,12 @@
 # Version History
 
+## v1.0.3 (Patch)
+
+Small performance improvement for the MinMax kernel computation
+
+- counting fingerprint matrices are returned with "dtype=int"
+- specific minmax-kernel function using 'ufunc' for integer matrices (no type-conversion)
+
 ## v1.0.2 (Patch)
 
 Processing large candidate sets occasionally caused the SSVM library to crash due to "MemoryError". That was due to a 

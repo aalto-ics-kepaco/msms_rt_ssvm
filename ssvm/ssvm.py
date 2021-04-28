@@ -48,7 +48,8 @@ import ssvm.cfg
 from ssvm.data_structures import SequenceSample, Sequence, LabeledSequence, SpanningTrees
 from ssvm.data_structures import CandidateSQLiteDB
 from ssvm.factor_graphs import get_random_spanning_tree
-from ssvm.kernel_utils import tanimoto_kernel, _min_max_dense_jit, generalized_tanimoto_kernel_FAST, _min_max_dense_ufunc
+from ssvm.kernel_utils import tanimoto_kernel, _min_max_dense_jit, generalized_tanimoto_kernel_FAST
+from ssvm.kernel_utils import _min_max_dense_ufunc, _min_max_dense_ufunc_int
 from ssvm.utils import item_2_idc
 from ssvm.dual_variables import DualVariables
 from ssvm.ssvm_meta import _StructuredSVM
@@ -1289,6 +1290,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             return _min_max_dense_jit
         elif mol_kernel == "minmax_ufunc":
             return _min_max_dense_ufunc
+        elif mol_kernel == "minmax_ufunc_int":
+            return _min_max_dense_ufunc_int
         else:
             raise ValueError("Invalid molecule kernel")
 
