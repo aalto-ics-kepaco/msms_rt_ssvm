@@ -1,5 +1,11 @@
 # Version History
 
+## v1.0.4 (Patch)
+
+Include the latest changes to the into the SSVM flavor using sequence specific candidate sets.
+
+- SSVM (sequence specific) updated with latest version of base SSVM class
+
 ## v1.0.3 (Patch)
 
 Small performance improvement for the MinMax kernel computation

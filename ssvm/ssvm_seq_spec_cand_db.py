@@ -48,11 +48,11 @@ from ssvm.data_structures import SequenceSample, Sequence, LabeledSequence, Span
 from ssvm.data_structures import CandidateSQLiteDB
 from ssvm.factor_graphs import get_random_spanning_tree
 from ssvm.kernel_utils import tanimoto_kernel, _min_max_dense_jit, generalized_tanimoto_kernel_FAST
-from ssvm.ssvm_meta import _StructuredSVM
+from ssvm.kernel_utils import _min_max_dense_ufunc, _min_max_dense_ufunc_int
+from ssvm.utils import item_2_idc
 from ssvm.dual_variables import DualVariables
+from ssvm.ssvm_meta import _StructuredSVM
 
-
-DUALVARIABLES_T = TypeVar('DUALVARIABLES_T', bound='DualVariables')
 
 JOBLIB_CACHE = Memory(ssvm.cfg.JOBLIB_MEMORY_CACHE_LOCATION, verbose=0)
 
@@ -90,7 +90,7 @@ class StructuredSVMSequencesFixedMS2SeqSpecCandDB(_StructuredSVM):
     def __init__(self, mol_feat_label_loss: str, mol_feat_retention_order: str,
                  mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]],  n_trees_per_sequence: int = 1,
                  retention_order_weight=None, n_jobs: int = 1, log_transform_node_potentials: bool = True,
-                 average_node_and_edge_potentials: bool = False, update_direction: str = "map", *args, **kwargs):
+                 average_node_and_edge_potentials: bool = True, update_direction: str = "map", *args, **kwargs):
         """
         :param mol_feat_label_loss:
         :param mol_feat_retention_order:
@@ -164,7 +164,7 @@ class StructuredSVMSequencesFixedMS2SeqSpecCandDB(_StructuredSVM):
         assert self._is_feasible_matrix(self.alphas_, self.C), "Initial dual variables must be feasible."
 
         # Initialize the graphs for each sequence
-        self.training_graphs_ = [SpanningTrees(sequence, self.n_trees_per_sequence, i)
+        self.training_graphs_ = [SpanningTrees(sequence, self.n_trees_per_sequence, i + self.random_state)
                                  for i, sequence in enumerate(self.training_data_)]
 
         self.training_graphs_info_ = {}
@@ -482,7 +482,7 @@ class StructuredSVMSequencesFixedMS2SeqSpecCandDB(_StructuredSVM):
             Gs = SpanningTrees(sequence, self.n_trees_per_sequence)
 
         # Calculate the node- and edge-potentials
-        with sequence.candidates:
+        with sequence.candidates, self.training_data_.candidates:
             node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, Gs[0], loss_augmented)
 
             # Find the MAP estimate
@@ -539,7 +539,7 @@ class StructuredSVMSequencesFixedMS2SeqSpecCandDB(_StructuredSVM):
         """
         Wrapper needed to calculate the max-marginals in parallel using joblib.
         """
-        with sequence.candidates:
+        with sequence.candidates, self.training_data_.candidates:
             node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, G)
 
             # Calculate the max-marginals
@@ -552,7 +552,11 @@ class StructuredSVMSequencesFixedMS2SeqSpecCandDB(_StructuredSVM):
 
         :return: array-like, shape = (n_molecules, ), preference values for all molecules.
         """
-        I = self._I_jfeat_rsvm(Y)
+        try:
+            I = self._I_jfeat_rsvm(Y)
+        except MemoryError:
+            SSVM_LOGGER.info("Use large memory implementation of '_I_jfeat_rsvm'.")
+            I = self._I_jfeat_rsvm__FOR_LARGE_MEMORY(Y)
 
         # Note: L_i = |E_j|
         N = len(self.training_data_)
@@ -632,6 +636,36 @@ class StructuredSVMSequencesFixedMS2SeqSpecCandDB(_StructuredSVM):
         # C / N * < sign_delta , lambda_delta >, shape = (n_molecules, )
         return self.C * (sign_delta @ lambda_delta) / N
 
+    def _I_jfeat_rsvm__FOR_LARGE_MEMORY(self, Y: np.array) -> np.ndarray:
+        """
+        :param Y: array-like, shape = (n_molecules, n_features), molecular feature vectors to calculate the preference
+            values for.
+
+        :return: array-like, shape = (n_molecules, )
+        """
+        # Note: L_i = |E_j|
+        N = len(self.training_data_)
+
+        I_jfeat_rsvm = np.zeros(len(Y))
+
+        for j in range(N):
+            # List of the retention time differences for all examples j over the spanning trees
+            sign_delta_j = self.training_data_[j].get_sign_delta_t(self.training_graphs_[j][0])  # shape = (|E_j|, )
+
+            # List of the ground truth molecular structures for all examples j
+            l_Y_gt_sequence_j = self._get_molecule_features_for_labels(
+                self.training_data_[j], self.mol_feat_retention_order
+            )  # shape = (|E_j|, n_features)
+
+            lambda_delta_j = self._get_lambda_delta(
+                l_Y_gt_sequence_j, Y, self.training_graphs_[j][0], self.mol_kernel
+            )  # shape = (|E_j|, n_mol), with n_mol = Y.shape[0]
+
+            I_jfeat_rsvm += (sign_delta_j @ lambda_delta_j)
+
+        # C / N * < sign_delta , lambda_delta >, shape = (n_molecules, )
+        return self.C * I_jfeat_rsvm / N
+
     def _get_node_and_edge_potentials(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph,
                                       loss_augmented: bool = False) -> Tuple[OrderedDict, OrderedDict]:
         """
@@ -697,8 +731,7 @@ class StructuredSVMSequencesFixedMS2SeqSpecCandDB(_StructuredSVM):
         pref_scores = self.predict_molecule_preference_values(np.vstack(l_Y))
 
         # Get a map from the node to the corresponding candidate feature vector indices
-        cs_n_Y = np.cumsum([0] + [len(Y) for Y in l_Y])
-        node_2_idc = [slice(cs_n_Y[l], cs_n_Y[l + 1]) for l in range(len(l_Y))]
+        node_2_idc = item_2_idc(l_Y)
 
         # Calculate the edge potentials
         edge_potentials = OrderedDict()
@@ -852,7 +885,7 @@ class StructuredSVMSequencesFixedMS2SeqSpecCandDB(_StructuredSVM):
 
         :return: scalar, cindex
         """
-        with sequence.candidates:
+        with sequence.candidates, self.training_data_.candidates:
             # Predict preference scores for the ground truth labels
             pref_score = self.predict_molecule_preference_values(
                 sequence.get_molecule_features_for_labels(self.mol_feat_retention_order))
@@ -896,7 +929,7 @@ class StructuredSVMSequencesFixedMS2SeqSpecCandDB(_StructuredSVM):
         # Calculate the marginals
         marginals = self.predict(sequence, Gs=Gs, map=False, n_jobs=n_jobs_for_trees)
 
-        return self._topk_score(sequence, marginals, return_percentage, max_k, pad_output, topk_method)
+        return self._topk_score(marginals, sequence, return_percentage, max_k, pad_output, topk_method)
 
     def top1_score(self, sequence: LabeledSequence, Gs: Optional[SpanningTrees] = None, map: bool = False) -> float:
         """
@@ -1147,8 +1180,8 @@ class StructuredSVMSequencesFixedMS2SeqSpecCandDB(_StructuredSVM):
     # ================
     @staticmethod
     def _topk_score(
-            sequence: LabeledSequence,
             marginals: Union[Tuple[str, ...], Dict[int, Dict[str, Union[int, np.ndarray, List[str]]]]],
+            sequence: Optional[LabeledSequence] = None,
             return_percentage: bool = True,
             max_k: Optional[int] = None,
             pad_output: bool = False,
@@ -1159,9 +1192,11 @@ class StructuredSVMSequencesFixedMS2SeqSpecCandDB(_StructuredSVM):
         TODO: For sklearn compatibility we need to separate the sequence data from the labels.
         TODO: Add a logger event here.
 
-        :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
-
         :param marginals: Dictionary, pre-computed candidate marginals for the given sequence
+
+        :param sequence: LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets. The sequences is
+            used to determine the index of the correct candidate structure in the marginals. If None, it is assumed
+            that the marginals dictionary already contains that information ('index_of_correct_structure').
 
         :param return_percentage: boolean, indicating whether the percentage of correctly ranked candidates in top-k
             should be returned (True) or the absolute number (False).
@@ -1179,7 +1214,11 @@ class StructuredSVMSequencesFixedMS2SeqSpecCandDB(_StructuredSVM):
         # Need to find the index of the correct label / molecular structure in the candidate sets to determine the top-k
         # accuracy.
         for s in marginals:
-            marginals[s]["index_of_correct_structure"] = marginals[s]["label"].index(sequence.get_labels(s))
+            if "index_of_correct_structure" not in marginals[s]:
+                if sequence is None:
+                    raise ValueError("Cannot determine the index of the correct structure without labelled sequence.")
+
+                marginals[s]["index_of_correct_structure"] = marginals[s]["label"].index(sequence.get_labels(s))
 
         # Calculate the top-k performance
         if topk_method.lower().startswith("casmi"):
@@ -1249,6 +1288,10 @@ class StructuredSVMSequencesFixedMS2SeqSpecCandDB(_StructuredSVM):
             return generalized_tanimoto_kernel_FAST
         elif mol_kernel == "minmax_numba":
             return _min_max_dense_jit
+        elif mol_kernel == "minmax_ufunc":
+            return _min_max_dense_ufunc
+        elif mol_kernel == "minmax_ufunc_int":
+            return _min_max_dense_ufunc_int
         else:
             raise ValueError("Invalid molecule kernel")
 
