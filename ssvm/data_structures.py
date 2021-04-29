@@ -674,14 +674,15 @@ class ABCCandSQLiteDB_Bach2020(ABCCandSQLiteDB):
         # Set up an output array
         n = len(data)
         d = self._get_d_feature(features)
-        X = np.zeros((n, d))
 
         if features in ["substructure_count", "iokr_fps__count"]:
+            X = np.zeros((n, d), dtype=int)
             for i, row in enumerate(data):
                 for _fp_str in row.split(","):
                     _idx, _cnt = _fp_str.split(":")
                     X[i, int(_idx)] = int(_cnt)
         else:
+            X = np.zeros((n, d), dtype=int)
             for i, row in enumerate(data):
                 _ids = list(map(int, row.split(",")))
                 X[i, _ids] = 1
