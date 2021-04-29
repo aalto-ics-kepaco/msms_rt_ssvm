@@ -29,6 +29,7 @@ import scipy.sparse as sp
 import itertools as it
 
 from numba import jit, prange, guvectorize, float64, int64
+from numba.typed import Dict as NumbaDict
 from sklearn.metrics.pairwise import manhattan_distances, pairwise_distances
 from joblib import delayed, Parallel
 from scipy.spatial._distance_wrap import cdist_cityblock_double_wrap
@@ -345,6 +346,43 @@ def _minmax_jit(X, Y, n_Y):
 # ---------------------------
 
 
+def _minmax_dict(l_dx, l_dy, n_jobs=1):
+    res = Parallel(n_jobs=n_jobs, backend="threading")(
+        delayed(_minmax_dict_jit)(dx, dy)
+        for dx, dy in it.product(l_dx, l_dy)
+    )
+    return np.reshape(res, (len(l_dx), len(l_dy)))
+
+
+@jit(nogil=True, nopython=True)
+def _minmax_dict_jit(dx: NumbaDict, dy: NumbaDict):
+    min = 0.0
+    max = 0.0
+
+    # for k in (set(dx.keys()) | set(dy.keys())):
+    #     try:
+    #         vx = dx[k]
+    #     except:
+    #         vx = 0
+    #
+    #     try:
+    #         vy = dy[k]
+    #     except:
+    #         vy = 0
+    #
+    #     min += np.minimum(vx, vy)
+    #     max += np.maximum(vx, vy)
+
+    for k, v in dx.items():
+
+        min += np.minimum(v, 0)
+        max += np.maximum(v, 0)
+
+
+    return min / max
+
+
+
 def run_time__practical_dimensions():
     n_rep = 25
 
@@ -448,6 +486,34 @@ def _run_time(n_A, n_B, d, n_rep):
     return df
 
 
+def _run_time_array_vs_dict(n_A, n_B, d, zero_frac, n_rep):
+    # Create random data
+    X_A = np.random.RandomState(5943).randint(1, 24, size=(n_A, d))
+    X_B = np.random.RandomState(842).randint(1, 24, size=(n_B, d))
+
+    # Set some of the data to zero
+    for i in range(n_A):
+        X_A[i, np.random.RandomState(i).permutation(np.arange(d))[:int(d * zero_frac)]] = 0
+
+    for i in range(n_B):
+        X_B[i, np.random.RandomState(i + n_A).permutation(np.arange(d))[:int(d * zero_frac)]] = 0
+
+    # Convert arrays into Numba dictionaries
+
+    l_D_A = [NumbaDict.empty(key_type=int64, value_type=int64) for _ in range(n_A)]
+    for i in range(n_A):
+        for k, v in enumerate(X_A[i]):
+            if v > 0:
+                l_D_A[i][k] = v
+
+    print(_minmax_dict_jit(l_D_A[0], l_D_A[1]))
+    print(_minmax_dict_jit(l_D_A[2], l_D_A[1]))
+
+    _minmax_dict(l_D_A, l_D_A, n_jobs=4)
+
+    # _minmax__ufunc(X_A, X_A)
+
+
 def profiling(fun, n_A=100, n_B=5000, d=307):
     X_A = np.random.RandomState(5943).randint(0, 200, size=(n_A, d))
     X_B = np.random.RandomState(842).randint(0, 200, size=(n_B, d))
@@ -462,4 +528,4 @@ if __name__ == "__main__":
     import time
     import pandas as pd
 
-    run_time__practical_dimensions()
+    _run_time_array_vs_dict(3000, 20, 7000, 0.7, 10)
