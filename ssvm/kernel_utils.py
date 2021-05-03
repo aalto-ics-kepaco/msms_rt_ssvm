@@ -223,6 +223,20 @@ def tanimoto_kernel(X, Y=None, shallow_input_check=True):
     return K_tan
 
 
+@jit(nopython=True, parallel=True)
+def tanimoto_kernel_FAST(X, Y):
+    """
+    Tanimoto kernel function
+    """
+    XY = X @ Y.T
+    XX = np.sum(X, axis=1).reshape(-1, 1)
+    YY = np.sum(Y, axis=1).reshape(-1, 1)
+
+    K_tan = XY / (XX + YY.T - XY)
+
+    return K_tan
+
+
 def generalized_tanimoto_kernel(X, Y=None, shallow_input_check=True, n_jobs=1):
     """
     Generalized tanimoto kernel function
@@ -320,6 +334,21 @@ def _minmax__ufunc(x, y, res):
 # ---------------------------
 
 
+@jit(nopython=True, nogil=True)
+def _minmax_nogil(X, Y):
+    XL1 = np.sum(X, axis=1).reshape(-1, 1)
+    YL1 = np.sum(Y, axis=1).reshape(1, -1)
+
+    XL1pYL1t = XL1 + YL1
+
+    XmYL1 = np.abs(np.reshape(X, (X.shape[0], 1, X.shape[1])) - np.reshape(Y, (1, Y.shape[0], Y.shape[1])))
+    XmYL1 = np.sum(XmYL1, axis=2)
+
+    K_mm = (XL1pYL1t - XmYL1) / (XL1pYL1t + XmYL1)
+
+    return K_mm
+
+
 def _min_max_dense_jit(X, Y):
     """
     MinMax-Kernel implementation for dense feature vectors using Jit
@@ -327,18 +356,20 @@ def _min_max_dense_jit(X, Y):
     return _minmax_jit(X, Y, len(Y))
 
 
+# @jit('float64[:,:](int64[:,:],int64[:,:],int64)', nopython=True, parallel=True)
 @jit(nopython=True, parallel=True)
 def _minmax_jit(X, Y, n_Y):
     XL1 = np.sum(X, axis=1).reshape(-1, 1)
-    YL1 = np.sum(Y, axis=1).reshape(-1, 1)
+    YL1 = np.sum(Y, axis=1).reshape(1, -1)
 
-    XL1pYL1t = XL1 + YL1.T
+    XL1pYL1t = XL1 + YL1
 
     XmYL1 = np.zeros_like(XL1pYL1t)
     for i in prange(n_Y):
         XmYL1[:, i] = np.sum(np.abs(X - Y[i]), axis=1)
 
-    K_mm = (XL1pYL1t - XmYL1) / (XL1pYL1t + XmYL1)
+    K_mm = (XL1pYL1t - XmYL1)
+    K_mm = K_mm / (XL1pYL1t + XmYL1)  # type: np.ndarray
 
     return K_mm
 
@@ -369,8 +400,7 @@ def run_time__practical_dimensions():
 def run_time():
     n_rep = 25
 
-    for n_A, n_B, d in [(100, 5000, 307), (1000, 1000, 307), (5000, 100, 307),
-                        (100, 5000, 5000), (1000, 1000, 5000), (5000, 100, 5000)]:
+    for n_A, n_B, d in [(16, 400, 7600), (160, 400, 7600), (1600, 400, 7600), (16000, 400, 7600)]:
         print(_run_time(n_A, n_B, d, n_rep))
 
 #              function  n_A   n_B    d      time
@@ -401,6 +431,41 @@ def run_time():
 # 3          minmax_jit  100  5000  5000   2.538056
 # 4        minmax_ufunc  100  5000  5000   1.632805
 
+#              function  n_A  n_B     d      time
+# 0  minmax_gentan_fast   16  400  7600  0.047978
+# 1          minmax_jit   16  400  7600  0.022564
+# 2    minmax_ufunc_int   16  400  7600  0.029898
+
+#              function  n_A  n_B     d      time
+# 0  minmax_gentan_fast  160  400  7600  0.392368
+# 1          minmax_jit  160  400  7600  0.600239
+# 2    minmax_ufunc_int  160  400  7600  0.296664
+
+#              function  n_A    n_B     d      time
+# 0  minmax_gentan_fast   16  30000  7600  3.782805
+# 1          minmax_jit   16  30000  7600  2.161236
+# 2    minmax_ufunc_int   16  30000  7600  2.370235
+
+#              function  n_A    n_B     d       time
+# 0  minmax_gentan_fast  160  30000  7600  29.436921
+# 1          minmax_jit  160  30000  7600  44.021622
+# 2    minmax_ufunc_int  160  30000  7600  23.798634
+
+#             function  n_A  n_B     d      time
+# 0  minmax_gentan_fast   16  400  7600  0.047792
+# 1          minmax_jit   16  400  7600  0.022469
+# 2    minmax_ufunc_int   16  400  7600  0.032123
+
+#              function  n_A  n_B     d      time
+# 0  minmax_gentan_fast  160  400  7600  0.386905
+# 1          minmax_jit  160  400  7600  0.568091
+# 2    minmax_ufunc_int  160  400  7600  0.286317
+
+#              function   n_A  n_B     d      time
+# 0  minmax_gentan_fast  1600  400  7600  3.856638
+# 1          minmax_jit  1600  400  7600  9.321267
+# 2    minmax_ufunc_int  1600  400  7600  3.158656
+
 
 def run_time_n_vs_m():
     n_rep = 25
@@ -413,14 +478,15 @@ def run_time_n_vs_m():
 
 def _run_time(n_A, n_B, d, n_rep):
     # Create random data
-    X_A = np.random.RandomState(5943).randint(0, 200, size=(n_A, d))
-    X_B = np.random.RandomState(842).randint(0, 200, size=(n_B, d))
+    X_A = np.random.RandomState(5943).randint(0, 200, size=(n_A, d), dtype=int)
+    X_B = np.random.RandomState(842).randint(0, 200, size=(n_B, d), dtype=int)
 
     # Define functions to test
     fun_list = [("minmax_jit", _min_max_dense_jit),
-                ("minmax_ufunc", _min_max_dense_ufunc),
-                ("minmax_dense", _min_max_dense),
-                ("minmax_gentan", generalized_tanimoto_kernel),
+                ("minmax_ufunc_int", _min_max_dense_ufunc_int),
+                # ("minmax__nogil", _minmax_nogil),
+                # ("minmax_dense", _min_max_dense),
+                # ("minmax_gentan", generalized_tanimoto_kernel),
                 ("minmax_gentan_fast", generalized_tanimoto_kernel_FAST)]
 
     # Compile using numba
@@ -458,8 +524,58 @@ def profiling(fun, n_A=100, n_B=5000, d=307):
         fun(X_A, X_B)
 
 
+def use_binary_encoding():
+    n_rep = 25
+
+    n_A = 160
+    n_B = 400
+
+    n_bins = 12
+    d = 307 * n_bins
+
+    X_A = (np.random.RandomState(93).rand(n_A, d) > 0.5).astype(float)
+    X_B = (np.random.RandomState(92).rand(n_B, d) > 0.5).astype(float)
+
+    # Define functions to test
+    fun_list = [
+        ("minmax_ufunc", _min_max_dense_ufunc),
+        ("minmax_gentan_fast", generalized_tanimoto_kernel_FAST),
+        ("tanimoto", tanimoto_kernel_FAST)
+    ]
+
+    # Compile using numba
+    K_ref = generalized_tanimoto_kernel_FAST(X_A, X_B)
+    print("Compile ... ", end="")
+    for fun_name, fun in fun_list:
+        print(fun_name, end="; ", flush=True)
+        np.testing.assert_allclose(K_ref, fun(X_A, X_B))
+    print()
+
+    # Run timing
+    df = []
+    for fun_name, fun in fun_list:
+        print("RUN - %s" % fun_name)
+        for _ in range(n_rep):
+            start = time.time()
+            fun(X_A, X_B)
+            df.append([fun_name, n_A, n_B, d, (time.time() - start)])
+
+    df = pd.DataFrame(df, columns=["function", "n_A", "n_B", "d", "time"]) \
+        .groupby(["function", "n_A", "n_B", "d"]) \
+        .aggregate(np.mean) \
+        .reset_index()
+
+    return df
+
+
+#              function  n_A  n_B      d      time
+# 0  minmax_gentan_fast  160  400  38000  1.952541
+# 1        minmax_ufunc  160  400  38000  1.564143
+# 2            tanimoto  160  400  38000  0.071877
+
+
 if __name__ == "__main__":
     import time
     import pandas as pd
 
-    run_time__practical_dimensions()
+    print(use_binary_encoding())
