@@ -31,7 +31,7 @@ from ssvm.feature_utils import CountingFpsBinarizer
 
 class TestCountingFpsBinarizer(unittest.TestCase):
     def setUp(self) -> None:
-        self.X = np.array(
+        self.X1 = np.array(
             [
                 [ 1,  0,  0,  3,  4,  1,  0],
                 [ 0,  0,  0,  0,  0,  0,  0],
@@ -40,11 +40,20 @@ class TestCountingFpsBinarizer(unittest.TestCase):
             ]
         )
 
-    def test_conversion(self):
-        trans = CountingFpsBinarizer(bins_centers=[1, 2, 3, 4, 8])
-        Z = trans.fit_transform(self.X)
+        self.X2 = np.array(
+            [
+                [1, 0, 0, 3, 4, 1, 0],
+                [0, 0, 0, 0, 0, 0, 0],
+                [1, 2, 2, 0, 4, 12, 12],
+                [0, 1, 2, 4, 0, 12, 5]
+            ]
+        )
 
-        self.assertEqual((len(self.X), self.X.shape[1] * 5), Z.shape)
+    def test_conversion(self):
+        trans = CountingFpsBinarizer(bin_centers=[1, 2, 3, 4, 8])
+        Z = trans.fit_transform(self.X1)
+
+        self.assertEqual((len(self.X1), self.X1.shape[1] * 5), Z.shape)
         np.testing.assert_array_equal(
             np.array(
                 [
@@ -58,11 +67,28 @@ class TestCountingFpsBinarizer(unittest.TestCase):
         )
 
     def test_edge_cases(self):
-        trans = CountingFpsBinarizer(bins_centers=[1])
-        Z = trans.fit_transform(self.X)
+        trans = CountingFpsBinarizer(bin_centers=[1])
+        Z = trans.fit_transform(self.X1)
 
-        self.assertEqual(self.X.shape, Z.shape)
-        np.testing.assert_array_equal(self.X > 0, Z)
+        self.assertEqual(self.X1.shape, Z.shape)
+        np.testing.assert_array_equal(self.X1 > 0, Z)
+
+    def test_compression(self):
+        trans = CountingFpsBinarizer(bin_centers=[1, 2, 3, 4, 8], compress=True)
+        Z = trans.fit_transform(self.X2)
+
+        self.assertEqual((len(self.X1), 1 + 2 + 2 + 4 + 4 + 5 + 5), Z.shape)
+        np.testing.assert_array_equal(
+            np.array(
+                [
+                    [1, 0, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                    [0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0]
+                ]
+            ),
+            Z
+        )
 
 
 if __name__ == '__main__':
