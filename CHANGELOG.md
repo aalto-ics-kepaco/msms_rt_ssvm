@@ -1,5 +1,26 @@
 # Version History
 
+## v1.1.0 (New feature)
+
+### Encoding of counting fingerprints as binary vectors
+
+- Feature transformer added to encode counting fingerprints as binary vectors
+- Counting values are converted (roughly) like: 5 --> 1 1 1 1 1 
+- Bin centers can be specified by the user defining which count is encoding separately
+  - e.g. bin-centers [1, 4, 5]: cnt_fp = [0, 1, 15, 4] --> bin_fp = [0, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1, 0]
+- depending on the bin-center definition the conversion is not loss-free in terms of molecule similarity 
+- tanimoto kernel can be used to compute molecule similarity
+
+### Faster Tanimoto Kernel using Numba
+
+- added numba jit-decorator to the tanimoto kernel --> huge speedup
+
+## v1.0.4 (Patch)
+
+Include the latest changes to the into the SSVM flavor using sequence specific candidate sets.
+
+- SSVM (sequence specific) updated with latest version of base SSVM class
+
 ## v1.0.3 (Patch)
 
 Small performance improvement for the MinMax kernel computation

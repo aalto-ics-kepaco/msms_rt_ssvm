@@ -31,7 +31,7 @@ import time
 
 from scipy.sparse import csr_matrix
 
-from ssvm.kernel_utils import minmax_kernel, tanimoto_kernel, check_input, _min_max_dense_ufunc
+from ssvm.kernel_utils import minmax_kernel, tanimoto_kernel, check_input, _min_max_dense_ufunc, tanimoto_kernel_FAST
 from ssvm.kernel_utils import generalized_tanimoto_kernel_OLD
 from ssvm.kernel_utils import generalized_tanimoto_kernel_FAST, generalized_tanimoto_kernel
 
@@ -570,51 +570,53 @@ class TestMinMaxKernelUfunc(unittest.TestCase):
 
 class TestTanimotoKernel(unittest.TestCase):
     def test_on_small_data(self):
-        X_A = np.array([[1, 1, 0], [0, 1, 1], [1, 0, 0]])
-        X_B = np.array([[1, 0, 1], [1, 1, 1], [0, 0, 0], [1, 1, 0]])
+        X_A = np.array([[1, 1, 0], [0, 1, 1], [1, 0, 0]], dtype=float)
+        X_B = np.array([[1, 0, 1], [1, 1, 1], [0, 0, 0], [1, 1, 0]], dtype=float)
 
-        # symmetric kernel
-        K = tanimoto_kernel(X_A)
-        np.testing.assert_equal(K.shape, (3, 3))
-        np.testing.assert_equal(np.diag(K), np.ones((3,)))
-        np.testing.assert_equal(K[0, 1], 1. / 3.)
-        np.testing.assert_equal(K[1, 0], 1. / 3.)
-        np.testing.assert_equal(K[0, 2], 1. / 2.)
-        np.testing.assert_equal(K[2, 0], 1. / 2.)
-        assert (np.max(K) <= 1.), "Kernel values must be <= 1"
-        assert (np.min(K) >= 0.), "Kernel values must be >= 0"
+        for fun in [tanimoto_kernel, tanimoto_kernel_FAST]:
+            # symmetric kernel
+            K = fun(X_A, X_A)
+            np.testing.assert_equal(K.shape, (3, 3))
+            np.testing.assert_equal(np.diag(K), np.ones((3,)))
+            np.testing.assert_equal(K[0, 1], 1. / 3.)
+            np.testing.assert_equal(K[1, 0], 1. / 3.)
+            np.testing.assert_equal(K[0, 2], 1. / 2.)
+            np.testing.assert_equal(K[2, 0], 1. / 2.)
+            assert (np.max(K) <= 1.), "Kernel values must be <= 1"
+            assert (np.min(K) >= 0.), "Kernel values must be >= 0"
 
-        # non-symmetric kernel
-        K = tanimoto_kernel(X_A, X_B)
-        np.testing.assert_equal(K.shape, (3, 4))
-        np.testing.assert_equal(K[0, 1], 2. / 3.)
-        np.testing.assert_equal(K[1, 0], 1. / 3.)
-        np.testing.assert_equal(K[0, 2], 0.)
-        np.testing.assert_equal(K[2, 0], 1. / 2.)
-        assert (np.max(K) <= 1.), "Kernel values must be <= 1"
-        assert (np.min(K) >= 0.), "Kernel values must be >= 0"
+            # non-symmetric kernel
+            K = fun(X_A, X_B)
+            np.testing.assert_equal(K.shape, (3, 4))
+            np.testing.assert_equal(K[0, 1], 2. / 3.)
+            np.testing.assert_equal(K[1, 0], 1. / 3.)
+            np.testing.assert_equal(K[0, 2], 0.)
+            np.testing.assert_equal(K[2, 0], 1. / 2.)
+            assert (np.max(K) <= 1.), "Kernel values must be <= 1"
+            assert (np.min(K) >= 0.), "Kernel values must be >= 0"
 
     def test_on_larger_random_data(self):
-        X_A = np.random.RandomState(493).randint(0, 2, size=(51, 32))
-        X_B = np.random.RandomState(493).randint(0, 2, size=(12, 32))
+        X_A = (np.random.RandomState(493).rand(51, 32) > 0.5).astype(float)
+        X_B = (np.random.RandomState(43).rand(12, 32) > 0.5).astype(float)
 
-        # symmetric kernel
-        K = tanimoto_kernel(X_A)
-        np.testing.assert_equal(K.shape, (51, 51))
-        np.testing.assert_equal(K[3, 6], _tanimoto_kernel_slow(X_A[3], X_A[6]))
-        np.testing.assert_equal(K[1, 1], _tanimoto_kernel_slow(X_A[1], X_A[1]))
-        np.testing.assert_equal(K[0, 9], _tanimoto_kernel_slow(X_A[0], X_A[9]))
-        np.testing.assert_equal(K[5, 10], _tanimoto_kernel_slow(X_A[5], X_A[10]))
-        np.testing.assert_equal(K[6, 3], K[3, 6])
-        np.testing.assert_equal(K[0, 9], K[9, 0])
-        np.testing.assert_equal(K[5, 10], K[10, 5])
-        np.testing.assert_equal(np.diag(K), np.ones((51,)))
+        for fun in [tanimoto_kernel, tanimoto_kernel_FAST]:
+            # symmetric kernel
+            K = fun(X_A, X_A)
+            np.testing.assert_equal(K.shape, (51, 51))
+            np.testing.assert_equal(K[3, 6], _tanimoto_kernel_slow(X_A[3], X_A[6]))
+            np.testing.assert_equal(K[1, 1], _tanimoto_kernel_slow(X_A[1], X_A[1]))
+            np.testing.assert_equal(K[0, 9], _tanimoto_kernel_slow(X_A[0], X_A[9]))
+            np.testing.assert_equal(K[5, 10], _tanimoto_kernel_slow(X_A[5], X_A[10]))
+            np.testing.assert_equal(K[6, 3], K[3, 6])
+            np.testing.assert_equal(K[0, 9], K[9, 0])
+            np.testing.assert_equal(K[5, 10], K[10, 5])
+            np.testing.assert_equal(np.diag(K), np.ones((51,)))
 
-        # non-symmetric kernel
-        K = tanimoto_kernel(X_A, X_B)
-        np.testing.assert_equal(K.shape, (51, 12))
-        np.testing.assert_equal(K[3, 6], _tanimoto_kernel_slow(X_A[3], X_B[6]))
-        np.testing.assert_equal(K[1, 1], _tanimoto_kernel_slow(X_A[1], X_B[1]))
+            # non-symmetric kernel
+            K = fun(X_A, X_B)
+            np.testing.assert_equal(K.shape, (51, 12))
+            np.testing.assert_equal(K[3, 6], _tanimoto_kernel_slow(X_A[3], X_B[6]))
+            np.testing.assert_equal(K[1, 1], _tanimoto_kernel_slow(X_A[1], X_B[1]))
 
     def test_compatibility_with_sparse_matrix(self):
         X_A = csr_matrix(np.array([[1, 1, 0], [0, 1, 1], [1, 0, 0]]))
