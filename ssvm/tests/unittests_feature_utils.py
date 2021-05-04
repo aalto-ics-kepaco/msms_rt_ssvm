@@ -53,10 +53,10 @@ class TestCountingFpsBinarizer(unittest.TestCase):
 
         self.X3 = np.random.RandomState(111).randint(0, 12, size=(22, 45))
 
-        self.X4 = np.random.RandomState(111).randint(0, 16, size=(30000, 307))
+        self.X4 = np.random.RandomState(111).randint(0, 16, size=(300000, 307))
 
     def test_conversion(self):
-        trans = CountingFpsBinarizer(bin_centers=[1, 2, 3, 4, 8])
+        trans = CountingFpsBinarizer(bin_centers=np.array([1, 2, 3, 4, 8]))
         Z = trans.fit_transform(self.X1)
 
         self.assertEqual((len(self.X1), self.X1.shape[1] * 5), Z.shape)
@@ -73,14 +73,14 @@ class TestCountingFpsBinarizer(unittest.TestCase):
         )
 
     def test_edge_cases(self):
-        trans = CountingFpsBinarizer(bin_centers=[1])
+        trans = CountingFpsBinarizer(bin_centers=np.array([1]))
         Z = trans.fit_transform(self.X1)
 
         self.assertEqual(self.X1.shape, Z.shape)
         np.testing.assert_array_equal(self.X1 > 0, Z)
 
     def test_compression(self):
-        trans = CountingFpsBinarizer(bin_centers=[1, 2, 3, 4, 8], compress=True)
+        trans = CountingFpsBinarizer(bin_centers=np.array([1, 2, 3, 4, 8]), compress=True)
         Z = trans.fit_transform(self.X2)
 
         self.assertEqual((len(self.X1), 1 + 2 + 2 + 4 + 4 + 5 + 5), Z.shape)
@@ -98,7 +98,7 @@ class TestCountingFpsBinarizer(unittest.TestCase):
 
     def test_binary_representation_equal_counting_in_edge_case(self):
         # Bin centers are defined as: [1, 2, ..., max_value]
-        trans = CountingFpsBinarizer(bin_centers=(np.arange(np.max(self.X3)) + 1).tolist())
+        trans = CountingFpsBinarizer(bin_centers=(np.arange(np.max(self.X3)) + 1))
         Z = trans.fit_transform(self.X3)
         print("[1, 2, ..., max_value]: \t", Z.shape)
 
@@ -106,7 +106,7 @@ class TestCountingFpsBinarizer(unittest.TestCase):
         np.testing.assert_array_equal(minmax_kernel(self.X3), tanimoto_kernel(Z))
 
         # Use compression
-        trans = CountingFpsBinarizer(bin_centers=(np.arange(np.max(self.X3)) + 1).tolist(), compress=True)
+        trans = CountingFpsBinarizer(bin_centers=(np.arange(np.max(self.X3)) + 1), compress=True)
         Z_cpr = trans.fit_transform(self.X3)
         print("With compression: \t\t\t", Z_cpr.shape)
 
@@ -114,7 +114,7 @@ class TestCountingFpsBinarizer(unittest.TestCase):
         np.testing.assert_array_equal(tanimoto_kernel(Z), tanimoto_kernel(Z_cpr))
 
         # Pass in max-values per column
-        _bin_centers = [(np.arange(np.max(self.X3[:, d])) + 1).tolist() for d in range(self.X3.shape[1])]
+        _bin_centers = [np.arange(np.max(self.X3[:, d])) + 1 for d in range(self.X3.shape[1])]
         trans = CountingFpsBinarizer(bin_centers=_bin_centers)
         Z_max = trans.fit_transform(self.X3)
         print("With max-values: \t\t\t", Z_max.shape)
@@ -123,11 +123,13 @@ class TestCountingFpsBinarizer(unittest.TestCase):
         np.testing.assert_array_equal(tanimoto_kernel(Z), tanimoto_kernel(Z_max))
 
     def test_run_time(self):
-        trans = CountingFpsBinarizer(bin_centers=(np.arange(np.max(self.X3)) + 1).tolist(), compress=True)
+        self.skipTest("Only needed for run-time performance evaluation.")
+
+        trans = CountingFpsBinarizer(bin_centers=(np.arange(np.max(self.X4)) + 1), compress=True)
 
         s = time.time()
         Z = trans.fit_transform(self.X4)
-        print("%.3fs" % (time.time() - s))  # 32s
+        print("%.3fs" % (time.time() - s))  # 2s
 
 
 if __name__ == '__main__':
