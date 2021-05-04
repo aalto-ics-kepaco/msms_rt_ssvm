@@ -33,7 +33,49 @@ from numba.typed import List as NumbaList
 
 
 class CountingFpsBinarizer(TransformerMixin):
+    """
+    Feature transformer to convert counting fingerprints to binary vectors, like:
+
+        bin-centers [1, 4, 5]: cnt_fp = [0, 1, 15, 4] -> bin_fp = [0, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1, 0]
+
+    The len of the bin-centers defines the number of bits per input feature dimension. If the count is zero, all bits
+    will be set to zero, i.e. 0 -> 0, 0, 0. For values greater zero the conversion works like:
+
+        - 1 -> 1, 0, 0
+        - 2 -> 1, 0, 0
+        - 3 -> 1, 0, 0
+        - 4 -> 1, 1, 0
+        - 5 -> 1, 1, 1
+        - 6 -> 1, 1, 1
+        ...
+
+    This kind of feature conversion allows to use the the Tanimoto kernel to (approximately) calculate the
+    minmax-similarity between molecules represented with counting vectors.
+    """
     def __init__(self, bin_centers: Union[np.ndarray, List[np.ndarray]], compress: bool = False):
+        """
+        Constructor
+
+        :param bin_centers: List of array-like | array-like, thresholds at which a one will be added to the encoding.
+            Those thresholds can be specific for each feature dimension (List of array-like). This parameter is better
+            understood by presenting an example:
+
+            bin-centers [1, 4, 5]: cnt_fp = [0, 1, 15, 4] -> bin_fp = [0, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1, 0]
+
+            If the count is zero, all bits will be set to zero, i.e. 0 -> 0, 0, 0. For values greater zero the
+            conversion works like:
+
+                - 1 -> 1, 0, 0
+                - 2 -> 1, 0, 0
+                - 3 -> 1, 0, 0
+                - 4 -> 1, 1, 0
+                - 5 -> 1, 1, 1
+                - 6 -> 1, 1, 1
+                ...
+
+        :param compress: boolean, indicating whether thresholds are limited to the maximum value in each feature
+            dimension. This can shorten the length of the output feature vectors.
+        """
         self.bin_centers = bin_centers
         self.compress = compress
 
@@ -48,6 +90,11 @@ class CountingFpsBinarizer(TransformerMixin):
         # Convert the list into a Numba list to suppress Numba warnings about deprecated data types.
         if isinstance(self.bin_centers, list):
             assert isinstance(self.bin_centers[0], np.ndarray)
+
+            if len(self.bin_centers) != X.shape[1]:
+                raise ValueError("If list of bin-centers is provided, its length must be equal to the number of "
+                                 "features.")
+
             _bin_centers = NumbaList()
             for d in range(X.shape[1]):
                 _bin_centers.append(self.bin_centers[d].astype(X.dtype))
