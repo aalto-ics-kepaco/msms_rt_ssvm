@@ -23,9 +23,11 @@
 # SOFTWARE.
 #
 ####
+import time
 import unittest
 import numpy as np
 
+from ssvm.kernel_utils import minmax_kernel, tanimoto_kernel
 from ssvm.feature_utils import CountingFpsBinarizer
 
 
@@ -48,6 +50,10 @@ class TestCountingFpsBinarizer(unittest.TestCase):
                 [0, 1, 2, 4, 0, 12, 5]
             ]
         )
+
+        self.X3 = np.random.RandomState(111).randint(0, 12, size=(22, 45))
+
+        self.X4 = np.random.RandomState(111).randint(0, 16, size=(30000, 307))
 
     def test_conversion(self):
         trans = CountingFpsBinarizer(bin_centers=[1, 2, 3, 4, 8])
@@ -89,6 +95,39 @@ class TestCountingFpsBinarizer(unittest.TestCase):
             ),
             Z
         )
+
+    def test_binary_representation_equal_counting_in_edge_case(self):
+        # Bin centers are defined as: [1, 2, ..., max_value]
+        trans = CountingFpsBinarizer(bin_centers=(np.arange(np.max(self.X3)) + 1).tolist())
+        Z = trans.fit_transform(self.X3)
+        print("[1, 2, ..., max_value]: \t", Z.shape)
+
+        self.assertEqual((len(self.X3), self.X3.shape[1] * np.max(self.X3)), Z.shape)
+        np.testing.assert_array_equal(minmax_kernel(self.X3), tanimoto_kernel(Z))
+
+        # Use compression
+        trans = CountingFpsBinarizer(bin_centers=(np.arange(np.max(self.X3)) + 1).tolist(), compress=True)
+        Z_cpr = trans.fit_transform(self.X3)
+        print("With compression: \t\t\t", Z_cpr.shape)
+
+        self.assertEqual((len(self.X3), np.sum(np.max(self.X3, axis=0))), Z_cpr.shape)
+        np.testing.assert_array_equal(tanimoto_kernel(Z), tanimoto_kernel(Z_cpr))
+
+        # Pass in max-values per column
+        _bin_centers = [(np.arange(np.max(self.X3[:, d])) + 1).tolist() for d in range(self.X3.shape[1])]
+        trans = CountingFpsBinarizer(bin_centers=_bin_centers)
+        Z_max = trans.fit_transform(self.X3)
+        print("With max-values: \t\t\t", Z_max.shape)
+
+        self.assertEqual((len(self.X3), np.sum(np.max(self.X3, axis=0))), Z_max.shape)
+        np.testing.assert_array_equal(tanimoto_kernel(Z), tanimoto_kernel(Z_max))
+
+    def test_run_time(self):
+        trans = CountingFpsBinarizer(bin_centers=(np.arange(np.max(self.X3)) + 1).tolist(), compress=True)
+
+        s = time.time()
+        Z = trans.fit_transform(self.X4)
+        print("%.3fs" % (time.time() - s))  # 32s
 
 
 if __name__ == '__main__':

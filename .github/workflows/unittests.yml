@@ -66,4 +66,5 @@ jobs:
           python -m unittest -v unittests_kernel_utils.py
           python -m unittest -v unittests_loss_functions.py
           python -m unittest -v unittests_utils.py
+          python -m unittest -v unittests_feature_utils.py
       # -----------------

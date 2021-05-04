@@ -31,24 +31,35 @@ from sklearn.utils.validation import check_is_fitted
 
 
 class CountingFpsBinarizer(TransformerMixin):
-    def __init__(self, bin_centers: Union[np.ndarray, List[int]], compress: bool = False):
+    def __init__(self, bin_centers: Union[List[int], List[List[int]]], compress: bool = False):
         self.bin_centers = bin_centers
         self.compress = compress
 
+        if not isinstance(self.bin_centers, list):
+            raise TypeError(
+                "Bin-centers must be provided as list. Object of type {} passed in.".format(type(self.bin_centers))
+            )
+
+        if not(isinstance(self.bin_centers[0], list) or np.isscalar(self.bin_centers[0])):
+            raise TypeError(
+                "Individual bin-centers must be either a list or scalar. Type {} passed in."
+                .format(type(self.bin_centers[0]))
+            )
+
     def fit(self, X: np.ndarray, y: Optional[np.ndarray] = None, **fit_params):
-        self.n_bins_ = len(self.bin_centers)
+        if not isinstance(self.bin_centers[0], list):
+            self.bin_centers = [self.bin_centers for _ in range(X.shape[1])]
 
         if self.compress:
             max_val_per_feature = np.max(X, axis=0)
-            self.bin_centers_list_ = [
+            self.bin_centers = [
                 [
-                    v for v in self.bin_centers if v <= max_val_per_feature[d]
+                    v for v in self.bin_centers[d] if v <= max_val_per_feature[d]
                 ]
                 for d in range(X.shape[1])
             ]
-            self.d_out_ = sum(map(len, self.bin_centers_list_))
-        else:
-            self.d_out_ = X.shape[1] * len(self.bin_centers)
+
+        self.d_out_ = sum(map(len, self.bin_centers))
 
         return self
 
@@ -56,32 +67,20 @@ class CountingFpsBinarizer(TransformerMixin):
         Z = np.zeros((len(X), self.d_out_))
 
         if self.compress:
-            check_is_fitted(self, "bin_centers_list_")
-            for i in range(len(X)):
-                e = 0
-                for d in range(len(X[i])):
-                    v = X[i, d]
-                    if v > 0:
-                        for t in self.bin_centers_list_[d]:
-                            if v >= t:
-                                Z[i, e] = 1
+            check_is_fitted(self, ["d_out_"])
 
-                            e += 1
-                    else:
-                        e += len(self.bin_centers_list_[d])
-        else:
-            for i in range(len(X)):
-                e = 0
-                for d in range(len(X[i])):
-                    v = X[i, d]
-                    if v > 0:
-                        for t in self.bin_centers:
-                            if v >= t:
-                                Z[i, e] = 1
+        for i in range(len(X)):
+            e = 0
+            for d in range(len(X[i])):
+                v = X[i, d]
+                if v > 0:
+                    for c in self.bin_centers[d]:
+                        if v >= c:
+                            Z[i, e] = 1
 
-                            e += 1
-                    else:
-                        e += self.n_bins_
+                        e += 1
+                else:
+                    e += len(self.bin_centers[d])
 
         return Z
 
