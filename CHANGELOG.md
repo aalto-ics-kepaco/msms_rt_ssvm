@@ -1,5 +1,9 @@
 # Version History
 
+## v1.1.1 (Minor improvement)
+
+- Binary feature transformer can now also filter empty feature dimension
+
 ## v1.1.0 (New feature)
 
 ### Encoding of counting fingerprints as binary vectors

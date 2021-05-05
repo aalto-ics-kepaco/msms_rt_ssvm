@@ -26,13 +26,14 @@
 import numpy as np
 
 from typing import Union, List, Optional
-from sklearn.base import TransformerMixin
+from sklearn.base import TransformerMixin, BaseEstimator
 from sklearn.utils.validation import check_is_fitted
+from sklearn.feature_selection import VarianceThreshold
 from numba import jit, prange
 from numba.typed import List as NumbaList
 
 
-class CountingFpsBinarizer(TransformerMixin):
+class CountingFpsBinarizer(TransformerMixin, BaseEstimator):
     """
     Feature transformer to convert counting fingerprints to binary vectors, like:
 
@@ -52,7 +53,8 @@ class CountingFpsBinarizer(TransformerMixin):
     This kind of feature conversion allows to use the the Tanimoto kernel to (approximately) calculate the
     minmax-similarity between molecules represented with counting vectors.
     """
-    def __init__(self, bin_centers: Union[np.ndarray, List[np.ndarray]], compress: bool = False):
+    def __init__(self, bin_centers: Union[np.ndarray, List[np.ndarray]], compress: bool = False,
+                 remove_constant_features: bool = False):
         """
         Constructor
 
@@ -75,9 +77,13 @@ class CountingFpsBinarizer(TransformerMixin):
 
         :param compress: boolean, indicating whether thresholds are limited to the maximum value in each feature
             dimension. This can shorten the length of the output feature vectors.
+
+        :param remove_constant_features: boolean, indicating whether constant feature dimensions (along axis=0) should
+            be removed.
         """
         self.bin_centers = bin_centers
         self.compress = compress
+        self.remove_constant_features = remove_constant_features
 
         if not isinstance(self.bin_centers, np.ndarray) and \
                 not (isinstance(self.bin_centers, list) and isinstance(self.bin_centers[0], np.ndarray)):
@@ -87,40 +93,57 @@ class CountingFpsBinarizer(TransformerMixin):
             )
 
     def fit(self, X: np.ndarray, y: Optional[np.ndarray] = None, **fit_params):
-        # Convert the list into a Numba list to suppress Numba warnings about deprecated data types.
+        """
+        Fit the binary encoding.
+        """
         if isinstance(self.bin_centers, list):
-            assert isinstance(self.bin_centers[0], np.ndarray)
-
             if len(self.bin_centers) != X.shape[1]:
-                raise ValueError("If list of bin-centers is provided, its length must be equal to the number of "
-                                 "features.")
-
-            _bin_centers = NumbaList()
-            for d in range(X.shape[1]):
-                _bin_centers.append(self.bin_centers[d].astype(X.dtype))
-            self.bin_centers = _bin_centers
+                raise ValueError(
+                    "If a list of bin-centers is provided, its length must be equal to the number of features."
+                )
         else:
-            assert isinstance(self.bin_centers, np.ndarray)
-            _bin_centers = NumbaList()
-            for _ in range(X.shape[1]):
-                _bin_centers.append(np.array(self.bin_centers, dtype=X.dtype))
-            self.bin_centers = _bin_centers
+            # Repeat the bin-centers for all feature dimensions
+            self.bin_centers = [np.array(self.bin_centers, dtype=X.dtype) for _ in range(X.shape[1])]
 
+        # Fit a variance threshold feature selector to remove constant feature dimensions
+        if self.remove_constant_features:
+            self.feature_remover_ = VarianceThreshold().fit(X)  # type: VarianceThreshold
+
+            # Remove constant feature dimensions from the data
+            X = self.feature_remover_.transform(X)
+
+            # Remove corresponding bin-centers
+            _mask = self.feature_remover_._get_support_mask()  # type: np.ndarray
+            self.bin_centers = [self.bin_centers[d] for d in range(len(self.bin_centers)) if _mask[d]]
+
+            assert len(self.bin_centers) == X.shape[1]
+
+        # Restrict the binary encoding for each dimension to the maximum value in this dimension, that can shorten
+        # the binary representations significantly
         if self.compress:
             max_val_per_feature = np.max(X, axis=0)
-            _bin_centers = NumbaList()
-            for d in range(X.shape[1]):
-                _bin_centers.append(
-                    np.array([v for v in self.bin_centers[d] if v <= max_val_per_feature[d]], dtype=X.dtype)
-                )
-            self.bin_centers = _bin_centers
+            self.bin_centers = [
+                np.array([v for v in self.bin_centers[d] if v <= max_val_per_feature[d]], dtype=X.dtype)
+                for d in range(X.shape[1])
+            ]
 
+        # Convert the list into a Numba list to suppress Numba warnings about deprecated data types.
+        _bin_centers = NumbaList()
+        for bc in self.bin_centers:
+            _bin_centers.append(bc.astype(X.dtype))  # elements should have same data-type as X
+        self.bin_centers = _bin_centers
+
+        # Determine the final output dimension of the binary encoding
         self.d_out_ = sum(map(len, self.bin_centers))
 
         return self
 
     def transform(self, X: np.ndarray, y: Optional[np.ndarray] = None) -> np.ndarray:
         check_is_fitted(self, ["d_out_"])
+
+        if self.remove_constant_features:
+            check_is_fitted(self, ["feature_remover_"])
+            X = self.feature_remover_.transform(X)
 
         return self._transform(X, self.bin_centers, self.d_out_, len(X))
 

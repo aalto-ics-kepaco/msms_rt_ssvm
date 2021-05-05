@@ -35,10 +35,10 @@ class TestCountingFpsBinarizer(unittest.TestCase):
     def setUp(self) -> None:
         self.X1 = np.array(
             [
-                [ 1,  0,  0,  3,  4,  1,  0],
-                [ 0,  0,  0,  0,  0,  0,  0],
+                [1, 0, 0, 3, 4, 1, 0],
+                [0, 0, 0, 0, 0, 0, 0],
                 [12, 12, 12, 12, 12, 12, 12],
-                [ 0,  1,  2,  4,  0, 12,  5]
+                [0, 1, 2, 4, 0, 12, 5]
             ]
         )
 
@@ -54,6 +54,15 @@ class TestCountingFpsBinarizer(unittest.TestCase):
         self.X3 = np.random.RandomState(111).randint(0, 12, size=(22, 45))
 
         self.X4 = np.random.RandomState(111).randint(0, 16, size=(300000, 307))
+
+        self.X5 = np.array(
+            [
+                [1, 1, 0, 3, 4, 1, 0],
+                [0, 1, 0, 0, 0, 0, 0],
+                [1, 1, 2, 0, 4, 5, 0],
+                [0, 1, 2, 4, 0, 5, 0]
+            ]
+        )
 
     def test_conversion(self):
         trans = CountingFpsBinarizer(bin_centers=np.array([1, 2, 3, 4, 8]))
@@ -91,6 +100,66 @@ class TestCountingFpsBinarizer(unittest.TestCase):
                     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
                     [1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
                     [0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0]
+                ]
+            ),
+            Z
+        )
+
+    def test_removing_constant_features(self):
+        trans = CountingFpsBinarizer(bin_centers=np.arange(np.max(self.X5)) + 1, remove_constant_features=True)
+        Z = trans.fit_transform(self.X5)
+
+        self.assertEqual((len(self.X5), (self.X5.shape[1] - 2) * np.max(self.X5)), Z.shape)
+        np.testing.assert_array_equal(
+            np.array(
+                [
+                    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 1, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1],
+                    [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1]
+                ]
+            ),
+            Z
+        )
+
+        # Are bin-centers correctly removed?
+        bin_centers = [
+            np.array([1, 2]),
+            np.array([1]),  # should be removed
+            np.array([1, 2, 3, 4, 5]),
+            np.array([1, 2, 3, 4, 5]),
+            np.array([1, 2, 3, 4, 5, 10]),
+            np.array([2, 4, 8]),
+            np.array([3, 5])  # should be removed
+        ]
+        trans = CountingFpsBinarizer(bin_centers=bin_centers, remove_constant_features=True)
+        Z = trans.fit_transform(self.X5)
+
+        self.assertEqual((len(self.X5), 2 + 5 + 5 + 6 + 3), Z.shape)
+        np.testing.assert_array_equal(
+            np.array(
+                [
+                    [1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 0],
+                    [0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0],
+                ]
+            ),
+            Z
+        )
+
+        # Now also with compression
+        trans = CountingFpsBinarizer(bin_centers=bin_centers, remove_constant_features=True, compress=True)
+        Z = trans.fit_transform(self.X5)
+
+        self.assertEqual((len(self.X5), 1 + 2 + 4 + 4 + 2), Z.shape)
+        np.testing.assert_array_equal(
+            np.array(
+                [
+                    [1, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 0, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1],
+                    [0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1],
                 ]
             ),
             Z
