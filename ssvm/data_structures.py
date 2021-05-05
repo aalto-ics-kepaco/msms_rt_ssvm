@@ -249,13 +249,23 @@ class CandidateSQLiteDB(object):
         """
         return None
 
+    def _get_feature_meta_data(self, feature: str) -> Tuple[int, str]:
+        """
+        :param feature: string, identifier of the requested molecule feature.
+
+        :return: Tuple = (scalar, string), dimensionality of the feature and feature mode
+        """
+        return self.db.execute(
+            "SELECT length, mode FROM fingerprints_meta WHERE name IS '%s'" % (feature, )
+        ).fetchone()
+
     def _get_feature_dimension(self, feature: str) -> int:
         """
         :param feature: string, identifier of the requested molecule feature.
 
         :return: scalar, dimensionality of the feature
         """
-        return self.db.execute("SELECT length FROM fingerprints_meta WHERE name IS '%s'" % (feature,)).fetchall()[0][0]
+        return self.db.execute("SELECT length FROM fingerprints_meta WHERE name IS '%s'" % (feature, )).fetchone()[0]
 
     def _ensure_feature_is_available(self, feature: str) -> None:
         """
@@ -297,19 +307,21 @@ class CandidateSQLiteDB(object):
         """
         # Set up an output array
         n = len(data)
-        d = self._get_feature_dimension(features)
+        d, mode = self._get_feature_meta_data(features)
 
-        if features in ["substructure_count", "iokr_fps__count"]:
+        if mode == "count":
             X = np.zeros((n, d), dtype=int)
             for i, row in enumerate(data):
                 for _fp_str in row.split(","):
                     _idx, _cnt = _fp_str.split(":")
                     X[i, int(_idx)] = int(_cnt)
-        else:
+        elif mode in ["binary", "binarized"]:
             X = np.zeros((n, d), dtype=int)
             for i, row in enumerate(data):
                 _ids = list(map(int, row.split(",")))
                 X[i, _ids] = 1
+        else:
+            raise ValueError("Invalid fingerprint mode: %s" % mode)
 
         return X
 

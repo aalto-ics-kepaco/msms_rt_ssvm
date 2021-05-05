@@ -1,5 +1,10 @@
 # Version History
 
+## v1.1.3 (Patch)
+
+- Candidate DB wrapper is now compatible with the binarized features (via feature transformation)
+- How to parse the fingerprint strings is now determined from the fingerprint mode in the DB
+
 ## v1.1.2 (Minor improvement)
 
 - Binary feature transformer implements ```__len__```
