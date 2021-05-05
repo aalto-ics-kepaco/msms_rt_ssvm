@@ -28,7 +28,6 @@ import numpy as np
 from typing import Union, List, Optional
 from sklearn.base import TransformerMixin, BaseEstimator
 from sklearn.utils.validation import check_is_fitted
-from sklearn.feature_selection import VarianceThreshold
 from numba import jit, prange
 from numba.typed import List as NumbaList
 
@@ -107,14 +106,13 @@ class CountingFpsBinarizer(TransformerMixin, BaseEstimator):
 
         # Fit a variance threshold feature selector to remove constant feature dimensions
         if self.remove_constant_features:
-            self.feature_remover_ = VarianceThreshold().fit(X)  # type: VarianceThreshold
+            self.d_mask_ = np.ptp(X, axis=0) > 0
 
             # Remove constant feature dimensions from the data
-            X = self.feature_remover_.transform(X)
+            X = X[:, self.d_mask_]
 
             # Remove corresponding bin-centers
-            _mask = self.feature_remover_._get_support_mask()  # type: np.ndarray
-            self.bin_centers = [self.bin_centers[d] for d in range(len(self.bin_centers)) if _mask[d]]
+            self.bin_centers = [self.bin_centers[d] for d in range(len(self.bin_centers)) if self.d_mask_[d]]
 
             assert len(self.bin_centers) == X.shape[1]
 
@@ -142,8 +140,8 @@ class CountingFpsBinarizer(TransformerMixin, BaseEstimator):
         check_is_fitted(self, ["d_out_"])
 
         if self.remove_constant_features:
-            check_is_fitted(self, ["feature_remover_"])
-            X = self.feature_remover_.transform(X)
+            check_is_fitted(self, ["d_mask_"])
+            X = X[:, self.d_mask_]
 
         return self._transform(X, self.bin_centers, self.d_out_, len(X))
 
@@ -162,3 +160,7 @@ class CountingFpsBinarizer(TransformerMixin, BaseEstimator):
 
     def fit_transform(self, X: np.ndarray, y: Optional[np.ndarray] = None, **fit_params) -> np.ndarray:
         return self.fit(X, y, **fit_params).transform(X, y)
+
+    def __len__(self) -> int:
+        check_is_fitted(self, ["d_out_"])
+        return self.d_out_

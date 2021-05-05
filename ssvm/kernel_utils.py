@@ -400,7 +400,7 @@ def run_time__practical_dimensions():
 def run_time():
     n_rep = 25
 
-    for n_A, n_B, d in [(16, 400, 7600), (160, 400, 7600), (1600, 400, 7600), (16000, 400, 7600)]:
+    for n_A, n_B, d in [(160, 400, 7600)]:
         print(_run_time(n_A, n_B, d, n_rep))
 
 #              function  n_A   n_B    d      time
@@ -531,7 +531,7 @@ def use_binary_encoding():
     n_B = 400
 
     n_bins = 12
-    d = 307 * n_bins
+    d = 15000  # 307 * n_bins
 
     X_A = (np.random.RandomState(93).rand(n_A, d) > 0.5).astype(float)
     X_B = (np.random.RandomState(92).rand(n_B, d) > 0.5).astype(float)
@@ -539,6 +539,7 @@ def use_binary_encoding():
     # Define functions to test
     fun_list = [
         ("minmax_ufunc", _min_max_dense_ufunc),
+        ("minmax_jit", _min_max_dense_jit),
         ("minmax_gentan_fast", generalized_tanimoto_kernel_FAST),
         ("tanimoto", tanimoto_kernel_FAST)
     ]
@@ -565,17 +566,53 @@ def use_binary_encoding():
         .aggregate(np.mean) \
         .reset_index()
 
-    return df
+    print(df)
 
 
 #              function  n_A  n_B      d      time
 # 0  minmax_gentan_fast  160  400  38000  1.952541
 # 1        minmax_ufunc  160  400  38000  1.564143
 # 2            tanimoto  160  400  38000  0.071877
+#
+#              function  n_A  n_B     d      time
+# 0  minmax_gentan_fast  160  400  1208  0.061411
+# 1        minmax_ufunc  160  400  1208  0.075999
+# 2            tanimoto  160  400  1208  0.002795
 
 
 if __name__ == "__main__":
     import time
     import pandas as pd
 
-    print(use_binary_encoding())
+    use_binary_encoding()
+    run_time()
+
+# Comparison of binary vs. counting encoding
+
+# COUNTING
+#              function  n_A  n_B    d      time
+# 0  minmax_gentan_fast  160  400  307  0.012799
+# 1          minmax_jit  160  400  307  0.007002
+# 2    minmax_ufunc_int  160  400  307  0.030934
+
+#              function  n_A  n_B     d      time
+# 0  minmax_gentan_fast  160  400  7600  0.382427
+# 1          minmax_jit  160  400  7600  0.579165
+# 2    minmax_ufunc_int  160  400  7600  0.296164
+
+
+# BINARY
+#              function  n_A  n_B     d      time
+# 0  minmax_gentan_fast  160  400  1208  0.054993
+# 1          minmax_jit  160  400  1208  0.048108
+# 2        minmax_ufunc  160  400  1208  0.061900
+# 3            tanimoto  160  400  1208  0.002066
+
+#              function  n_A  n_B      d      time
+# 0  minmax_gentan_fast  160  400  20000  1.020886
+# 1          minmax_jit  160  400  20000  1.565648
+# 2        minmax_ufunc  160  400  20000  0.830727
+# 3            tanimoto  160  400  20000  0.039696
+
+# Binary encoding (despite being longer) is 3x as fast as the counting encoding.
+# (2nd) Binary encoding (despite being longer) is 8x as fast as the counting encoding.

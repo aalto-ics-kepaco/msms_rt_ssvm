@@ -1,5 +1,9 @@
 # Version History
 
+## v1.1.2 (Minor improvement)
+
+- Binary feature transformer implements ```__len__```
+
 ## v1.1.1 (Minor improvement)
 
 - Binary feature transformer can now also filter empty feature dimension
@@ -25,7 +29,7 @@ Include the latest changes to the into the SSVM flavor using sequence specific c
 
 - SSVM (sequence specific) updated with latest version of base SSVM class
 
-## v1.0.3 (Patch)
+## v1.0.3 (Minor improvement)
 
 Small performance improvement for the MinMax kernel computation
 

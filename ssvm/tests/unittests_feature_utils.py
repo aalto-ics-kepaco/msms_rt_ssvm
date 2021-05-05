@@ -64,6 +64,12 @@ class TestCountingFpsBinarizer(unittest.TestCase):
             ]
         )
 
+    def test_length(self):
+        trans = CountingFpsBinarizer(bin_centers=np.array([1, 2, 3, 4, 8]), compress=True)
+        Z = trans.fit_transform(self.X2)
+
+        self.assertEqual(1 + 2 + 2 + 4 + 4 + 5 + 5, len(trans))
+
     def test_conversion(self):
         trans = CountingFpsBinarizer(bin_centers=np.array([1, 2, 3, 4, 8]))
         Z = trans.fit_transform(self.X1)
