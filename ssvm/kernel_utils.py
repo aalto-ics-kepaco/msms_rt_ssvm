@@ -223,7 +223,6 @@ def tanimoto_kernel(X, Y=None, shallow_input_check=True):
     return K_tan
 
 
-@jit(nopython=True, parallel=True)
 def tanimoto_kernel_FAST(X, Y):
     """
     Tanimoto kernel function
@@ -380,7 +379,7 @@ def run_time__practical_dimensions():
     n_rep = 25
 
     for n_A, n_B, d in [(30, 800, 7600), (300, 800, 7600)]:
-        print(_run_time(n_A, n_B, d, n_rep))
+        print(_run_time(n_A, n_B, d, n_rep, float))
 
 #              function  n_A  n_B     d      time
 # 0        minmax_dense   30  800  7600  1.384670
@@ -401,7 +400,7 @@ def run_time():
     n_rep = 25
 
     for n_A, n_B, d in [(160, 400, 7600)]:
-        print(_run_time(n_A, n_B, d, n_rep))
+        print(_run_time(n_A, n_B, d, n_rep, float))
 
 #              function  n_A   n_B    d      time
 # 0        minmax_dense  100  5000  307  1.399382
@@ -473,41 +472,45 @@ def run_time_n_vs_m():
 
     for fac in [1, 2, 5, 10, 50, 100, 1000]:
         print(fac)
-        print(_run_time(n_A, fac * n_A, 307, n_rep))
+        print(_run_time(n_A, fac * n_A, 307, n_rep, float))
 
 
-def _run_time(n_A, n_B, d, n_rep):
+def _run_time(n_A, n_B, d, n_rep, dtype):
     # Create random data
-    X_A = np.random.RandomState(5943).randint(0, 200, size=(n_A, d), dtype=int)
-    X_B = np.random.RandomState(842).randint(0, 200, size=(n_B, d), dtype=int)
+    X_A = np.random.RandomState(5943).randint(0, 200, size=(n_A, d))
+    X_B = np.random.RandomState(842).randint(0, 200, size=(n_B, d))
 
     # Define functions to test
-    fun_list = [("minmax_jit", _min_max_dense_jit),
-                ("minmax_ufunc_int", _min_max_dense_ufunc_int),
-                # ("minmax__nogil", _minmax_nogil),
-                # ("minmax_dense", _min_max_dense),
-                # ("minmax_gentan", generalized_tanimoto_kernel),
-                ("minmax_gentan_fast", generalized_tanimoto_kernel_FAST)]
+    fun_list = [("minmax_jit", _min_max_dense_jit, dtype),
+                ("minmax_ufunc_int", _min_max_dense_ufunc_int, int),
+                # ("minmax__nogil", _minmax_nogil, dtype),
+                # ("minmax_dense", _min_max_dense, dtype),
+                # ("minmax_gentan", generalized_tanimoto_kernel, dtype),
+                ("minmax_gentan_fast", generalized_tanimoto_kernel_FAST, dtype)]
 
     # Compile using numba
     K_ref = generalized_tanimoto_kernel_FAST(X_A, X_B)
     print("Compile ... ", end="")
-    for fun_name, fun in fun_list:
+    for fun_name, fun, fun_dtype in fun_list:
         print(fun_name, end="; ", flush=True)
-        np.testing.assert_allclose(K_ref, fun(X_A, X_B))
+        np.testing.assert_allclose(K_ref, fun(X_A.astype(fun_dtype), X_B.astype(fun_dtype)))
     print()
 
     # Run timing
     df = []
-    for fun_name, fun in fun_list:
+    for fun_name, fun, fun_dtype in fun_list:
         print("RUN - %s" % fun_name)
+
+        _X_A = X_A.astype(fun_dtype)
+        _X_B = X_B.astype(fun_dtype)
+
         for _ in range(n_rep):
             start = time.time()
-            fun(X_A, X_B)
-            df.append([fun_name, n_A, n_B, d, (time.time() - start)])
+            fun(_X_A, _X_B)
+            df.append([fun_name, n_A, n_B, d, (time.time() - start), str(fun_dtype)])
 
-    df = pd.DataFrame(df, columns=["function", "n_A", "n_B", "d", "time"]) \
-        .groupby(["function", "n_A", "n_B", "d"]) \
+    df = pd.DataFrame(df, columns=["function", "n_A", "n_B", "d", "time", "dtype"]) \
+        .groupby(["function", "n_A", "n_B", "d", "dtype"]) \
         .aggregate(np.mean) \
         .reset_index()
 
@@ -524,24 +527,14 @@ def profiling(fun, n_A=100, n_B=5000, d=307):
         fun(X_A, X_B)
 
 
-def use_binary_encoding():
-    n_rep = 25
-
-    n_A = 160
-    n_B = 400
-
-    n_bins = 12
-    d = 15000  # 307 * n_bins
-
-    X_A = (np.random.RandomState(93).rand(n_A, d) > 0.5).astype(float)
-    X_B = (np.random.RandomState(92).rand(n_B, d) > 0.5).astype(float)
+def _use_binary_encoding(n_A, n_B, d, n_rep, dtype):
+    X_A = (np.random.RandomState(93).rand(n_A, d) > 0.5).astype(dtype)
+    X_B = (np.random.RandomState(92).rand(n_B, d) > 0.5).astype(dtype)
 
     # Define functions to test
     fun_list = [
-        ("minmax_ufunc", _min_max_dense_ufunc),
-        ("minmax_jit", _min_max_dense_jit),
         ("minmax_gentan_fast", generalized_tanimoto_kernel_FAST),
-        ("tanimoto", tanimoto_kernel_FAST)
+        ("tanimoto", tanimoto_kernel_FAST),
     ]
 
     # Compile using numba
@@ -559,14 +552,14 @@ def use_binary_encoding():
         for _ in range(n_rep):
             start = time.time()
             fun(X_A, X_B)
-            df.append([fun_name, n_A, n_B, d, (time.time() - start)])
+            df.append([fun_name, n_A, n_B, d, (time.time() - start), dtype])
 
-    df = pd.DataFrame(df, columns=["function", "n_A", "n_B", "d", "time"]) \
-        .groupby(["function", "n_A", "n_B", "d"]) \
+    df = pd.DataFrame(df, columns=["function", "n_A", "n_B", "d", "time", "dtype"]) \
+        .groupby(["function", "n_A", "n_B", "d", "dtype"]) \
         .aggregate(np.mean) \
         .reset_index()
 
-    print(df)
+    return df
 
 
 #              function  n_A  n_B      d      time
@@ -583,9 +576,38 @@ def use_binary_encoding():
 if __name__ == "__main__":
     import time
     import pandas as pd
+    import argparse
 
-    use_binary_encoding()
-    run_time()
+    arg_parser = argparse.ArgumentParser()
+    arg_parser.add_argument(
+        "scenario",
+        help="Which performance evaluation to run.",
+        choices=["rt_binarized_tanimoto", "rt_counting_minmax"]
+    )
+    arg_parser.add_argument("--na", default=1000, type=int)
+    arg_parser.add_argument("--nb", default=1000, type=int)
+    arg_parser.add_argument("--d", default=15000, type=int)
+    arg_parser.add_argument("--nrep", default=25, type=int)
+    args = arg_parser.parse_args()
+
+    # Parameters
+    n_rep = args.nrep
+
+    n_A = args.na
+    n_B = args.nb
+
+    d = args.d  # 15000 is approx. the size of the binarized iokr fingerprints
+
+    if args.scenario == "rt_binarized_tanimoto":
+        for dtype in [np.int64, np.int32, np.int16, np.float64, np.float32]:
+            print(_use_binary_encoding(n_A, n_B, d, n_rep, dtype))
+    elif args.scenario == "rt_counting_minmax":
+        for dtype in [np.int64, np.int32, np.int16, np.float64, np.float32]:
+            print(_run_time(n_A, n_B, d, n_rep, dtype))
+    else:
+        raise ValueError()
+
+    # run_time()
 
 # Comparison of binary vs. counting encoding
 
