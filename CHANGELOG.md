@@ -1,5 +1,11 @@
 # Version History
 
+## v1.1.4 (Patch)
+
+- Candidate DB wrapper returns binary fingerprint matrices with dtype = float needed for the numba implementation of the
+  tanimoto kernel.
+- Remove "jit" decorator from tanimoto implementation  
+
 ## v1.1.3 (Patch)
 
 - Candidate DB wrapper is now compatible with the binarized features (via feature transformation)

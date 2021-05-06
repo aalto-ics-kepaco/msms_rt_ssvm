@@ -316,7 +316,7 @@ class CandidateSQLiteDB(object):
                     _idx, _cnt = _fp_str.split(":")
                     X[i, int(_idx)] = int(_cnt)
         elif mode in ["binary", "binarized"]:
-            X = np.zeros((n, d), dtype=int)
+            X = np.zeros((n, d))
             for i, row in enumerate(data):
                 _ids = list(map(int, row.split(",")))
                 X[i, _ids] = 1

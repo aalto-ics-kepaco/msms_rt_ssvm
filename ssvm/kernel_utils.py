@@ -212,11 +212,7 @@ def tanimoto_kernel(X, Y=None, shallow_input_check=True):
     """
     X, Y, is_sparse = check_input(X, Y, datatype="binary", shallow=shallow_input_check)
 
-    XY = X @ Y.T
-    XX = X.sum(axis=1).reshape(-1, 1)
-    YY = Y.sum(axis=1).reshape(-1, 1)
-
-    K_tan = XY / (XX + YY.T - XY)
+    K_tan = tanimoto_kernel_FAST(X, Y)
 
     assert (not sp.issparse(K_tan)), "Kernel matrix should not be sparse."
 

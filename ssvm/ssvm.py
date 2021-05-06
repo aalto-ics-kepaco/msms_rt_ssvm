@@ -48,8 +48,8 @@ import ssvm.cfg
 from ssvm.data_structures import SequenceSample, Sequence, LabeledSequence, SpanningTrees
 from ssvm.data_structures import CandidateSQLiteDB
 from ssvm.factor_graphs import get_random_spanning_tree
-from ssvm.kernel_utils import tanimoto_kernel, _min_max_dense_jit, generalized_tanimoto_kernel_FAST
-from ssvm.kernel_utils import _min_max_dense_ufunc, _min_max_dense_ufunc_int
+from ssvm.kernel_utils import _min_max_dense_jit, generalized_tanimoto_kernel_FAST
+from ssvm.kernel_utils import _min_max_dense_ufunc, _min_max_dense_ufunc_int, tanimoto_kernel_FAST
 from ssvm.utils import item_2_idc
 from ssvm.dual_variables import DualVariables
 from ssvm.ssvm_meta import _StructuredSVM
@@ -1283,7 +1283,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         if callable(mol_kernel):
             return mol_kernel
         elif mol_kernel == "tanimoto":
-            return tanimoto_kernel
+            return tanimoto_kernel_FAST
         elif mol_kernel == "minmax":
             return generalized_tanimoto_kernel_FAST
         elif mol_kernel == "minmax_numba":
