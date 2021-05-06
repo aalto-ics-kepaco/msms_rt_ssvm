@@ -29,4 +29,4 @@ cd - || exit 1
 pip install --no-deps "$SSVM_LIB_DIR"
 
 # Run the kernel performance evaluation
-srun python "$SSVM_LIB_DIR/ssvm/kernel_utils.py"
+srun python "$SSVM_LIB_DIR/ssvm/kernel_utils.py" $1 --na=1000 --nb=1000 --d=1000 --nrep=10
