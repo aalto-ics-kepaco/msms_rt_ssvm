@@ -310,18 +310,32 @@ def _min_max_dense_ufunc(X, Y):
     """
     Min-Max Kernel using reduction
     """
-    return _minmax__ufunc(X.astype(np.int)[:, np.newaxis, :], Y.astype(np.int)[np.newaxis, :, :])
+    return _minmax__ufunc_int(X.astype(np.int)[:, np.newaxis, :], Y.astype(np.int)[np.newaxis, :, :])
+
+
+def _min_max_dense_ufunc_float(X, Y):
+    """
+    Min-Max Kernel using reduction
+    """
+    return _minmax__ufunc_float(X[:, np.newaxis, :], Y[np.newaxis, :, :])
 
 
 def _min_max_dense_ufunc_int(X, Y):
     """
     Min-Max Kernel using reduction
     """
-    return _minmax__ufunc(X[:, np.newaxis, :], Y[np.newaxis, :, :])
+    return _minmax__ufunc_int(X[:, np.newaxis, :], Y[np.newaxis, :, :])
 
 
 @guvectorize([(int64[:], int64[:], float64[:])], '(d),(d)->()', nopython=True, target="parallel")
-def _minmax__ufunc(x, y, res):
+def _minmax__ufunc_int(x, y, res):
+    s = np.sum(x) + np.sum(y)
+    t = np.sum(np.abs(x - y))
+    res[0] = (s - t) / (s + t)
+
+
+@guvectorize([(float64[:], float64[:], float64[:])], '(d),(d)->()', nopython=True, target="parallel")
+def _minmax__ufunc_float(x, y, res):
     s = np.sum(x) + np.sum(y)
     t = np.sum(np.abs(x - y))
     res[0] = (s - t) / (s + t)
@@ -479,7 +493,7 @@ def _run_time(n_A, n_B, d, n_rep, dtype):
     # Define functions to test
     fun_list = [("minmax_jit", _min_max_dense_jit, dtype),
                 ("minmax_ufunc_int", _min_max_dense_ufunc_int, int),
-                # ("minmax__nogil", _minmax_nogil, dtype),
+                ("minmax_ufunc_float", _min_max_dense_ufunc_float, np.float),
                 # ("minmax_dense", _min_max_dense, dtype),
                 # ("minmax_gentan", generalized_tanimoto_kernel, dtype),
                 ("minmax_gentan_fast", generalized_tanimoto_kernel_FAST, dtype)]
@@ -578,11 +592,11 @@ if __name__ == "__main__":
     arg_parser.add_argument(
         "scenario",
         help="Which performance evaluation to run.",
-        choices=["rt_binarized_tanimoto", "rt_counting_minmax"]
+        choices=["rt_binarized_tanimoto", "rt_counting_minmax", "rt_counting_minmax_d_grid", "rt_binarized_tanimoto_d_grid"]
     )
     arg_parser.add_argument("--na", default=1000, type=int)
     arg_parser.add_argument("--nb", default=1000, type=int)
-    arg_parser.add_argument("--d", default=15000, type=int)
+    arg_parser.add_argument("--d", default=15000, type=int, nargs="+")
     arg_parser.add_argument("--nrep", default=25, type=int)
     args = arg_parser.parse_args()
 
@@ -592,14 +606,18 @@ if __name__ == "__main__":
     n_A = args.na
     n_B = args.nb
 
-    d = args.d  # 15000 is approx. the size of the binarized iokr fingerprints
-
     if args.scenario == "rt_binarized_tanimoto":
         for dtype in [np.int64, np.int32, np.int16, np.float64, np.float32]:
-            print(_use_binary_encoding(n_A, n_B, d, n_rep, dtype))
+            print(_use_binary_encoding(n_A, n_B, args.d[0], n_rep, dtype))
     elif args.scenario == "rt_counting_minmax":
         for dtype in [np.int64, np.int32, np.int16, np.float64, np.float32]:
-            print(_run_time(n_A, n_B, d, n_rep, dtype))
+            print(_run_time(n_A, n_B, args.d[0], n_rep, dtype))
+    elif args.scenario == "rt_counting_minmax_d_grid":
+        for d in args.d:
+            print(_run_time(n_A, n_B, d, n_rep, np.float))
+    elif args.scenario == "rt_binarized_tanimoto_d_grid":
+        for d in args.d:
+            print(_use_binary_encoding(n_A, n_B, d, n_rep, np.float))
     else:
         raise ValueError()
 
