@@ -497,7 +497,11 @@ class ABCCandSQLiteDB(ABC):
         )
 
         # Fill missing MS2 scores with the minimum score
-        df_scores["ms2_score"] = df_scores["ms2_score"].fillna(value=df_scores["ms2_score"].min(skipna=True))
+        _fill_value = df_scores["ms2_score"].min(skipna=True)
+        if np.isnan(_fill_value):
+            # If no MS2 scores for the candidates are available (scoring failed), than we use a small positive constant.
+            _fill_value = 1e6
+        df_scores["ms2_score"] = df_scores["ms2_score"].fillna(value=_fill_value)
 
         if scale_scores_to_range:
             # Scale scores to (0, 1]
@@ -537,7 +541,7 @@ class ABCCandSQLiteDB(ABC):
             scores = np.maximum(c2, scores + c1)
 
         [1] "Probabilistic framework for integration of mass spectrum and retention time information in small molecule
-             identification", Bach et al. 2021
+             identification", Bach et al. 2020
 
         :param scores: array-like, shape = (n_samples, ), raw MS2 scores from the in-silico method. NaN scores are
             not allowed.
@@ -811,6 +815,20 @@ class ABCCandSQLiteDB_Massbank(ABCCandSQLiteDB):
 
 
 class CandSQLiteDB_Bach2020(ABCCandSQLiteDB_Bach2020):
+    def __init__(self, *args, **kwargs):
+        """
+        No additional parameters.
+        """
+        super().__init__(*args, **kwargs)
+
+    def _get_candidate_subset(self, spectrum: Spectrum) -> Optional[List[str]]:
+        """
+        In the base-setting the candidates are not restricted. This is expressed by the return value None.
+        """
+        return None
+
+
+class CandSQLiteDB_Massbank(ABCCandSQLiteDB_Massbank):
     def __init__(self, *args, **kwargs):
         """
         No additional parameters.

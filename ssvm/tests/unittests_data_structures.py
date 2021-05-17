@@ -34,10 +34,222 @@ from matchms.Spectrum import Spectrum
 from joblib import Parallel, delayed
 from scipy.stats import rankdata
 
-from ssvm.data_structures import SequenceSample, CandSQLiteDB_Bach2020, RandomSubsetCandSQLiteDB_Bach2020
-from ssvm.data_structures import Sequence, SpanningTrees
+from ssvm.data_structures import CandSQLiteDB_Bach2020, RandomSubsetCandSQLiteDB_Bach2020
+from ssvm.data_structures import CandSQLiteDB_Massbank
+from ssvm.data_structures import SequenceSample, Sequence, SpanningTrees
 
 BACH2020_DB_FN = "Bach2020_test_db.sqlite"
+MASSBANK_DB_FN = "Massbank_test_db.sqlite"
+
+
+class TestMassbankCandidateSQLiteDB(unittest.TestCase):
+    def test_get_number_of_candidates(self):
+        # ----------
+        # SPECTRUM 1
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "LU43956814"})
+
+        # Molecule identifier: inchikey
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="cid")
+        self.assertEqual(231, candidates.get_n_cand(spectrum))
+
+        # Molecule identifier: inchikey1
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey1")
+        self.assertEqual(84, candidates.get_n_cand(spectrum))
+
+        # ----------
+        # SPECTRUM 2
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "BS40569952"})
+
+        # Molecule identifier: inchikey
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="cid")
+        self.assertEqual(2308, candidates.get_n_cand(spectrum))
+
+        # Molecule identifier: inchikey1
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey1")
+        self.assertEqual(1923, candidates.get_n_cand(spectrum))
+
+    def test_get_ms2_scores__normalized(self):
+        # ----------
+        # SPECTRUM 1
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "AU88550178"})
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey")
+
+        # MS2 Scorer is SIRIUS
+        scores = candidates.get_ms2_scores(spectrum, ms2scorer="sirius__sd__correct_mf")
+        self.assertEqual(3934, len(scores))
+        self.assertTrue(np.all(np.array(scores) > 0))
+        self.assertEqual(1.0, np.max(scores))
+
+        # MS2 Scorer is MetFrag
+        scores = candidates.get_ms2_scores(spectrum, ms2scorer="metfrag__norm_after_merge")
+        self.assertEqual(3934, len(scores))
+        self.assertEqual(0.0627934092603395, np.min(scores))
+        self.assertEqual(1.0, np.max(scores))
+
+        # ----------
+        # SPECTRUM 2
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "BS40569952"})
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey")
+
+        # MS2 Scorer is SIRIUS
+        scores = candidates.get_ms2_scores(spectrum, ms2scorer="sirius__sd__correct_mf")
+        self.assertEqual(2308, len(scores))
+        self.assertTrue(np.all(np.array(scores) > 0))
+        self.assertEqual(1.0, np.max(scores))
+
+        # MS2 Scorer is MetFrag
+        scores = candidates.get_ms2_scores(spectrum, ms2scorer="metfrag__norm_after_merge")
+        self.assertEqual(2308, len(scores))
+        self.assertEqual(0.11534319471384565, np.min(scores))
+        self.assertEqual(1.0, np.max(scores))
+
+        # ----------
+        # SPECTRUM 2
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "LQB6372613"})
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey")
+
+        # MS2 Scorer is SIRIUS
+        scores = candidates.get_ms2_scores(spectrum, ms2scorer="sirius__sd__correct_mf")
+        self.assertEqual(118, len(scores))
+        self.assertTrue(np.all(np.array(scores) > 0))
+        self.assertEqual(1.0, np.max(scores))
+
+        # # MS2 Scorer is MetFrag
+        scores = candidates.get_ms2_scores(spectrum, ms2scorer="metfrag__norm_after_merge")
+        self.assertEqual(118, len(scores))
+        self.assertEqual(1.0, np.min(scores))
+        self.assertEqual(1.0, np.max(scores))
+
+    def test_get_ms2_scores(self):
+        # ----------
+        # SPECTRUM 1
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "AU88550178"})
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey")
+
+        # MS2 Scorer is SIRIUS
+        scores = candidates.get_ms2_scores(spectrum, ms2scorer="sirius__sd__correct_mf", scale_scores_to_range=False)
+        self.assertEqual(3934, len(scores))
+        self.assertEqual(-516.7701408961747, np.min(scores))
+        self.assertEqual(-60.65141796101968, np.max(scores))
+
+        # MS2 Scorer is MetFrag
+        scores = candidates.get_ms2_scores(spectrum, ms2scorer="metfrag__norm_after_merge", scale_scores_to_range=False)
+        self.assertEqual(3934, len(scores))
+        self.assertEqual(59.08480943917096, np.min(scores))
+        self.assertEqual(940.939664451204, np.max(scores))
+
+        # ----------
+        # SPECTRUM 2
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "BS40569952"})
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey")
+
+        # MS2 Scorer is SIRIUS
+        scores = candidates.get_ms2_scores(spectrum, ms2scorer="sirius__sd__correct_mf", scale_scores_to_range=False)
+        self.assertEqual(2308, len(scores))
+        self.assertEqual(-616.7732484911674, np.min(scores))
+        self.assertEqual(-138.34323578753632, np.max(scores))
+
+        # MS2 Scorer is MetFrag
+        scores = candidates.get_ms2_scores(spectrum, ms2scorer="metfrag__norm_after_merge", scale_scores_to_range=False)
+        self.assertEqual(2308, len(scores))
+        self.assertEqual(111.97300932463722, np.min(scores))
+        self.assertEqual(970.7812377005032, np.max(scores))
+
+        # ----------
+        # SPECTRUM 2
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "LQB6372613"})
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey")
+
+        # MS2 Scorer is SIRIUS
+        scores = candidates.get_ms2_scores(spectrum, ms2scorer="sirius__sd__correct_mf", scale_scores_to_range=False)
+        self.assertEqual(118, len(scores))
+        self.assertEqual(-307.381287577836, np.min(scores))
+        self.assertEqual(-147.8959133560828, np.max(scores))
+
+        # # MS2 Scorer is MetFrag
+        scores = candidates.get_ms2_scores(spectrum, ms2scorer="metfrag__norm_after_merge", scale_scores_to_range=False)
+        self.assertEqual(118, len(scores))
+        self.assertEqual(1e6, np.min(scores))
+        self.assertEqual(1e6, np.max(scores))
+
+    def test_get_molecule_features(self):
+        # SIRIUS Fingerprints
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "PR37531286"})
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey1")
+
+        fps = candidates.get_molecule_features(spectrum, features="sirius_fps")
+        self.assertEqual((586, 3047), fps.shape)
+        self.assertTrue(np.all(np.isin(fps, [0, 1])))
+
+        # FCFP features (encodes stereo)
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "PR37531286"})
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="cid")
+
+        fps = candidates.get_molecule_features(spectrum, features="FCFP__count__all")
+        self.assertEqual((743, 1280), fps.shape)
+        self.assertTrue(np.all(fps >= 0))
+
+        df = candidates.get_molecule_features(spectrum, features="FCFP__count__all", return_dataframe=True)
+        self.assertEqual((743, 1 + 1280), df.shape)
+        fp_i = df[df["identifier"] == 20372696].iloc[0, 1:].values
+
+        fp_i_ref = np.zeros_like(fp_i)
+        for j, v in zip(
+                "0,2,3,18,51,84,87,90,95,96,287,562,565,827,863,1142".split(","),
+                "9,6,1,1,4,1,1,1,1,2,1,1,1,1,1,1".split(",")
+        ):
+            fp_i_ref[int(j)] = int(v)
+
+        self.assertEqual((1280, ), fp_i.shape)
+        np.array_equal(fp_i, fp_i_ref)
+
+    def test_get_molecule_feature_by_id_query(self):
+        molecule_ids = [
+            "UKQKUSAOCWFKSE-UHFFFAOYSA-N",
+            "MIGUTQZXWCSJGD-UHFFFAOYSA-N",
+            "TVKGYMYAOVADOP-SOFGYWHQSA-N",
+            "HZINSBNIWQLTKI-UHFFFAOYSA-N",
+            "UKQKUSAOCWFKSE-UHFFFAOYSA-N",
+            "LQMQZNHDYCBFJK-UHFFFAOYSA-N",
+            "MIGUTQZXWCSJGD-UHFFFAOYSA-N",
+            "TVKGYMYAOVADOP-SOFGYWHQSA-N",
+            "MIGUTQZXWCSJGD-UHFFFAOYSA-N",
+            "CQYXNTFQGSZODY-UHFFFAOYSA-N",
+            "MIGUTQZXWCSJGD-UHFFFAOYSA-N"
+        ]
+
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey", init_with_open_db_conn=False)
+
+        conn = sqlite3.connect(MASSBANK_DB_FN)
+        mol_ids_from_query, *_ = zip(
+            *conn.execute(candidates._get_molecule_feature_by_id_query(molecule_ids, "FCFP__count__all")).fetchall()
+        )
+        conn.close()
+
+        # The SQLite query will only return result for unique molecule identifiers (see 'in' operator)
+        self.assertEqual(len(set(molecule_ids)), len(mol_ids_from_query))
+
+        # The order in which we provide the molecule ids is preserved in the output. But, if a molecule id appears
+        # multiple times, than its first appearance defines its position in the output.
+        self.assertEqual(
+            (
+                "UKQKUSAOCWFKSE-UHFFFAOYSA-N",
+                "MIGUTQZXWCSJGD-UHFFFAOYSA-N",
+                "TVKGYMYAOVADOP-SOFGYWHQSA-N",
+                "HZINSBNIWQLTKI-UHFFFAOYSA-N",
+                "LQMQZNHDYCBFJK-UHFFFAOYSA-N",
+                "CQYXNTFQGSZODY-UHFFFAOYSA-N"
+            ),
+            mol_ids_from_query
+        )
 
 
 class TestCandidateSQLiteDB(unittest.TestCase):
