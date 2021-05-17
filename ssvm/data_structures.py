@@ -258,7 +258,7 @@ class ABCCandSQLiteDB(ABC):
 
         :return: string, data-type mode of the feature
         """
-	return self._get_d_and_mode_feature(feature)[1]
+        return self._get_d_and_mode_feature(feature)[1]
 
     def _ensure_feature_is_available(self, feature: str) -> None:
         """
@@ -286,39 +286,24 @@ class ABCCandSQLiteDB(ABC):
         raise ValueError("Molecule identifier '%s' is not available." % molecule_identifier)
 
     @abstractmethod
-    def _get_molecule_feature_matrix(self, data: Union[pd.Series, List, Tuple], features: str) -> np.ndarray:
+    def _get_molecule_feature_matrix(self, data: Union[List[Tuple], Tuple[Tuple]], features: str) -> np.ndarray:
         """
         Function to parse the molecular features stored as strings in the candidate database and load them into a numpy
         array.
 
-        :param data: pd.Series | List | Tuples, shape = (n_molecules, ), molecule features represented as strings as
+        :param data: List[Tuple] | Tuple[Tuple], length = n_molecules, molecule features represented as strings as
             stored in the candidate DB.
+
+            Examples:
+                [("3:32,12:1,16:2,...", ), ("1:3,2:1,6:2,...", ), ...]              --- Bach2020
+                [("3,12,16,...", "32,1,2,..."), ("1,2,6", "3,1,2"), ...]            --- MassBank
 
         :param features: string, identifier of the molecular feature. This information is needed to properly parse the
             feature string representation and store it in a numpy array.
 
         :return: array-like, shape = (n_molecules, d_features)
         """
-        # Set up an output array
-        # n = len(data)
-        # d, mode = self._get_d_and_mode_feature(features) 
-        #
-        # if mode == "count":
-        #    X = np.zeros((n, d), dtype=int)
-        #    for i, row in enumerate(data):
-        #        for _fp_str in row.split(","):
-        #            _idx, _cnt = _fp_str.split(":")
-        #            X[i, int(_idx)] = int(_cnt)
-        # elif mode in ["binary", "binarized"]:
-        #    X = np.zeros((n, d))
-        #    for i, row in enumerate(data):
-        #        _ids = list(map(int, row.split(",")))
-        #        X[i, _ids] = 1
-        # else:
-        #    raise ValueError("Invalid fingerprint mode: %s" % mode)
-        #
-        # return X
-	pass
+        pass
 
     def _get_connection_uri(self) -> str:
         """
@@ -393,10 +378,12 @@ class ABCCandSQLiteDB(ABC):
         """
         self._ensure_feature_is_available(features)
 
-        res = self.db.execute(
-            self._get_molecule_feature_query(spectrum, features, self._get_candidate_subset(spectrum))).fetchall()
-
-        identifier, feature_rows = zip(*res)
+        # Query data from DB
+        identifier, feature_rows = self._unpack_molecule_features(
+            self.db.execute(
+                self._get_molecule_feature_query(spectrum, features, self._get_candidate_subset(spectrum))
+            )
+        )
 
         feature_matrix = self._get_molecule_feature_matrix(feature_rows, features)
 
@@ -406,6 +393,15 @@ class ABCCandSQLiteDB(ABC):
             df_features = feature_matrix
 
         return df_features
+
+    @staticmethod
+    def _unpack_molecule_features(res: sqlite3.Cursor):
+        """
+        :param res: sqlite3.Cursor, result of the '_get_molecule_feature_query
+
+        :return:
+        """
+        return zip(*((row[0], row[1:]) for row in res))
 
     @lru_cache(maxsize=ssvm.cfg.LRU_CACHE_MAX_SIZE)
     def get_molecule_features_by_molecule_id(self, molecule_ids: Union[List[str], Tuple[str, ...]], features: str,
@@ -430,8 +426,8 @@ class ABCCandSQLiteDB(ABC):
         self._ensure_feature_is_available(features)
 
         # Query data from DB
-        identifiers, feature_rows = zip(
-            *self.db.execute(self._get_molecule_feature_by_id_query(molecule_ids, features)).fetchall()
+        identifiers, feature_rows = self._unpack_molecule_features(
+            self.db.execute(self._get_molecule_feature_by_id_query(molecule_ids, features))
         )
 
         # Parse feature strings into a matrix
@@ -671,21 +667,24 @@ class ABCCandSQLiteDB_Bach2020(ABCCandSQLiteDB):
         """
         See base-class.
         """
-        # Set up an output array
+        # Determine number of samples and feature dimension
         n = len(data)
-        d = self._get_d_feature(features)
+        d, mode = self._get_d_and_mode_feature(features)
 
-        if features in ["substructure_count", "iokr_fps__count"]:
+        if mode == "count":
+            # Set up an output array
             X = np.zeros((n, d), dtype=int)
-            for i, row in enumerate(data):
-                for _fp_str in row.split(","):
+            for i, (bits_vals, ) in enumerate(data):
+                for _fp_str in bits_vals.split(","):
                     _idx, _cnt = _fp_str.split(":")
                     X[i, int(_idx)] = int(_cnt)
+        elif mode in ["binary", "binarized"]:
+            # Set up an output array
+            X = np.zeros((n, d))
+            for i, (bits, ) in enumerate(data):
+                X[i, list(map(int, bits.split(",")))] = 1
         else:
-            X = np.zeros((n, d), dtype=int)
-            for i, row in enumerate(data):
-                _ids = list(map(int, row.split(",")))
-                X[i, _ids] = 1
+            raise ValueError("Invalid fingerprint mode: %s" % mode)
 
         return X
 
@@ -723,7 +722,7 @@ class ABCCandSQLiteDB_Massbank(ABCCandSQLiteDB):
         """
         See base-class.
         """
-        query = "SELECT m.%s AS identifier, fingerprint AS molecular_feature FROM candidates_spectra" \
+        query = "SELECT m.%s AS identifier, fd.bits, fd.vals FROM candidates_spectra" \
                 "   INNER JOIN molecules m ON m.cid = candidates_spectra.candidate" \
                 "   INNER JOIN fingerprints_data fd ON fd.molecule = candidates_spectra.candidate" \
                 "   WHERE spectrum IS '%s' AND fd.name IS '%s'" \
@@ -769,7 +768,7 @@ class ABCCandSQLiteDB_Massbank(ABCCandSQLiteDB):
         # Read: https://www.sqlite.org/lang_expr.html#case
         _order_query_str = "\n".join(["WHEN '%s' THEN %d" % (mid, i) for i, mid in enumerate(molecule_ids, start=1)])
 
-        query = "SELECT %s AS identifier, fingerprint AS molecular_feature FROM molecules" \
+        query = "SELECT %s AS identifier, fd.bits, fd.vals FROM molecules" \
                 "   INNER JOIN fingerprints_data fd ON fd.molecule = molecules.cid" \
                 "   WHERE identifier IN %s AND fd.name is '%s'" \
                 "   GROUP BY identifier" \
@@ -783,38 +782,32 @@ class ABCCandSQLiteDB_Massbank(ABCCandSQLiteDB):
         """
         See base-class.
         """
-        # Get dimensionality and data-type of the output matrix
+        # Determine number of samples and feature dimension
         n = len(data)
         d, mode = self._get_d_and_mode_feature(features)
 
-        dtype = np.int if mode in ["binary", "count"] else np.float  # real
+        if mode == "binary":
+            dtype = float  # tanimoto kernel fastest with float-type
+        elif mode == "count":
+            dtype = int  # minmax kernel performs the best with int-type
+        elif mode == "real":
+            dtype = float
+        else:
+            raise ValueError("Invalid fingerprint mode: %s" % mode)
+
+        # Set up an output array
         X = np.zeros((n, d), dtype=dtype)
 
-        # TODO
+        if mode in ["count", "real"]:
+            for i, (bits, vals) in enumerate(data):
+                X[i, list(map(int, bits.split(",")))] = list(map(dtype, vals.split(",")))
+        elif mode == "binary":
+            for i, (bits, _) in enumerate(data):
+                X[i, list(map(int, bits.split(",")))] = 1.0
+        else:
+            raise ValueError("Invalid fingerprint mode: %s" % mode)
 
-        # # Parse the feature strings
-        # if mode == "binary":
-        #     for i, row in enumerate(data):
-        #         _ids = list(map(int, row.split(",")))
-        #         X[i, _ids] = 1
-        # elif mode == "count":
-        #     for i, row in enumerate(data):
-        #         for _fp_str in row.split(","):
-        #             _idx, _cnt = _fp_str.split(":")
-        #             X[i, int(_idx)] = int(_cnt)
-        #
-        #
-        # if mode == "count":
-        #     for i, row in enumerate(data):
-        #         for _fp_str in row.split(","):
-        #             _idx, _cnt = _fp_str.split(":")
-        #             X[i, int(_idx)] = int(_cnt)
-        # else:
-        #     for i, row in enumerate(data):
-        #         _ids = list(map(int, row.split(",")))
-        #         X[i, _ids] = 1
-        #
-        # return X
+        return X
 
 
 class CandSQLiteDB_Bach2020(ABCCandSQLiteDB_Bach2020):
