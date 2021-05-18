@@ -29,6 +29,7 @@ import pandas as pd
 import numpy as np
 import itertools as it
 import networkx as nx
+import time
 
 from matchms.Spectrum import Spectrum
 from joblib import Parallel, delayed
@@ -108,7 +109,7 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
         self.assertEqual(1.0, np.max(scores))
 
         # ----------
-        # SPECTRUM 2
+        # SPECTRUM 3
         # ----------
         spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "LQB6372613"})
         candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey")
@@ -250,6 +251,244 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
             ),
             mol_ids_from_query
         )
+
+    def test_get_molecule_feature_by_molecule_id__repeated_ids(self):
+        # ----------
+        # InChIKey
+        # ----------
+        molecule_ids = [
+            "AHOUBRCZNHFOSL-UHFFFAOYSA-N",
+            "CTNGEIQQUFTGRM-UHFFFAOYSA-N",
+            "CTNGEIQQUFTGRM-UHFFFAOYSA-N",
+            "AHOUBRCZNHFOSL-UHFFFAOYSA-N",
+            "ALMMHVLHNREFEG-UHFFFAOYSA-N",
+            "IDJMMERXPGGLMS-ZPFXWGDGSA-N",
+            "WYKMDKDFWZAXOH-NVRUNKOVSA-N",
+            "ZCZLCPUCJRPPNM-UHFFFAOYSA-N",
+            "ZCZLCPUCJRPPNM-UHFFFAOYSA-N",
+            "WYKMDKDFWZAXOH-LZZIMNHVSA-N",
+            "QPQPNJVRKYVKPW-UHFFFAOYSA-N",
+            "IMUZRWAENKOGPB-UHFFFAOYSA-N",
+            "WYKMDKDFWZAXOH-LZZIMNHVSA-N",
+            "AHOUBRCZNHFOSL-UHFFFAOYSA-N",
+            "WYKMDKDFWZAXOH-OWYWQGDKSA-N",
+            "WYKMDKDFWZAXOH-LZZIMNHVSA-N",
+            "WYKMDKDFWZAXOH-WDRLNXAMSA-N"
+        ]
+
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey")
+        df_features = candidates.get_molecule_features_by_molecule_id(molecule_ids, "FCFP__count__all", True)
+        feature_matrix = candidates.get_molecule_features_by_molecule_id(molecule_ids, "FCFP__count__all", False)
+
+        np.testing.assert_equal((len(molecule_ids), 1280), feature_matrix.shape)
+        np.testing.assert_equal((len(molecule_ids), 1280), df_features.iloc[:, 1:].shape)
+        self.assertListEqual(molecule_ids, df_features["identifier"].to_list())
+
+        for rep in range(10):
+            rnd_idc = np.random.RandomState(rep).permutation(np.arange(len(molecule_ids)))
+
+            # Dataframe
+            df_features_shf = candidates.get_molecule_features_by_molecule_id(
+                tuple(molecule_ids[i] for i in rnd_idc), "FCFP__count__all", return_dataframe=True)
+            self.assertListEqual([molecule_ids[i] for i in rnd_idc], df_features_shf["identifier"].to_list())
+
+        # ----------
+        # InChIKey1
+        # ----------
+        molecule_ids = [
+            "AHOUBRCZNHFOSL",
+            "CTNGEIQQUFTGRM",
+            "CTNGEIQQUFTGRM",
+            "AHOUBRCZNHFOSL",
+            "ALMMHVLHNREFEG",
+            "IDJMMERXPGGLMS",
+            "WYKMDKDFWZAXOH",
+            "ZCZLCPUCJRPPNM",
+            "ZCZLCPUCJRPPNM",
+            "WYKMDKDFWZAXOH",
+            "QPQPNJVRKYVKPW",
+            "IMUZRWAENKOGPB",
+            "WYKMDKDFWZAXOH",
+            "AHOUBRCZNHFOSL",
+            "WYKMDKDFWZAXOH",
+            "WYKMDKDFWZAXOH",
+            "WYKMDKDFWZAXOH"
+        ]
+
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey1")
+        df_features = candidates.get_molecule_features_by_molecule_id(molecule_ids, "FCFP__count__all", True)
+        feature_matrix = candidates.get_molecule_features_by_molecule_id(molecule_ids, "FCFP__count__all", False)
+
+        np.testing.assert_equal((len(molecule_ids), 1280), feature_matrix.shape)
+        np.testing.assert_equal((len(molecule_ids), 1280), df_features.iloc[:, 1:].shape)
+        self.assertListEqual(molecule_ids, df_features["identifier"].to_list())
+
+        for rep in range(10):
+            rnd_idc = np.random.RandomState(rep).permutation(np.arange(len(molecule_ids)))
+
+            # Dataframe
+            df_features_shf = candidates.get_molecule_features_by_molecule_id(
+                tuple(molecule_ids[i] for i in rnd_idc), "FCFP__count__all", return_dataframe=True)
+            self.assertListEqual([molecule_ids[i] for i in rnd_idc], df_features_shf["identifier"].to_list())
+
+        # --------------------------
+        # InChIKey1 (2nd test case)
+        # --------------------------
+        molecule_ids = [
+            "NOSKXGRTKKZRIT",
+            "XGYLCEZCVLQHCU",
+            "VQZQVLFKPGRLBR",
+            "LJPDBPMRVRTPFR",
+            "TWSFVQCFVBBJSX",
+            "KULXXBYMXPLNPF",
+            "VQZQVLFKPGRLBR",
+            "GXJJYAMHUBLBSN",
+            "IKFXBNOSLPMDFV",
+            "KULXXBYMXPLNPF",
+            "XGYLCEZCVLQHCU"
+        ]
+
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey1")
+        df_features = candidates.get_molecule_features_by_molecule_id(molecule_ids, "sirius_fps", True)
+        feature_matrix = candidates.get_molecule_features_by_molecule_id(molecule_ids, "sirius_fps", False)
+
+        np.testing.assert_equal((len(molecule_ids), 3047), feature_matrix.shape)
+        np.testing.assert_equal((len(molecule_ids), 3047), df_features.iloc[:, 1:].shape)
+        self.assertListEqual(list(molecule_ids), df_features["identifier"].to_list())
+
+        for rep in range(10):
+            rnd_idc = np.random.RandomState(rep).permutation(np.arange(len(molecule_ids)))
+
+            # Dataframe
+            df_features_shf = candidates.get_molecule_features_by_molecule_id(
+                tuple(molecule_ids[i] for i in rnd_idc), "sirius_fps", return_dataframe=True)
+            self.assertListEqual([molecule_ids[i] for i in rnd_idc], df_features_shf["identifier"].to_list())
+
+    def test_get_molecule_feature_by_molecule_id(self):
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey")
+        molecule_ids = tuple([
+            "SBHCLVQMTBWHCD-SPUNCSNDSA-N",
+            "LLPVUJKHELUZHR-HLAWJBBLSA-N",
+            "DHDMIKWKZFJXOS-UHFFFAOYSA-N",
+            "OHVISDOGGOXLEZ-JTQLQIEISA-N",
+            "OLUPDFSQBOUUFB-UHFFFAOYSA-N",
+            "RLRPRPMUIAMCFN-UHFFFAOYSA-N",
+            "UDDHOCQMIMZSLV-HNNXBMFYSA-N",
+            "BADLBQAPLMCNBA-UHFFFAOYSA-N"
+        ])
+
+        # ---------------------------------
+        # BINARY FINGERPRINTS
+        # ---------------------------------
+        fps_ref = [
+            "1,6,7,19,21,23,27,28,30,59,74,107,110,111,112,113,115,187,193,194,195,197,202,207,208,216,219,225,226,228,230,278,282,291,297,344,346,353,359,361,362,368,393,411,416,437,451,459,470,487,503,518,521,523,525,526,529,538,546,639,640,651,669,672,673,674,675,676,677,680,683,692,901,902,904,937,948,997,1000,1043,1070,1078,1083,1088,1090,1138,1195,1298,1318,1338,1478,1509,1559,1672,1841,1884,1885,2033,2108,2138,2357,2407,2788,2834,2850",
+            "1,6,12,14,15,19,21,22,24,27,28,29,57,59,101,112,115,149,155,174,184,187,191,192,194,195,197,202,205,206,207,208,216,217,218,219,221,222,223,225,228,230,231,246,249,252,253,258,278,282,283,291,297,299,300,307,310,311,319,320,322,338,344,346,350,353,359,361,362,368,393,399,416,424,429,436,448,451,452,456,459,470,476,485,486,487,498,500,503,504,514,518,521,523,529,530,534,538,539,542,546,547,548,549,554,558,559,560,561,562,563,564,570,571,578,579,586,587,593,594,600,601,614,618,620,632,651,652,672,795,796,808,839,868,876,879,904,917,921,937,948,950,951,952,960,963,966,968,969,971,972,973,974,975,978,1000,1010,1011,1017,1019,1020,1023,1027,1029,1030,1034,1043,1050,1051,1053,1055,1056,1059,1062,1067,1068,1070,1072,1074,1076,1077,1078,1080,1081,1082,1083,1085,1087,1088,1089,1090,1091,1093,1096,1101,1107,1138,1139,1195,1196,1201,1277,1286,1318,1369,1410,1412,1450,1458,1549,1583,1860,1883,1930,2013,2185,2310,2319,2417,2462,2618,2646,2651,2652,2663,2669,2674,2679,2687,2690,2699,2708,2711,2712,2723,2724,2733,2735,2738,2751,2757,2800,2806,2812,2822,2827,2834,2838,2845,2859,2866,2877,2920,2927",
+            "1,14,16,19,21,22,27,28,29,37,39,41,59,60,62,110,112,115,119,142,153,155,160,163,167,171,172,173,174,176,180,183,187,189,190,192,196,205,206,207,210,211,215,217,218,221,222,223,224,225,226,227,228,229,230,231,232,246,278,282,283,286,287,288,291,292,293,296,297,299,300,306,307,310,311,319,320,322,328,329,330,338,344,346,350,353,358,361,362,367,375,382,393,399,411,416,418,425,428,429,433,436,446,447,448,451,452,459,464,465,467,470,473,474,476,477,481,482,486,487,488,494,495,497,498,500,503,504,505,507,508,514,515,518,519,521,529,530,532,533,538,539,541,546,548,549,552,553,558,559,560,564,571,583,587,594,604,614,618,619,632,633,651,652,716,717,724,725,757,758,762,771,777,778,782,822,868,869,870,876,884,885,886,904,937,946,960,976,982,986,1000,1018,1019,1027,1043,1066,1067,1068,1070,1099,1104,1111,1126,1127,1131,1132,1133,1135,1138,1160,1178,1179,1187,1190,1195,1206,1208,1209,1233,1245,1249,1250,1255,1394,1410,1603,1634,1697,1712,1839,2145,2192,2228,2255,2262,2566,2618,2653,2663,2664,2676,2704,2711,2723,2751,2758,2782,2812,2866,2877",
+            "14,15,19,21,22,27,35,84,87,98,110,112,115,122,148,158,161,168,179,185,186,188,193,195,199,200,204,205,212,213,221,223,224,226,227,228,229,230,231,246,247,248,252,273,278,282,283,287,288,289,291,292,293,296,297,299,300,302,306,307,310,311,312,313,314,315,316,318,322,325,327,328,329,330,332,337,338,344,345,350,353,354,356,360,362,363,365,366,369,375,385,387,390,393,394,397,402,403,411,413,415,416,420,426,428,431,433,436,439,442,448,450,451,452,454,459,461,465,466,467,468,470,471,472,474,477,478,481,482,486,487,489,494,497,498,499,500,503,504,505,514,518,521,522,528,529,530,533,538,539,541,546,548,552,553,558,559,560,565,589,614,618,625,651,749,757,821,868,869,873,931,937,993,1068,1138,1139,1195,1242,1340,1410,1444,1553,1575,1712,1806,2237,2259,2484,2663,2711,2734,2751,2812,2860,2866,2893,2942",
+            "1,14,16,19,21,22,27,28,37,59,60,62,98,101,110,112,115,143,153,164,172,173,176,177,178,183,184,187,188,189,190,192,193,194,196,204,205,206,211,212,213,215,217,218,221,222,223,224,225,226,227,228,229,230,231,239,246,252,253,273,278,282,283,287,288,291,293,296,297,299,300,307,310,311,315,316,319,320,322,328,329,330,338,344,346,350,353,356,358,361,362,365,367,374,375,382,393,397,399,402,411,416,429,430,431,433,436,445,448,451,452,459,461,464,465,467,470,471,474,475,476,477,481,482,483,486,487,488,494,497,498,500,501,503,504,505,507,512,514,515,517,518,521,522,529,530,531,533,538,539,540,541,546,548,549,550,551,552,553,558,559,560,565,567,571,574,579,584,589,590,594,598,601,605,614,618,651,652,653,660,724,725,749,757,782,787,817,839,868,869,873,874,904,937,946,982,1000,1027,1034,1043,1068,1077,1111,1138,1160,1188,1195,1202,1206,1227,1233,1241,1256,1325,1339,1344,1441,1486,1587,1646,1660,1661,1860,1924,2026,2262,2306,2329,2512,2555,2566,2618,2646,2650,2653,2655,2669,2674,2676,2690,2691,2704,2724,2733,2734,2750,2758,2782,2787,2796,2849,2857,2866,2877,2893,2937",
+            "5,6,7,9,14,15,19,21,22,27,28,29,30,34,56,102,107,112,115,129,138,149,155,157,170,172,181,183,184,191,205,206,207,211,216,217,221,223,228,230,231,246,252,253,258,259,278,282,283,285,291,297,338,344,350,353,362,382,393,416,451,459,467,470,482,485,487,500,502,504,518,521,529,530,538,539,540,546,547,548,549,550,551,558,559,560,593,594,597,614,651,652,795,797,868,901,906,921,923,937,956,960,970,975,982,997,1003,1029,1043,1055,1056,1061,1070,1078,1083,1088,1090,1093,1096,1101,1107,1138,1139,1195,1333,1338,1407,1495,1597,1769,1785,2300,2383,2515,2651,2666,2682,2697,2809,2834,2838,2839,2852,2928,2944",
+            "14,16,19,21,22,28,29,37,39,42,87,98,101,112,115,145,148,156,164,166,167,168,172,174,177,180,184,186,190,192,199,200,201,204,205,206,207,208,215,219,220,223,224,226,227,228,229,230,231,236,237,240,241,242,246,252,253,273,275,278,282,283,288,291,292,296,297,299,300,301,302,305,306,307,310,311,312,313,315,316,319,320,322,323,324,325,328,329,330,332,335,336,337,338,344,345,350,351,353,354,356,360,362,363,365,369,375,382,385,393,394,397,399,402,411,413,415,416,417,418,420,426,427,428,429,431,433,436,439,448,451,452,454,455,459,461,464,465,467,470,471,474,476,477,481,486,487,494,497,498,500,503,504,505,514,515,518,521,522,529,530,532,533,538,539,541,546,547,548,549,552,558,559,560,562,571,581,591,594,603,614,651,652,738,743,822,838,855,856,868,876,909,912,924,937,1005,1043,1063,1064,1070,1075,1099,1104,1105,1111,1112,1113,1126,1132,1160,1173,1178,1195,1206,1250,1361,1417,1484,1534,1547,1720,1761,1767,1803,1807,1910,2032,2118,2202,2228,2229,2240,2280,2463,2591,2597,2613,2647,2683,2702,2724,2750,2810,2812,2866,2877,2880,2893,2917,2947",
+            "6,7,14,16,19,21,22,27,28,34,37,101,112,115,163,171,172,183,184,187,188,192,193,194,195,197,204,205,206,207,208,211,215,216,219,223,224,226,228,230,231,246,252,253,273,278,282,283,291,293,297,299,300,307,310,311,319,320,322,323,338,344,350,353,362,382,393,399,411,416,429,436,448,449,451,452,459,464,467,470,474,476,482,485,486,487,488,498,500,503,504,514,518,521,529,530,531,538,539,546,548,549,558,559,560,562,564,571,578,587,594,600,651,672,673,674,675,677,680,683,691,692,698,711,723,749,822,868,919,937,1043,1070,1078,1083,1088,1093,1096,1101,1107,1138,1195,1206,1509,1544,1653,1670,1744,1763,1803,1871,2240,2329,2407,2653,2750,2866,2877"
+        ]
+        fps_mat_ref = np.zeros((len(fps_ref), 3047))
+        for i, fp_i in enumerate(fps_ref):
+            for j in fp_i.split(","):
+                fps_mat_ref[i, int(j)] = 1
+
+        df_features = candidates.get_molecule_features_by_molecule_id(molecule_ids, "sirius_fps", True)
+        feature_matrix = candidates.get_molecule_features_by_molecule_id(molecule_ids, "sirius_fps", False)
+
+        np.testing.assert_equal(fps_mat_ref, feature_matrix)
+        np.testing.assert_equal(feature_matrix, df_features.iloc[:, 1:].values)
+        self.assertListEqual(list(molecule_ids), df_features["identifier"].to_list())
+
+        for rep in range(10):
+            rnd_idc = np.random.RandomState(rep).permutation(np.arange(len(molecule_ids)))
+
+            # Feature matrix
+            feature_matrix_shf = candidates.get_molecule_features_by_molecule_id(
+                tuple(molecule_ids[i] for i in rnd_idc), "sirius_fps")
+            np.testing.assert_array_equal(feature_matrix[rnd_idc], feature_matrix_shf)
+
+            # Dataframe
+            df_features_shf = candidates.get_molecule_features_by_molecule_id(
+                tuple(molecule_ids[i] for i in rnd_idc), "sirius_fps", return_dataframe=True)
+            np.testing.assert_equal(feature_matrix[rnd_idc], df_features_shf.iloc[:, 1:].values)
+            self.assertListEqual([molecule_ids[i] for i in rnd_idc], df_features_shf["identifier"].to_list())
+
+        # ---------------------------------
+        # COUNTING FINGERPRINTS
+        # ---------------------------------
+        fps_ref_bits = [
+            "0,1,2,24,35,38,50,51,53,150,221,223,293,373,376,574,785,961",
+            "0,2,3,4,9,13,17,18,22,24,51,64,71,84,96,97,103,150,158,159,162,167,199,233,270,469,471,920,1114,1192",
+            "0,1,2,4,9,18,21,22,23,24,34,51,61,68,71,77,78,79,80,83,85,106,107,110,111,112,115,126,139,287,297,318,380,476,480",
+            "0,2,4,9,21,22,32,33,34,40,42,51,52,56,76,90,95,96,196,200,316,387,527,550,554,762",
+            "0,1,2,4,9,16,18,21,22,51,68,79,85,86,88,89,94,95,107,114,115,167,251,281,287,299,380,504,569,582,588,643,696,819",
+            "0,2,3,19,24,51,96,113,116,126,180,204,375,464,640,641,781,928,1037,1203,1228",
+            "0,2,4,5,6,9,10,21,22,24,27,33,40,47,52,60,68,71,79,80,88,104,115,237,238,239,242,249,267,328,349,423,757,798,896,974,975,976,977,978",
+            "0,2,3,4,19,22,24,25,51,68,79,95,104,114,115,150,267,272,293,383,384,653,790,798,799"
+        ]
+        fps_ref_vals = [
+            "19,1,1,8,1,1,1,1,1,6,5,1,1,1,1,4,1,3",
+            "15,2,1,6,3,1,1,1,2,4,4,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1",
+            "12,1,3,6,1,1,1,3,1,2,1,3,1,2,1,2,1,2,1,1,1,1,1,1,2,1,1,1,1,1,1,1,1,1,1",
+            "4,1,10,1,2,4,2,1,1,1,1,2,1,2,2,1,1,1,1,1,2,1,2,1,1,2",
+            "8,1,4,12,2,1,1,1,6,2,3,3,1,1,2,1,1,2,1,2,1,1,1,2,1,1,1,1,1,1,1,1,1,1",
+            "20,1,1,1,6,4,1,1,1,2,1,3,1,1,1,2,2,1,1,2,1",
+            "6,1,14,1,1,2,1,1,7,1,2,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1",
+            "11,2,1,10,1,6,7,1,1,2,2,2,2,2,2,3,2,2,1,2,2,1,1,2,2"
+        ]
+
+        fps_mat_ref = np.zeros((len(fps_ref), 1280))
+        for i in range(len(fps_ref)):
+            for bit, val in zip(fps_ref_bits[i].split(","), fps_ref_vals[i].split(",")):
+                fps_mat_ref[i, int(bit)] = int(val)
+
+        df_features = candidates.get_molecule_features_by_molecule_id(molecule_ids, "FCFP__count__all", True)
+        feature_matrix = candidates.get_molecule_features_by_molecule_id(molecule_ids, "FCFP__count__all", False)
+
+        np.testing.assert_equal(fps_mat_ref, feature_matrix)
+        np.testing.assert_equal(feature_matrix, df_features.iloc[:, 1:].values)
+        self.assertListEqual(list(molecule_ids), df_features["identifier"].to_list())
+
+        for rep in range(10):
+            rnd_idc = np.random.RandomState(rep).permutation(np.arange(len(molecule_ids)))
+
+            # Feature matrix
+            feature_matrix_shf = candidates.get_molecule_features_by_molecule_id(
+                tuple(molecule_ids[i] for i in rnd_idc), "FCFP__count__all")
+            np.testing.assert_array_equal(feature_matrix[rnd_idc], feature_matrix_shf)
+
+            # Dataframe
+            df_features_shf = candidates.get_molecule_features_by_molecule_id(
+                tuple(molecule_ids[i] for i in rnd_idc), "FCFP__count__all", return_dataframe=True)
+            np.testing.assert_equal(feature_matrix[rnd_idc], df_features_shf.iloc[:, 1:].values)
+            self.assertListEqual([molecule_ids[i] for i in rnd_idc], df_features_shf["identifier"].to_list())
+
+    def test_ensure_feature_is_available(self):
+        candidates = CandSQLiteDB_Massbank(db_fn=MASSBANK_DB_FN)
+
+        with self.assertRaises(ValueError):
+            candidates._ensure_feature_is_available("bla")
+            candidates._ensure_feature_is_available(None)
+            candidates._ensure_feature_is_available("")
+            candidates._ensure_feature_is_available("substructure_count")
+
+        candidates._ensure_feature_is_available("FCFP__count__all")
+        candidates._ensure_feature_is_available("sirius_fps")
+
+    def test_ensure_molecule_identifier_is_available(self):
+        candidates = CandSQLiteDB_Massbank(db_fn=MASSBANK_DB_FN)
+
+        with self.assertRaises(ValueError):
+            candidates._ensure_molecule_identifier_is_available("inchistr")
+            candidates._ensure_molecule_identifier_is_available(None)
+            candidates._ensure_molecule_identifier_is_available("")
+
+        candidates._ensure_molecule_identifier_is_available("inchi")
+        candidates._ensure_molecule_identifier_is_available("inchikey")
+        candidates._ensure_molecule_identifier_is_available("cid")
 
 
 class TestCandidateSQLiteDB(unittest.TestCase):
@@ -1030,6 +1269,70 @@ class TestSequenceSample(unittest.TestCase):
 
                 # Candidate sets must point to different objects
                 self.assertIs(test_seq[i].candidates, test_seq[j].candidates)
+
+
+class TestPerformanceDifferenceBetweenBach2020AndMassBank(unittest.TestCase):
+    def test_loading_molecule_features_by_id(self):
+        n_rep = 25
+
+        # --------
+        # MassBank
+        # --------
+
+        candidates_mb = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey")
+
+        # BINARY
+
+        t_mb_binary = 0.0
+        for rep in range(n_rep):
+            res = candidates_mb.db.execute(
+                "SELECT inchikey FROM fingerprints_data__sirius_fps fd \
+                 INNER JOIN molecules m ON fd.molecule = m.cid \
+                 ORDER BY random() \
+                 LIMIT 100"
+            )
+
+            start = time.time()
+            fps = candidates_mb.get_molecule_features_by_molecule_id([row[0] for row in res], "sirius_fps")
+            t_mb_binary += (time.time() - start)
+
+        print("MassBank (binary): %.3fs" % (t_mb_binary / n_rep))
+
+        # COUNT
+
+        t_mb_count = 0.0
+        for rep in range(n_rep):
+            res = candidates_mb.db.execute(
+                "SELECT inchikey FROM fingerprints_data__FCFP__count__all fd \
+                 INNER JOIN molecules m ON fd.molecule = m.cid \
+                 ORDER BY random() \
+                 LIMIT 200"
+            )
+
+            start = time.time()
+            candidates_mb.get_molecule_features_by_molecule_id([row[0] for row in res], "FCFP__count__all")
+            t_mb_count += (time.time() - start)
+
+        print("MassBank (count): %.3fs" % (t_mb_count / n_rep))
+
+        # --------
+        # Bach2020
+        # --------
+        candidates_bach = CandSQLiteDB_Bach2020(BACH2020_DB_FN, molecule_identifier="inchikey")
+
+        t_bach = 0.0
+        for rep in range(n_rep):
+            res = candidates_bach.db.execute(
+                "SELECT inchikey FROM molecules \
+                 ORDER BY random() \
+                 LIMIT 200"
+            )
+
+            start = time.time()
+            candidates_bach.get_molecule_features_by_molecule_id([row[0] for row in res], "substructure_count")
+            t_bach += (time.time() - start)
+
+        print("Bach2020: %.3fs" % (t_bach / n_rep))
 
 
 class TestBugsAndWiredStuff(unittest.TestCase):

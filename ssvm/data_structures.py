@@ -728,9 +728,9 @@ class ABCCandSQLiteDB_Massbank(ABCCandSQLiteDB):
         """
         query = "SELECT m.%s AS identifier, fd.bits, fd.vals FROM candidates_spectra" \
                 "   INNER JOIN molecules m ON m.cid = candidates_spectra.candidate" \
-                "   INNER JOIN fingerprints_data fd ON fd.molecule = candidates_spectra.candidate" \
-                "   WHERE spectrum IS '%s' AND fd.name IS '%s'" \
-                % (self.molecule_identifier, spectrum.get("spectrum_id"), feature)
+                "   INNER JOIN fingerprints_data__%s fd ON fd.molecule = candidates_spectra.candidate" \
+                "   WHERE spectrum IS '%s'" \
+                % (self.molecule_identifier, feature, spectrum.get("spectrum_id"))
 
         if candidate_subset is not None:
             query += " AND identifier IN %s" % self._in_sql(candidate_subset)
@@ -772,13 +772,13 @@ class ABCCandSQLiteDB_Massbank(ABCCandSQLiteDB):
         # Read: https://www.sqlite.org/lang_expr.html#case
         _order_query_str = "\n".join(["WHEN '%s' THEN %d" % (mid, i) for i, mid in enumerate(molecule_ids, start=1)])
 
-        query = "SELECT %s AS identifier, fd.bits, fd.vals FROM molecules" \
-                "   INNER JOIN fingerprints_data fd ON fd.molecule = molecules.cid" \
-                "   WHERE identifier IN %s AND fd.name is '%s'" \
+        query = "SELECT %s AS identifier, bits, vals FROM fingerprints_data__%s fd" \
+                "   INNER JOIN main.molecules mols ON mols.cid = fd.molecule" \
+                "   WHERE identifier IN %s" \
                 "   GROUP BY identifier" \
                 "   ORDER BY CASE identifier" \
                 "         %s" \
-                "      END" % (self.molecule_identifier, self._in_sql(molecule_ids), features, _order_query_str)
+                "      END" % (self.molecule_identifier, features, self._in_sql(molecule_ids), _order_query_str)
 
         return query
 
