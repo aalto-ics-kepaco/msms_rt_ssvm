@@ -35,8 +35,9 @@ from matchms.Spectrum import Spectrum
 from joblib import Parallel, delayed
 from scipy.stats import rankdata
 
+from ssvm.data_structures import ABCCandSQLiteDB
 from ssvm.data_structures import CandSQLiteDB_Bach2020, RandomSubsetCandSQLiteDB_Bach2020
-from ssvm.data_structures import CandSQLiteDB_Massbank
+from ssvm.data_structures import CandSQLiteDB_Massbank, RandomSubsetCandSQLiteDB_Massbank
 from ssvm.data_structures import SequenceSample, Sequence, SpanningTrees
 
 BACH2020_DB_FN = "Bach2020_test_db.sqlite"
@@ -956,6 +957,128 @@ class TestCandidateSQLiteDB(unittest.TestCase):
             np.testing.assert_array_equal(res[0], res[i])
 
 
+class TestRandomSubsetCandidateSQLiteDB_Massbank(unittest.TestCase):
+    def test_get_labelspace(self):
+        # ----------
+        # SPECTRUM 1
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "KW13980462",
+                                                         "molecule_id": "YPLYFEUBZLLLIY-UHFFFAOYSA-N"})
+
+        # Do not enforce the ground truth structure to be in the candidate set
+        candidates = RandomSubsetCandSQLiteDB_Massbank(
+            number_of_candidates=4000, db_fn=MASSBANK_DB_FN, molecule_identifier="inchikey", include_correct_candidate=False)
+        self.assertEqual(3834, len(candidates.get_labelspace(spectrum)))
+        self.assertEqual(candidates.get_n_cand(spectrum), len(np.unique(candidates.get_labelspace(spectrum))))
+
+        # Enforce correct structure to be present
+        candidates = RandomSubsetCandSQLiteDB_Massbank(
+            number_of_candidates=102, db_fn=MASSBANK_DB_FN, molecule_identifier="inchikey", include_correct_candidate=True)
+        self.assertEqual(102, len(candidates.get_labelspace(spectrum)))
+        self.assertEqual(candidates.get_n_cand(spectrum), len(np.unique(candidates.get_labelspace(spectrum))))
+        self.assertIn(spectrum.metadata["molecule_id"], candidates.get_labelspace(spectrum))
+
+        # ----------
+        # SPECTRUM 2
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "BS40569952",
+                                                         "molecule_id": "CKEXCBVNKRHAMX"})
+
+        # Do not enforce the ground truth structure to be in the candidate set
+        candidates = RandomSubsetCandSQLiteDB_Massbank(
+            number_of_candidates=102, db_fn=MASSBANK_DB_FN, molecule_identifier="inchikey1", include_correct_candidate=False)
+        self.assertEqual(102, len(candidates.get_labelspace(spectrum)))
+        self.assertEqual(candidates.get_n_cand(spectrum), len(np.unique(candidates.get_labelspace(spectrum))))
+
+        # Enforce correct structure to be present
+        candidates = RandomSubsetCandSQLiteDB_Massbank(
+            number_of_candidates=102, db_fn=MASSBANK_DB_FN, molecule_identifier="inchikey1", include_correct_candidate=True)
+        self.assertEqual(102, len(candidates.get_labelspace(spectrum)))
+        self.assertEqual(candidates.get_n_cand(spectrum), len(np.unique(candidates.get_labelspace(spectrum))))
+        self.assertIn(spectrum.metadata["molecule_id"], candidates.get_labelspace(spectrum))
+
+    def test_all_outputs_are_sorted_equally(self):
+        # ----------
+        # SPECTRUM 1
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "AU89649268",
+                                                         "molecule_id": "SKHXRNHSZTXSLP-UKTHLTGXSA-N"})
+
+        # Do not enforce the ground truth structure to be in the candidate set
+        candidates = RandomSubsetCandSQLiteDB_Massbank(
+            number_of_candidates=102, db_fn=MASSBANK_DB_FN, molecule_identifier="inchikey", include_correct_candidate=True)
+
+        scores = candidates.get_ms2_scores(spectrum, "sirius__sd__correct_mf", return_dataframe=True)
+        fps = candidates.get_molecule_features(spectrum, "sirius_fps", return_dataframe=True)
+        labspace = candidates.get_labelspace(spectrum)
+
+        self.assertEqual(sorted(labspace), labspace)
+        self.assertEqual(labspace, scores["identifier"].to_list())
+        self.assertEqual(labspace, fps["identifier"].to_list())
+
+    def test_get_number_of_candidates(self):
+        # ----------
+        # SPECTRUM 1
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "LU53695978"})
+
+        # Molecule identifier: inchikey
+        candidates = RandomSubsetCandSQLiteDB_Massbank(
+            number_of_candidates=102, db_fn=MASSBANK_DB_FN, molecule_identifier="inchikey")
+        self.assertEqual(102, candidates.get_n_cand(spectrum))
+
+        # Molecule identifier: inchikey1
+        candidates = RandomSubsetCandSQLiteDB_Massbank(
+            number_of_candidates=102, db_fn=MASSBANK_DB_FN, molecule_identifier="inchikey1")
+        self.assertEqual(102, candidates.get_n_cand(spectrum))
+
+        # ----------
+        # SPECTRUM 2
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "SM51162731"})
+
+        # Molecule identifier: inchikey
+        candidates = RandomSubsetCandSQLiteDB_Massbank(
+            number_of_candidates=250, db_fn=MASSBANK_DB_FN, molecule_identifier="inchikey")
+        self.assertEqual(176, candidates.get_n_cand(spectrum))
+
+        # Molecule identifier: inchikey1
+        candidates = RandomSubsetCandSQLiteDB_Massbank(
+            number_of_candidates=250, db_fn=MASSBANK_DB_FN, molecule_identifier="inchikey1")
+        self.assertEqual(165, candidates.get_n_cand(spectrum))
+
+    def test_get_total_number_of_candidates(self):
+        # ----------
+        # SPECTRUM 1
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "SM39129337"})
+
+        # Molecule identifier: inchikey
+        candidates = RandomSubsetCandSQLiteDB_Massbank(
+            number_of_candidates=1032, db_fn=MASSBANK_DB_FN, molecule_identifier="inchikey")
+        self.assertEqual(971, candidates.get_n_total_cand(spectrum))
+
+        # Molecule identifier: inchikey1
+        candidates = RandomSubsetCandSQLiteDB_Massbank(
+            number_of_candidates=102, db_fn=MASSBANK_DB_FN, molecule_identifier="inchikey1")
+        self.assertEqual(636, candidates.get_n_total_cand(spectrum))
+
+        # ----------
+        # SPECTRUM 2
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "AU88550178"})
+
+        # Molecule identifier: inchikey
+        candidates = RandomSubsetCandSQLiteDB_Massbank(
+            number_of_candidates=5, db_fn=MASSBANK_DB_FN, molecule_identifier="inchikey")
+        self.assertEqual(3934, candidates.get_n_total_cand(spectrum))
+
+        # Molecule identifier: inchikey1
+        candidates = RandomSubsetCandSQLiteDB_Massbank(
+            number_of_candidates=102, db_fn=MASSBANK_DB_FN, molecule_identifier="inchikey1")
+        self.assertEqual(1999, candidates.get_n_total_cand(spectrum))
+
+
 class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
     def test_get_labelspace(self):
         # ----------
@@ -978,7 +1101,7 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
         self.assertIn(spectrum.metadata["molecule_id"], candidates.get_labelspace(spectrum))
 
         # ----------
-        # SPECTRUM 1
+        # SPECTRUM 2
         # ----------
         spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "Challenge-016",
                                                          "molecule_id": "FGXWKSZFVQUSTL"})
@@ -1077,13 +1200,15 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
             number_of_candidates=102, db_fn=BACH2020_DB_FN, molecule_identifier="inchikey1")
         self.assertEqual(16, candidates.get_n_total_cand(spectrum))
 
+
+class TestABCCandSQLiteDB(unittest.TestCase):
     def test_normalize_scores(self):
         # All scores are negative
         for rep in range(30):
             _rs = np.random.RandomState(rep)
             scores = - _rs.random(_rs.randint(1, 50))
-            c1, c2 = CandSQLiteDB_Bach2020.get_normalization_parameters_c1_and_c2(scores)
-            scores_norm = CandSQLiteDB_Bach2020.normalize_scores(scores, c1, c2)
+            c1, c2 = ABCCandSQLiteDB.get_normalization_parameters_c1_and_c2(scores)
+            scores_norm = ABCCandSQLiteDB.normalize_scores(scores, c1, c2)
             np.testing.assert_array_equal(rankdata(scores, method="ordinal"), rankdata(scores_norm, method="ordinal"))
             self.assertEqual(1.0, np.max(scores_norm))
             self.assertAlmostEqual(
@@ -1094,8 +1219,8 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
         for rep in range(20):
             _rs = np.random.RandomState(rep)
             scores = _rs.random(_rs.randint(1, 50))
-            c1, c2 = CandSQLiteDB_Bach2020.get_normalization_parameters_c1_and_c2(scores)
-            scores_norm = CandSQLiteDB_Bach2020.normalize_scores(scores, c1, c2)
+            c1, c2 = ABCCandSQLiteDB.get_normalization_parameters_c1_and_c2(scores)
+            scores_norm = ABCCandSQLiteDB.normalize_scores(scores, c1, c2)
             np.testing.assert_array_equal(rankdata(scores, method="ordinal"), rankdata(scores_norm, method="ordinal"))
             self.assertEqual(1.0, np.max(scores_norm))
             self.assertAlmostEqual(np.min(scores) / np.max(scores), np.min(scores_norm))
@@ -1104,10 +1229,10 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
         for rep in range(20):
             _rs = np.random.RandomState(rep)
             scores = _rs.random(_rs.randint(1, 50)) - 0.5
-            c1, c2 = CandSQLiteDB_Bach2020.get_normalization_parameters_c1_and_c2(scores)
+            c1, c2 = ABCCandSQLiteDB.get_normalization_parameters_c1_and_c2(scores)
             self.assertEqual(c1, np.abs(np.min(scores)))
             self.assertEqual(c2, np.sort(scores + c1)[1] / 10)
-            scores_norm = CandSQLiteDB_Bach2020.normalize_scores(scores, c1, c2)
+            scores_norm = ABCCandSQLiteDB.normalize_scores(scores, c1, c2)
             np.testing.assert_array_equal(rankdata(scores, method="ordinal"), rankdata(scores_norm, method="ordinal"))
             self.assertEqual(1.0, np.max(scores_norm))
             self.assertAlmostEqual(c2 / np.max(scores + c1), np.min(scores_norm))
@@ -1117,14 +1242,14 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
         for n_cand in [1, 30]:
             for val in [-1.1, -0.9, 0, 0.1, 2]:
                 scores = np.full(n_cand, fill_value=val)
-                c1, c2 = CandSQLiteDB_Bach2020.get_normalization_parameters_c1_and_c2(scores)
+                c1, c2 = ABCCandSQLiteDB.get_normalization_parameters_c1_and_c2(scores)
 
                 if val >= 0:
                     self.assertEqual(0.0, c1)
                 else:
                     self.assertEqual(np.abs(val), c1)
                 self.assertEqual(c2, 1e-6)
-                np.testing.assert_array_equal(np.ones_like(scores), CandSQLiteDB_Bach2020.normalize_scores(scores, c1, c2))
+                np.testing.assert_array_equal(np.ones_like(scores), ABCCandSQLiteDB.normalize_scores(scores, c1, c2))
 
 
 class TestSequence(unittest.TestCase):

@@ -950,9 +950,6 @@ class ABCRandomSubsetCandSQLiteDB(ABCCandSQLiteDB):
             candidates_sub = check_random_state(self.random_state).choice(candidates_all, n_cand.astype(int),
                                                                           replace=False)
 
-            # print(self.random_state, spectrum_id)
-            # print(candidates_sub)
-
             if self.include_correct_candidate:
                 molecule_id = spectrum.get("molecule_id")
 
@@ -988,6 +985,19 @@ class ABCRandomSubsetCandSQLiteDB(ABCCandSQLiteDB):
 
 
 class RandomSubsetCandSQLiteDB_Bach2020(ABCRandomSubsetCandSQLiteDB, ABCCandSQLiteDB_Bach2020):
+    """
+    This class allows to generate (and fix) a random candidate subset for each spectrum. For that, the first time a
+    subset is requested for a spectrum (identified by its id) is sampled. The subset size can be specified in as
+    absolute size or fraction of the available candidates.
+    """
+    def __init__(self, *args, **kwargs):
+        """
+        No additional parameters.
+        """
+        super().__init__(*args, **kwargs)
+
+
+class RandomSubsetCandSQLiteDB_Massbank(ABCRandomSubsetCandSQLiteDB, ABCCandSQLiteDB_Massbank):
     """
     This class allows to generate (and fix) a random candidate subset for each spectrum. For that, the first time a
     subset is requested for a spectrum (identified by its id) is sampled. The subset size can be specified in as
