@@ -52,7 +52,9 @@ jobs:
       # ------------------------
       # Decompress the test data
       - name: Gun-zipping the test SQLite DB
-        run: gunzip ssvm/tests/Bach2020_test_db.sqlite.gz
+        run: |
+          gunzip ssvm/tests/Bach2020_test_db.sqlite.gz
+          gunzip ssvm/tests/Massbank_test_db.sqlite.gz
       # ------------------------
 
       # -----------------

@@ -34,7 +34,7 @@ from matchms.Spectrum import Spectrum
 from scipy.sparse import csr_matrix
 
 from ssvm.ssvm import _StructuredSVM, StructuredSVMSequencesFixedMS2
-from ssvm.data_structures import SequenceSample, RandomSubsetCandidateSQLiteDB, SpanningTrees
+from ssvm.data_structures import SequenceSample, RandomSubsetCandSQLiteDB_Bach2020, SpanningTrees
 from ssvm.kernel_utils import generalized_tanimoto_kernel_FAST
 from ssvm.dual_variables import DualVariables
 
@@ -106,8 +106,8 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
         self.N = 50
         self.ssvm.training_data_ = SequenceSample(
             self.spectra, self.labels,
-            RandomSubsetCandidateSQLiteDB(db_fn=DB_FN, molecule_identifier="inchi", random_state=192,
-                                          number_of_candidates=50, include_correct_candidate=True),
+            RandomSubsetCandSQLiteDB_Bach2020(db_fn=DB_FN, molecule_identifier="inchi", random_state=192,
+                                              number_of_candidates=50, include_correct_candidate=True),
             N=self.N, L_min=10,
             L_max=15, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
         self.ssvm.alphas_ = DualVariables(

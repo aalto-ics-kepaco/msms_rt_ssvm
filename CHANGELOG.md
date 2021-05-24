@@ -1,5 +1,12 @@
 # Version History
 
+## v1.2.0 (New Feature)
+
+### Support for the MassBank DB Layout
+
+- candidate class wrapper have been implemented using abstract classes to enable easier support for new DB designs
+- a new test database for the MassBank layout hase been added
+
 ## v1.1.4 (Patch)
 
 - Candidate DB wrapper returns binary fingerprint matrices with dtype = float needed for the numba implementation of the
