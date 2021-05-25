@@ -1,5 +1,10 @@
 # Version History
 
+## v1.2.1 (Minor improvements)
+
+- improve doc-strings
+- fix type-hinting
+
 ## v1.2.0 (New Feature)
 
 ### Support for the MassBank DB Layout

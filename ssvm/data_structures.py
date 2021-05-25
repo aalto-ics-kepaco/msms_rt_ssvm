@@ -1011,7 +1011,7 @@ class RandomSubsetCandSQLiteDB_Massbank(ABCRandomSubsetCandSQLiteDB, ABCCandSQLi
 
 
 class Sequence(object):
-    def __init__(self, spectra: List[Spectrum], candidates: ABCCandSQLiteDB_Bach2020, ms2scorer: Optional[str] = None):
+    def __init__(self, spectra: List[Spectrum], candidates: ABCCandSQLiteDB, ms2scorer: Optional[str] = None):
         self.spectra = spectra
         self.candidates = candidates
         self.ms2scorer = ms2scorer
@@ -1104,10 +1104,12 @@ class Sequence(object):
                        return_as_ndarray: bool = False) -> Union[List[List[float]], List[float],
                                                                  List[np.ndarray], np.ndarray]:
         """
-        Get the MS2 scores for the given index
+        Get the MS2 scores for the given sequence index
 
         :param s: scalar, sequence index for which the MS2 scores should be returned. If None, scores are returned for
             all spectra in the sequence.
+
+        :param return_as_ndarray: boolean, indicating whether the MS2 scores should be returned as numpy array
 
         :param scale_scores_to_range: boolean, indicating whether the output scores should be scaled to (0, 1]
         """
@@ -1138,7 +1140,7 @@ class LabeledSequence(Sequence):
     """
     Class representing the a _labeled_ (MS, RT)-sequence (x, t, y) with associated molecular candidate set C.
     """
-    def __init__(self, spectra: List[Spectrum], labels: List[str], candidates: ABCCandSQLiteDB_Bach2020,
+    def __init__(self, spectra: List[Spectrum], labels: List[str], candidates: ABCCandSQLiteDB,
                  ms2scorer: Optional[str] = None):
         """
         :param spectra: list of strings, spectrum-ids belonging sequence
@@ -1223,9 +1225,10 @@ class SequenceSample(object):
     """
     Class representing a sequence sample.
     """
-    def __init__(self, spectra: List[Spectrum], labels: List[str], candidates: ABCCandSQLiteDB_Bach2020, N: int, L_min: int,
-                 L_max: Optional[int] = None, random_state: Optional[int] = None, sort_sequence_by_rt: bool = False,
-                 ms2scorer: Optional[str] = None, use_sequence_specific_candidates: bool = False):
+    def __init__(self, spectra: List[Spectrum], labels: List[str], candidates: ABCCandSQLiteDB, N: int,
+                 L_min: int, L_max: Optional[int] = None, random_state: Optional[int] = None,
+                 sort_sequence_by_rt: bool = False, ms2scorer: Optional[str] = None,
+                 use_sequence_specific_candidates: bool = False):
         """
         :param data: list of matchms.Spectrum, spectra to sample sequences from
 
@@ -1374,7 +1377,7 @@ class SequenceSample(object):
     def get_train_test_generator(self, spectra_cv: Union[GroupKFold, GroupShuffleSplit, int] = 5,
                                  N_train: Optional[int] = None, N_test: Optional[int] = None,
                                  L_min_test: Optional[int] = None, L_max_test: Optional[int] = None,
-                                 candidates_test: Optional[ABCCandSQLiteDB_Bach2020] = None,
+                                 candidates_test: Optional[ABCCandSQLiteDB] = None,
                                  use_sequence_specific_candidates_for_training: bool = False) \
             -> Tuple[SEQUENCE_SAMPLE_T, SEQUENCE_SAMPLE_T]:
         """
