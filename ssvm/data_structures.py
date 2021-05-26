@@ -1332,7 +1332,7 @@ class SequenceSample(object):
             seq_labels = [self.labels[sig] for sig in seq_idc]
 
             # FIXME: Here we can have multiple times the same molecule in the sample, e.g. due to different adducts.
-            assert pd.Series(seq_labels).is_unique, "Each molecule should appear only ones in the set of molecules."
+            # assert pd.Series(seq_labels).is_unique, "Each molecule should appear only ones in the set of molecules."
 
             # Sort the sequence elements by their retention time
             if self.sort_sequence_by_rt:
@@ -1340,7 +1340,7 @@ class SequenceSample(object):
                                                       key=lambda s: s[0].get("retention_time")))
 
             if self.use_sequence_specific_candidates:
-                if not isinstance(self.candidates, RandomSubsetCandSQLiteDB_Bach2020):
+                if not isinstance(self.candidates, ABCRandomSubsetCandSQLiteDB):
                     raise ValueError("Sequence specific candidate sets are only supported for random candidate subset "
                                      "candidate databases.")
 

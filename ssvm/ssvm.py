@@ -157,7 +157,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         # Open the connection to the candidate DB
         with self.training_data_.candidates:
             self.training_data_info_["d_features_rt_order"] = \
-                data.candidates._get_feature_dimension(self.mol_feat_retention_order)
+                data.candidates._get_d_feature(self.mol_feat_retention_order)
 
             # Set up the dual initial dual vector
             self.alphas_ = DualVariables(C=self.C, label_space=self.training_data_.get_labelspace(),
@@ -1284,7 +1284,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             return mol_kernel
         elif mol_kernel == "tanimoto":
             return tanimoto_kernel_FAST
-        elif mol_kernel == "minmax":
+        elif mol_kernel in ["minmax", "generalized_tanimoto"]:
             return generalized_tanimoto_kernel_FAST
         elif mol_kernel == "minmax_numba":
             return _min_max_dense_jit
@@ -1293,7 +1293,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         elif mol_kernel == "minmax_ufunc_int":
             return _min_max_dense_ufunc_int
         else:
-            raise ValueError("Invalid molecule kernel")
+            raise ValueError("Invalid molecule kernel: '{}'".format(mol_kernel))
 
     @staticmethod
     def label_sequence_to_Z(y: Tuple[str, ...], labelspace: List[List[str]]) -> List[int]:

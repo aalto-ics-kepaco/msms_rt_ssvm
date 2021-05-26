@@ -1,5 +1,21 @@
 # Version History
 
+## v1.2.2 (Patch)
+
+### Fixes
+
+- fix in sequence generator: sequence specific candidate sets need to check for the abstract random candidate set
+  class
+- fix in Structured SVM class: account for interface changes of the candidate DB wrapper class 
+  ('_get_feature_dimension' -> '_get_d_feature')
+  
+### Minor changes
+
+- add 'generalized_tanimoto' as kernel option for the Structured SVM class
+- allow a molecular structure two appear more than ones in a sequence, e.g. if it appears in a dataset twice with 
+  different adducts
+  - change needed due to the MassBank dataset
+
 ## v1.2.1 (Minor improvements)
 
 - improve doc-strings
