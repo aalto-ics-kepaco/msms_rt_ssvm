@@ -1,5 +1,18 @@
 # Version History
 
+## v1.2.3
+
+### New Features
+
+- Spectrum labels for "LabeledSequence" can be extracted from the spectrum objects 
+  - labels can still be passed via an optional parameter 
+  - label-key can be passed as well (default is 'molecule_id')
+- Implementation of the generalized tanimoto label loss  
+
+### Minor improvements
+
+- implemented unittests for the tanimoto label loss
+
 ## v1.2.2 (Patch)
 
 ### Fixes

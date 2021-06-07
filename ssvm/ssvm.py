@@ -692,6 +692,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         """
         Calculate the Node potentials
         """
+        _label_loss_computation_time_avg = 0.0
+
         # Calculate the node potentials. If needed, augment the MS scores with the label loss
         node_potentials = OrderedDict()
 
@@ -716,11 +718,19 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
             # Add label loss is loss-augmented scores are requested
             if loss_augmented:
+                _start = time.time()
+
                 node_potentials[s]["log_score"] += \
                     sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s)  # Delta_i(y)
 
+                _label_loss_computation_time_avg += (time.time() - _start)
+
             if self.average_node_and_edge_potentials:
                 node_potentials[s]["log_score"] /= len(G.nodes)
+
+        SSVM_LOGGER.info(
+            "Computing label-loss took %.3fs per node (in V)." % (_label_loss_computation_time_avg / len(G.nodes))
+        )
 
         return node_potentials
 

@@ -1140,13 +1140,38 @@ class LabeledSequence(Sequence):
     """
     Class representing the a _labeled_ (MS, RT)-sequence (x, t, y) with associated molecular candidate set C.
     """
-    def __init__(self, spectra: List[Spectrum], labels: List[str], candidates: ABCCandSQLiteDB,
-                 ms2scorer: Optional[str] = None):
+    def __init__(self, spectra: List[Spectrum], candidates: ABCCandSQLiteDB, ms2scorer: Optional[str] = None,
+                 labels: Optional[List[str]] = None, label_key: str = "molecule_id"):
         """
         :param spectra: list of strings, spectrum-ids belonging sequence
+
+        :param candidates: ABCCandSQLiteDB, candidate set wrapper
+
+        :param ms2scorer: string, of the MS2 scoring method for which the MS2 scores should be loaded, e.g. during the
+            Structured SVM training.
+
         :param labels: list of strings, ground truth molecule identifiers belonging to the spectra of the sequence
+
+        :param label_key: string, dictionary key used to load the label information from the spectra.
         """
-        self.labels = labels
+        if labels is None:
+            self.labels = []
+            for spectrum in spectra:
+                label = spectrum.get(label_key)
+                if label is None:
+                    raise ValueError(
+                        "Spectrum '%s' has no label information (key = '%s')." % (
+                            spectrum.get("spectrum_id"), label_key
+                        )
+                    )
+                self.labels.append(label)
+        else:
+            if len(labels) != len(spectra):
+                raise ValueError("Number of labels does not match the number of spectra: %d != %d" % (
+                    len(labels), len(spectra)
+                ))
+
+            self.labels = labels
 
         super(LabeledSequence, self).__init__(spectra=spectra, candidates=candidates, ms2scorer=ms2scorer)
 
@@ -1163,16 +1188,6 @@ class LabeledSequence(Sequence):
             return self.labels
         else:
             return self.labels[s]
-
-    def as_Xy_input(self) -> Tuple[List[Spectrum], List[str]]:
-        """
-        Return the (MS, RT)-sequence and ground truth label separately as input for the sklearn interface.
-
-        Usage: sklearn.fit(*LabeledSequence(...).as_Xy_input)
-
-        :return:
-        """
-        return self.spectra, self.labels
 
     def get_index_of_correct_structure(self, s: Optional[int] = None) -> Union[List[int], int]:
         """
@@ -1355,7 +1370,7 @@ class SequenceSample(object):
                 seq_candidates = self.candidates
 
             sequences.append(
-                LabeledSequence(seq_spectra, seq_labels, candidates=seq_candidates, ms2scorer=self.ms2scorer)
+                LabeledSequence(seq_spectra, candidates=seq_candidates, ms2scorer=self.ms2scorer, labels=seq_labels)
             )
             datasets.append(ds)
 

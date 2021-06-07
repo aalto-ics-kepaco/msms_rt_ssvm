@@ -28,7 +28,7 @@ import numpy as np
 
 from sklearn.metrics import hamming_loss as hamming_loss_sk
 
-from ssvm.loss_functions import hamming_loss
+from ssvm.loss_functions import hamming_loss, tanimoto_loss
 
 
 class TestHammingLoss(unittest.TestCase):
@@ -48,6 +48,46 @@ class TestHammingLoss(unittest.TestCase):
 
             for y_i in Y:
                 np.testing.assert_equal(hamming_loss(y, y_i), hamming_loss_sk(y, y_i))
+
+
+class TestTanimotoLoss(unittest.TestCase):
+    @staticmethod
+    def _tanimoto_loss_element(x, y):
+        x, y = set(np.where(x)[0]), set(np.where(y)[0])
+
+        n_inter = len(x & y)
+        n_union = len(x | y)
+
+        return 1 - (n_inter / n_union)
+
+    def test_correctness(self):
+        rs = np.random.RandomState(1921)
+
+        for _ in range(100):
+            d = rs.randint(1, 200)
+            y = (rs.rand(d) > 0.5).astype(float)
+
+            n = rs.randint(1, 500)
+            Y = (rs.rand(n, d) > 0.5).astype(float)
+
+            # There should be fingerprint where all entries are zero
+            y[rs.randint(d)] = 1
+            for i in range(n):
+                Y[i, rs.randint(d)] = 1
+
+            # add the ground-truth fingerprint
+            Y[-1] = y
+
+            # Calculate the tanimoto loss
+            L = tanimoto_loss(y, Y)
+
+            self.assertEqual((n, ), L.shape)
+            self.assertEqual(0, L[-1])
+            self.assertTrue(np.all(L <= 1))
+            self.assertTrue(np.all(L >= 0))
+
+            for i in range(n):
+                self.assertEqual(self._tanimoto_loss_element(y, Y[i]), L[i])
 
 
 if __name__ == '__main__':

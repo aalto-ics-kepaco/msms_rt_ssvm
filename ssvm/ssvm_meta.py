@@ -27,7 +27,7 @@ import numpy as np
 
 from typing import Optional, Union
 
-from ssvm.loss_functions import hamming_loss, tanimoto_loss, minmax_loss
+from ssvm.loss_functions import hamming_loss, tanimoto_loss, minmax_loss, generalized_tanimoto_loss
 from ssvm.dual_variables import DualVariables
 
 
@@ -72,8 +72,13 @@ class _StructuredSVM(object):
             self.label_loss_fun = tanimoto_loss
         elif self.label_loss == "minmax_loss":
             self.label_loss_fun = minmax_loss
+        elif self.label_loss == "generalized_tanimoto_loss":
+            self.label_loss_fun = generalized_tanimoto_loss
         else:
-            raise ValueError("Invalid label loss '%s'. Choices are 'hamming', 'tanimoto_loss' and 'minmax_loss'.")
+            raise ValueError(
+                "Invalid label loss '%s'. Choices are 'hamming', 'tanimoto_loss', 'minmax_loss' and "
+                "'generalized_tanimoto_loss'."
+            )
 
         if self.step_size_approach not in ["diminishing", "linesearch", "linesearch_parallel"]:
             raise ValueError("Invalid stepsize method '%s'. Choices are 'diminishing' and 'linesearch'." %
