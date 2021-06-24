@@ -89,9 +89,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     Structured Support Vector Machine (SSVM) for (MS, RT)-sequence classification.
     """
     def __init__(self, mol_feat_label_loss: str, mol_feat_retention_order: str,
-                 mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]],  n_trees_per_sequence: int = 1,
-                 retention_order_weight=None, n_jobs: int = 1, log_transform_node_potentials: bool = True,
-                 average_node_and_edge_potentials: bool = True, update_direction: str = "map", *args, **kwargs):
+                 mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]], n_trees_per_sequence: int = 1,
+                 n_jobs: int = 1, update_direction: str = "map", *args, **kwargs):
         """
         :param mol_feat_label_loss:
         :param mol_feat_retention_order:
@@ -105,24 +104,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         self.mol_feat_retention_order = mol_feat_retention_order
         self.mol_kernel = self.get_mol_kernel(mol_kernel)
         self.n_trees_per_sequence = n_trees_per_sequence
-        self.retention_order_weight = retention_order_weight
         self.n_jobs = n_jobs
-        self.log_transform_node_potentials = log_transform_node_potentials
-        self.average_node_and_edge_potentials = average_node_and_edge_potentials
         self.update_direction = update_direction
-
-        if self.retention_order_weight is None:
-            self.D_rt = 1.0
-            self.D_ms = 1.0
-        elif np.isscalar(self.retention_order_weight):
-            if not (0 <= self.retention_order_weight <= 1):
-                raise ValueError("The retention order weight must be in [0, 1].")
-
-            # Define the weight on the retention order and mass spectra scores
-            self.D_rt = self.retention_order_weight
-            self.D_ms = 1.0 - self.D_rt
-        else:
-            raise ValueError("The retention order weight must be either a scalar or None.")
 
         if self.n_trees_per_sequence > 1:
             raise ValueError("Currently only a single spanning tree per sequence is supported.")
@@ -690,47 +673,36 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     def _get_node_potentials(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph,
                              loss_augmented: bool = False) -> OrderedDict:
         """
-        Calculate the Node potentials
+        Calculate the (loss-augmented) node potentials
         """
-        _label_loss_computation_time_avg = 0.0
-
         # Calculate the node potentials. If needed, augment the MS scores with the label loss
         node_potentials = OrderedDict()
 
-        # First load all MS2 scores
-        _raw_scores = []
+        # Load the MS2 scores associated with the nodes
         for s in G.nodes:  # V
-            # Load the raw scores
-            _raw_scores.append(sequence.get_ms2_scores(s, scale_scores_to_range=False, return_as_ndarray=True))
-            node_potentials[s] = {"n_cand": len(_raw_scores[-1])}
+            # Raw scores (no additional normalization)
+            _raw_scores = sequence.get_ms2_scores(
+                s, scale_scores_to_range=False, return_as_ndarray=True, score_fill_value=0
+            )
 
-        # Calculate the normalization parameter based on ALL candidates
-        _c1, _c2 = ABCCandSQLiteDB.get_normalization_parameters_c1_and_c2(np.hstack(_raw_scores))
+            # Calculate the normalization parameter: We only use c2 parameter to make all scores positive >= 0
+            _, _c2 = ABCCandSQLiteDB.get_normalization_parameters_c1_and_c2(_raw_scores)
 
-        for idx, s in enumerate(G.nodes):  # V
-            # Normalize the raw scores using the global parameters to (0, 1] (and transform to log-scores)
-            _score = ABCCandSQLiteDB.normalize_scores(_raw_scores[idx], _c1, _c2)
+            # Normalize scores to [0, 1]
+            _raw_scores = ABCCandSQLiteDB.normalize_scores(_raw_scores, 0, _c2)
 
-            if self.log_transform_node_potentials:
-                _score = np.log(_score)
-
-            node_potentials[s]["log_score"] = self.D_ms * _score
-
-            # Add label loss is loss-augmented scores are requested
+            # Add label loss if loss-augmented scores are requested
             if loss_augmented:
-                _start = time.time()
+                _raw_scores += sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s)  # l_i(y)
 
-                node_potentials[s]["log_score"] += \
-                    sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s)  # Delta_i(y)
+            # Normalize scores by the sequence length
+            _raw_scores /= len(G.nodes)  # |V_i|
 
-                _label_loss_computation_time_avg += (time.time() - _start)
-
-            if self.average_node_and_edge_potentials:
-                node_potentials[s]["log_score"] /= len(G.nodes)
-
-        SSVM_LOGGER.debug(
+==== BASE ====
+        SSVM_LOGGER.info(
             "Computing label-loss took %.3fs per node (in V)." % (_label_loss_computation_time_avg / len(G.nodes))
         )
+==== BASE ====
 
         return node_potentials
 
@@ -752,7 +724,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 edge_potentials[s] = OrderedDict()
 
             edge_potentials[s][t] = {
-                "log_score": self.D_rt * self._get_edge_potentials_rsvm(
+                "log_score": self._get_edge_potentials_rsvm(
                     # Retention times
                     sequence.get_retention_time(s),
                     sequence.get_retention_time(t),
@@ -762,8 +734,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 )
             }
 
-            if self.average_node_and_edge_potentials:
-                edge_potentials[s][t]["log_score"] /= len(G.edges)
+            edge_potentials[s][t]["log_score"] /= len(G.edges)
 
             # As we do not know in which direction the edges are traversed during the message passing, we need to add
             # the transition matrices for both directions, i.e. s -> t and t -> s.

@@ -474,8 +474,8 @@ class ABCCandSQLiteDB(ABC):
         return [row[0] for row in self.db.execute(self._get_labelspace_query(spectrum, candidate_subset))]
 
     def get_ms2_scores(self, spectrum: Spectrum, ms2scorer: str, scale_scores_to_range: bool = True,
-                       return_dataframe: bool = False, return_as_ndarray: bool = False, **kwargs) \
-            -> Union[pd.DataFrame, List[float]]:
+                       return_dataframe: bool = False, return_as_ndarray: bool = False, score_fill_value: float = 1e6,
+                       **kwargs) -> Union[pd.DataFrame, List[float]]:
         """
 
         :param spectrum: matchms.Spectrum, of the sequence element to get the MS2 scores.
@@ -490,6 +490,9 @@ class ABCCandSQLiteDB(ABC):
 
         :param return_as_ndarray: boolean, indicating whether the scores (if return_dataframe = False) should be
             returned as a numpy array.
+
+        :param score_fill_value: float, value used to replace the missing MS2 scores, if _no_ candidate was assigned a
+            scores. That can happen if the in-silico tool failed for the particular spectrum.
 
         :return: list of scalars or pandas.DataFrame, (normalized, if requested) MS2 scores
         """
@@ -513,7 +516,7 @@ class ABCCandSQLiteDB(ABC):
         _fill_value = df_scores["ms2_score"].min(skipna=True)
         if np.isnan(_fill_value):
             # If no MS2 scores for the candidates are available (scoring failed), than we use a small positive constant.
-            _fill_value = 1e6
+            _fill_value = score_fill_value
         df_scores["ms2_score"] = df_scores["ms2_score"].fillna(value=_fill_value)
 
         if scale_scores_to_range:
@@ -1134,8 +1137,8 @@ class Sequence(object):
         return labelspace
 
     def get_ms2_scores(self, s: Optional[int] = None, scale_scores_to_range: bool = True,
-                       return_as_ndarray: bool = False) -> Union[List[List[float]], List[float],
-                                                                 List[np.ndarray], np.ndarray]:
+                       return_as_ndarray: bool = False, score_fill_value: float = 1e6) \
+            -> Union[List[List[float]], List[float], List[np.ndarray], np.ndarray]:
         """
         Get the MS2 scores for the given sequence index
 
@@ -1145,17 +1148,21 @@ class Sequence(object):
         :param return_as_ndarray: boolean, indicating whether the MS2 scores should be returned as numpy array
 
         :param scale_scores_to_range: boolean, indicating whether the output scores should be scaled to (0, 1]
+
+        :param score_fill_value: float, value used to replace the missing MS2 scores, if _no_ candidate was assigned a
+            scores. That can happen if the in-silico tool failed for the particular spectrum.
         """
         if self.ms2scorer is None:
             raise ValueError("No MS2 scorer specified!")
 
         if s is None:
-            ms2_scores = [self.get_ms2_scores(s, scale_scores_to_range, return_as_ndarray)
+            ms2_scores = [self.get_ms2_scores(s, scale_scores_to_range, return_as_ndarray, score_fill_value)
                           for s in range(self.__len__())]
         else:
             ms2_scores = self.candidates.get_ms2_scores(self.spectra[s], self.ms2scorer,
                                                         scale_scores_to_range=scale_scores_to_range,
-                                                        return_as_ndarray=return_as_ndarray)
+                                                        return_as_ndarray=return_as_ndarray,
+                                                        score_fill_value=score_fill_value)
 
         return ms2_scores
 

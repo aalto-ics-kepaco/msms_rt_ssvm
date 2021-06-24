@@ -99,9 +99,9 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
         # ===================
         # Setup a SSVM
         # ===================
-        self.ssvm = StructuredSVMSequencesFixedMS2(
-            mol_feat_label_loss="iokr_fps__positive", mol_feat_retention_order="substructure_count",
-            mol_kernel="minmax", C=2)
+        self.ssvm = StructuredSVMSequencesFixedMS2(mol_feat_label_loss="iokr_fps__positive",
+                                                   mol_feat_retention_order="substructure_count", mol_kernel="minmax",
+                                                   C=2)
 
         self.N = 50
         self.ssvm.training_data_ = SequenceSample(
