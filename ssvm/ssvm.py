@@ -546,52 +546,34 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             SSVM_LOGGER.info("Use large memory implementation of '_I_jfeat_rsvm'.")
             I = self._I_jfeat_rsvm__FOR_LARGE_MEMORY(Y)
 
-        # Note: L_i = |E_j|
-        N = len(self.training_data_)
+        II = self._II_jfeat_rsvm(Y)
 
-        # List of the molecular structures belonging to the active examples, i.e. a(i, y) > 0
-        l_Y_act_sequence = []  # length = (N, )
-        l_A_Sj = []
-        for j in range(N):
-            Sj, A_Sj = self.alphas_.get_blocks(j)
-            _, Sj = zip(*Sj)  # type: Tuple[Tuple[str, ...]]  # length = number of active sequences for example j
-            l_A_Sj.append(np.array(A_Sj))
+        return I - II
 
-            # Sj: active labels, i.e. all y in Sigma_j for which a(j, y) > 0
-            # A_Sj: dual values, array-like with shape = (|S_j|, )
+    def _get_sign_delta(self, tree_index: int, example_index: Optional[int] = None) -> np.ndarray:
+        """
+        Function returning the sign of the retention time (RT) differences for each example sequence. The RT differences
+        are normalized by the number of edges.
 
-            l_Y_act_sequence.append(get_molecule_features_by_molecule_id_CACHED(
-                self.training_data_.candidates, tuple(it.chain(*Sj)), self.mol_feat_retention_order))
+        :param tree_index: scalar, index of the tree sampled from the complete MRF graph.
 
-        II = np.zeros((len(Y), N))  # shape = (n_molecules, )
-        for j in range(N):
-            lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta(
-                l_Y_act_sequence[j], Y, self.training_graphs_[j][0], self.mol_kernel)
+        :param example_index: scalar, example index for which the RT difference should be returned. If None, differences
+            will be returned for all examples.
 
-            # Bring output to shape = (|S_j|, |E_j|, n_molecules)
-            lambda_delta = lambda_delta.reshape(
-                (
-                    self.alphas_.n_active(j),
-                    self.training_graphs_[j].get_n_edges(),
-                    len(Y)
-                ))
+        :return: array-like, shape = (sum_j |E_j|, )
+        """
+        if example_index is not None:
+            rng = [example_index]
+        else:
+            rng = range(len(self.training_data_))
 
-            II[:, j] = np.einsum("j,ijk,i",
-                                 self.training_data_[j].get_sign_delta_t(self.training_graphs_[j][0]),
-                                 lambda_delta,
-                                 l_A_Sj[j])
-
-        return I - np.sum(II, axis=1)
-
-    @lru_cache(maxsize=ssvm.cfg.LRU_CACHE_MAX_SIZE)
-    def _get_sign_delta(self, tree_index: int):
-        N = len(self.training_data_)
-
-        return np.concatenate([
-            # sign(delta t_j)
-            self.training_data_[j].get_sign_delta_t(self.training_graphs_[j][tree_index])
-            for j in range(N)  # shape = (|E_j|, )
+        out = np.concatenate([
+            # sign(delta t_j) / |E_j|
+            self.training_data_[j].get_sign_delta_t(self.training_graphs_[j][tree_index]) / len(self.training_graphs_[j][tree_index].edges)
+            for j in rng  # shape = (|E_j|, )
         ])
+
+        return out
 
     def _I_jfeat_rsvm(self, Y: np.array) -> np.ndarray:
         """
@@ -617,8 +599,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             for j in range(N)  # shape = (|E_j|, n_mol), with n_mol = Y.shape[0]
         ])
 
-        # TODO: This term is constant regardless of the dual variables.
-        # C / N * < sign_delta , lambda_delta >, shape = (n_molecules, )
+        # C / N * < sign_delta_j / E_j, lambda_delta_j > for all j, shape = (n_molecules, )
         return self.C * (sign_delta @ lambda_delta) / N
 
     def _I_jfeat_rsvm__FOR_LARGE_MEMORY(self, Y: np.array) -> np.ndarray:
@@ -635,7 +616,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         for j in range(N):
             # List of the retention time differences for all examples j over the spanning trees
-            sign_delta_j = self.training_data_[j].get_sign_delta_t(self.training_graphs_[j][0])  # shape = (|E_j|, )
+            sign_delta_j = self._get_sign_delta(0, j)  # shape = (|E_j|, ), normalized by |E_j|
 
             # List of the ground truth molecular structures for all examples j
             l_Y_gt_sequence_j = self._get_molecule_features_for_labels(
@@ -648,8 +629,43 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
             I_jfeat_rsvm += (sign_delta_j @ lambda_delta_j)
 
-        # C / N * < sign_delta , lambda_delta >, shape = (n_molecules, )
+        # C / N * < sign_delta_j / E_j, lambda_delta_j > for all j, shape = (n_molecules, )
         return self.C * I_jfeat_rsvm / N
+
+    def _II_jfeat_rsvm(self, Y: np.array) -> np.ndarray:
+        """
+        :param Y: array-like, shape = (n_molecules, n_features), molecular feature vectors to calculate the preference
+            values for.
+
+        :return: array-like, shape = (n_molecules, )
+        """
+        N = len(self.training_data_)
+        II = np.zeros((len(Y),))  # shape = (n_molecules, )
+
+        for j in range(N):
+            # Get the active sequences and their corresponding dual values, i.e. a(i, y) > 0
+            Sj, A_Sj = self.alphas_.get_blocks(j)
+            _, Sj = zip(*Sj)  # type: Tuple[Tuple[str, ...]]  # length = number of active sequences for example j
+            A_Sj = np.array(A_Sj)
+
+            # Load the molecule features for the active labels (= molecules) along all active sequences
+            # Note: The number of feature vectors will be: |E_j| * |S_j|
+            Y_sequence = self.training_data_.candidates.get_molecule_features_by_molecule_id(
+                tuple(it.chain(*Sj)), self.mol_feat_retention_order
+            )
+
+            # Compute the lambda delta vector stacked up for all active sequences
+            lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta(
+                Y_sequence, Y, self.training_graphs_[j][0], self.mol_kernel
+            )
+
+            # Bring output to shape = (|S_j|, |E_j|, n_molecules)
+            lambda_delta = lambda_delta.reshape((len(A_Sj), self.training_graphs_[j].get_n_edges(), len(Y)))
+
+            # Compute the j'th summand of the II equation
+            II += np.einsum("j,ijk,i", self._get_sign_delta(0, j), lambda_delta, A_Sj)
+
+        return II
 
     def _get_node_and_edge_potentials(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph,
                                       loss_augmented: bool = False) -> Tuple[OrderedDict, OrderedDict]:
@@ -1386,52 +1402,47 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         return TFG, Z_max
 
     @staticmethod
-    def _get_lambda_delta_OLD(Y_sequence: np.ndarray, Y_candidates: np.ndarray, G: nx.Graph,
-                              mol_kernel: Callable[[np.ndarray, np.ndarray], np.ndarray]) -> np.ndarray:
+    def _get_lambda_delta(
+            Y_sequence: np.ndarray, Y_candidates: np.ndarray, G: nx.Graph,
+            mol_kernel: Callable[[np.ndarray, np.ndarray], np.ndarray]
+    ) -> np.ndarray:
         """
-        Calculate the 'Lambda_Delta(y, y_s)' term, with shape = (L - 1, ) for all y_s in Y_candidates.
+        Calculate the kernel (= molecule similarity) difference between each molecule (= label) of a given label
+        sequence (Y_sequence) and each molecule in the candidate set (Y_candidates). The function outputs a matrix of
+        shape = (|E_i|, n_candidates). Therefore, the rows of the output matrix are associated with the edges (s, t) in
+        E_i and the columns with the candidates y_u (in Y_candidates)
 
-        :param Y_sequence: array-like, shape = (L, n_features), molecule features associated with the
+        Each element ((s, t), u) of the output matrix is computed as:
 
-        :param Y_candidates: array-like, shape = (n_candidates, n_features), feature matrix
+            lambda(y_u, y_s) - lambda(y_u, y_t)
+
+        with y_u being the u'th element in Y_candidates, and y_s, y_t being the molecules associated with edge (s, t)
+        of the tree-like MRF superimposed on the sequence.
+
+        NOTE: The function supports the processing of multiple sequences, typically associated active set of
+            dual-variables of a certain example i, at the same time. Here, we denote the number of active variables of
+            example i with n_S = |S_i|.
+
+        TODO: SEE SECTION 10.4 IN THE PAPER.
+
+        :param Y_sequence: array-like, shape = (|E_i| * |S_i|, n_features), feature matrix associated with the label
+            sequence.
+
+        :param Y_candidates: array-like, shape = (n_candidates, n_features), feature matrix of the candidates. Each
+            candidate label y in Y_candidates is compared to each sequence label.
 
         :param G: networkx.Graph, spanning tree defined over the MRF associated with the label sequence.
 
         :param mol_kernel: callable, function that takes in two feature row-matrices as input and outputs the kernel
             similarity matrix.
 
-        :return: array-shape = (L - 1, n_molecules)
+        :return: array-shape = (|E_i| * |S_i|, n_candidates)
         """
-        assert len(G.nodes) > 1, "There must be at least two nodes in the graph."
-        assert len(G.edges) > 0, "There must be at least one edge in the graph."
+        Ky = mol_kernel(Y_sequence, Y_candidates)
 
-        Ky = mol_kernel(Y_sequence, Y_candidates)  # shape = (L, n_candidates)
-
-        bS, bT = zip(*G.edges)  # each of length |E| = L - 1
-
-        return Ky[list(bS)] - Ky[list(bT)]
-
-    @staticmethod
-    def _get_lambda_delta(Y_sequence: np.ndarray, Y_candidates: np.ndarray, G: nx.Graph,
-                          mol_kernel: Callable[[np.ndarray, np.ndarray], np.ndarray]) -> np.ndarray:
-        """
-        Calculate the 'Lambda_Delta(y, y_s)' term, with shape = ((L - 1) * |S|, ) for all y_s in Y_candidates.
-
-        :param Y_sequence: array-like, shape = (L * |S|, n_features), molecule features associated with the
-
-        :param Y_candidates: array-like, shape = (n_candidates, n_features), feature matrix
-
-        :param G: networkx.Graph, spanning tree defined over the MRF associated with the label sequence.
-
-        :param mol_kernel: callable, function that takes in two feature row-matrices as input and outputs the kernel
-            similarity matrix.
-
-        :return: array-shape = ((L - 1) * |S|, n_molecules)
-        """
+        # Determine the number of sequences that have been passed to the function.
         L = len(G.nodes)
         n_S = len(Y_sequence) // L
-
-        Ky = mol_kernel(Y_sequence, Y_candidates)  # shape = (L * |S|, n_candidates)
 
         bS, bT = zip(*G.edges)  # each of length |E| = L - 1
 

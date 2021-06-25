@@ -1494,24 +1494,23 @@ class TestBugsAndWiredStuff(unittest.TestCase):
                                  test_sequences_iokr[idx].get_labelspace())
 
 
-class DummySequence(object):
-    def __init__(self):
-        self.elements = ["F", "A", "B", "C", "D", "E"]
-        self.rts = np.random.RandomState(len(self.elements)).rand(len(self.elements))
-
-    def get_retention_time(self, s: int):
-        return self.rts[s]
-
-    def __iter__(self):
-        return self.elements.__iter__()
-
-    def __len__(self):
-        return self.elements.__len__()
-
-
 class TestRandomSpanningTrees(unittest.TestCase):
+    class DummySequence(object):
+        def __init__(self):
+            self.elements = ["F", "A", "B", "C", "D", "E"]
+            self.rts = np.random.RandomState(len(self.elements)).rand(len(self.elements))
+
+        def get_retention_time(self, s: int):
+            return self.rts[s]
+
+        def __iter__(self):
+            return self.elements.__iter__()
+
+        def __len__(self):
+            return self.elements.__len__()
+
     def test_random_seed_leads_to_different_trees(self):
-        RST = SpanningTrees(DummySequence(), n_trees=4, random_state=10)
+        RST = SpanningTrees(self.DummySequence(), n_trees=4, random_state=10)
 
         for s in range(len(RST)):
             for t in range(len(RST)):
