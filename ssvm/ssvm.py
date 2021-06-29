@@ -728,7 +728,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             if self.average_node_and_edge_potentials:
                 node_potentials[s]["log_score"] /= len(G.nodes)
 
-        SSVM_LOGGER.info(
+        SSVM_LOGGER.debug(
             "Computing label-loss took %.3fs per node (in V)." % (_label_loss_computation_time_avg / len(G.nodes))
         )
 
@@ -860,13 +860,17 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             scores = Parallel(n_jobs=n_jobs_for_data)(
                 delayed(self.top1_score)(sequence, Gs=Gs, map=True) for sequence, Gs in zip(data, l_Gs))
         elif stype == "topk_mm":
+            # Parameters specific to top-k scoring
             return_percentage = kwargs.get("return_percentage", True)
             max_k = kwargs.get("max_k", 50)
             topk_method = kwargs.get("topk_method", "casmi")
+            only_ms2_performance = kwargs.get("only_ms2_performance", False)
+
             scores = Parallel(n_jobs=n_jobs_for_data)(
                 delayed(self.topk_score)(
                     sequence, Gs=Gs, return_percentage=return_percentage, max_k=max_k,  pad_output=True,
-                    n_jobs_for_trees=n_jobs_for_trees, topk_method=topk_method) for sequence, Gs in zip(data, l_Gs))
+                    n_jobs_for_trees=n_jobs_for_trees, topk_method=topk_method,
+                    only_ms2_performance=only_ms2_performance) for sequence, Gs in zip(data, l_Gs))
         elif stype == "ndcg_ll":
             scores = Parallel(n_jobs=n_jobs_for_data)(
                 delayed(self.ndcg_score)(sequence, Gs=Gs, use_label_loss=True) for sequence, Gs in zip(data, l_Gs))
@@ -909,7 +913,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
     def topk_score(self, sequence: LabeledSequence, Gs: Optional[SpanningTrees] = None, return_percentage: bool = True,
                    max_k: Optional[int] = None, pad_output: bool = False, n_jobs_for_trees: Optional[int] = None,
-                   topk_method="casmi2016") \
+                   topk_method="casmi2016", only_ms2_performance: bool = False) \
             -> Union[int, float, np.ndarray]:
         """
         Calculate top-k accuracy of the ranked candidate lists based on the max-marginals.
@@ -935,11 +939,28 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         :param topk_method: string, which method to use for the top-k accuracy calculation
 
+        :param only_ms2_performance: boolean, indicting whether only the "baseline" performance using the MS2 scores
+            should be returned. If true, no marginals are predicted, but the MS2 scores are considered to be the
+            marginal values.
+
         :return: array-like, shape = (max_k, ), list of top-k, e.g. top-1, top-2, ..., accuracies. Note, the array is
             zero-based, i.e. at index 0 we have top-1. If max_k == 1, the output is a scalar.
         """
-        # Calculate the marginals
-        marginals = self.predict(sequence, Gs=Gs, map=False, n_jobs=n_jobs_for_trees)
+        if only_ms2_performance:
+            with sequence.candidates:
+                # Create "pseudo" marginals based on the MS2 score
+                marginals = {
+                    s: {
+                        "label": sequence.get_labelspace(s),
+                        "score": sequence.get_ms2_scores(s, return_as_ndarray=True),
+                    }
+                    for s in range(len(sequence))
+                }
+            for s in marginals:
+                marginals[s]["n_cand"] = len(marginals[s]["label"])
+        else:
+            # Predict the max-marginals
+            marginals = self.predict(sequence, Gs=Gs, map=False, n_jobs=n_jobs_for_trees)
 
         return self._topk_score(marginals, sequence, return_percentage, max_k, pad_output, topk_method)
 
@@ -1371,17 +1392,23 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         MAP inference
 
         :param update_direction: string, specifying which update direction should be returned:
+
             "map" (default): solves the (loss-augmented) decoding problem ~ most violating example
-            "random": returns a random label sequence as update direction (intended for debugging purposes)
+
+            "random": returns a random label sequence as update direction                       (intended for debugging)
+
+            "max_node_score": returns the label sequence where the node scores are maximized    (intended for debugging)
         """
         # MAP inference (find most likely label sequence) for the given node- and edge-potentials
         TFG = TreeFactorGraph(candidates=node_potentials, var_conn_graph=G, make_order_probs=None,
                               order_probs=edge_potentials, D=None)
 
         if update_direction == "random":
-            Z_max = [np.random.choice(range(node_potentials[s]["n_cand"])) for s in node_potentials.keys()]
+            Z_max = [np.random.choice(range(node_potentials[s]["n_cand"])) for s in node_potentials]
         elif update_direction == "map":
             Z_max, _ = TFG.MAP_only()
+        elif update_direction == "max_node_score":
+            Z_max = [np.argmax(node_potentials[s]["log_score"]) for s in node_potentials]
         else:
             raise ValueError("Invalid update direction: '%s'. Choices are 'random' and 'map'." % update_direction)
 

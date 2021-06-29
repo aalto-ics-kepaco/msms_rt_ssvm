@@ -260,6 +260,16 @@ class ABCCandSQLiteDB(ABC):
         """
         return self._get_d_and_mode_feature(feature)[1]
 
+    @abstractmethod
+    def _ensure_ms2scorer_is_available(self, ms2scorer: str) -> None:
+        """
+        Raises an ValueError, if the requested MS2 scorer is not in the database.
+
+        :param ms2scorer: string, identifier of the requested MS2 scorer
+        :raises: ValueError
+        """
+        pass
+
     def _ensure_feature_is_available(self, feature: str) -> None:
         """
         Raises an ValueError, if the requested molecular feature is not in the database.
@@ -490,6 +500,9 @@ class ABCCandSQLiteDB(ABC):
         else:
             candidate_subset = self._get_candidate_subset(spectrum)
 
+        # Check that the requested MS2 scores are available
+        self._ensure_ms2scorer_is_available(ms2scorer)
+
         # Load the MS2 scores
         df_scores = pd.read_sql_query(
             self._get_ms2_score_query(spectrum, ms2scorer, candidate_subset),
@@ -590,6 +603,16 @@ class ABCCandSQLiteDB_Bach2020(ABCCandSQLiteDB):
         No additional parameters.
         """
         super().__init__(*args, **kwargs)
+
+    def _ensure_ms2scorer_is_available(self, ms2scorer: str) -> None:
+        """
+        See base-class
+        """
+        for p, in self.db.execute("SELECT name FROM participants"):
+            if p == ms2scorer:
+                return
+
+        raise ValueError("Requested MS2 scores are not available: '%s'" % ms2scorer)
 
     def _get_labelspace_query(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> str:
         """
@@ -705,6 +728,16 @@ class ABCCandSQLiteDB_Massbank(ABCCandSQLiteDB):
         """
         super().__init__(*args, **kwargs)
 
+    def _ensure_ms2scorer_is_available(self, ms2scorer: str) -> None:
+        """
+        See base-class
+        """
+        for p, in self.db.execute("SELECT name FROM scoring_methods"):
+            if p == ms2scorer:
+                return
+
+        raise ValueError("Requested MS2 scores are not available: '%s'" % ms2scorer)
+
     def _get_labelspace_query(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> str:
         """
         See base-class.
@@ -807,7 +840,7 @@ class ABCCandSQLiteDB_Massbank(ABCCandSQLiteDB):
                 X[i, list(map(int, bits.split(",")))] = list(map(dtype, vals.split(",")))
         elif mode == "binary":
             for i, (bits, _) in enumerate(data):
-                X[i, list(map(int, bits.split(",")))] = 1.0
+                X[i, list(map(int, bits.split(",")))] = 1
         else:
             raise ValueError("Invalid fingerprint mode: %s" % mode)
 
@@ -1379,7 +1412,7 @@ class SequenceSample(object):
     def get_train_test_split(self, spectra_cv: Union[GroupKFold, GroupShuffleSplit, int] = 5,
                              N_train: Optional[int] = None, N_test: Optional[int] = None,
                              L_min_test: Optional[int] = None, L_max_test: Optional[int] = None,
-                             candidates_test: Optional[ABCCandSQLiteDB_Bach2020] = None,
+                             candidates_test: Optional[ABCCandSQLiteDB] = None,
                              use_sequence_specific_candidates_for_training: bool = False) \
             -> Tuple[SEQUENCE_SAMPLE_T, SEQUENCE_SAMPLE_T]:
         """

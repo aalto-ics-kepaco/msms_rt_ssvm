@@ -1,17 +1,21 @@
 # Version History
 
-## v1.2.3
+## v1.2.4 (Minor improvements)
 
-### New Features
+- Allow the computation of the baseline performance for top-k scoring (using max-marginals) based on the MS2 score only
+- Candidate wrapper ensures that the requested MS2 scorer is available and raises an error otherwise
+
+### Add debugging feature
+
+- Maximum violating example can be chosen based on the node-scores only
+
+## v1.2.3 (Minor improvements)
 
 - Spectrum labels for "LabeledSequence" can be extracted from the spectrum objects 
   - labels can still be passed via an optional parameter 
   - label-key can be passed as well (default is 'molecule_id')
-- Implementation of the generalized tanimoto label loss  
-
-### Minor improvements
-
-- implemented unittests for the tanimoto label loss
+- Implementation of the generalized tanimoto label loss
+- More unittests for the tanimoto label loss
 
 ## v1.2.2 (Patch)
 
