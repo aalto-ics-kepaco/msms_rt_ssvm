@@ -74,7 +74,6 @@ class DualVariables(object):
         self.num_init_active_vars = num_init_active_vars
         assert self.num_init_active_vars > 0
 
-        # Store a shuffled version of the candidate sets for each example and sequence element
         self.label_space = label_space
 
         if initialize:

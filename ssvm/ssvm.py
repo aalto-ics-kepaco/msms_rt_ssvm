@@ -31,9 +31,7 @@ import networkx as nx
 import logging
 import time
 
-from functools import lru_cache
 from collections import OrderedDict
-from copy import deepcopy
 from typing import List, Tuple, Dict, Union, Optional, Callable
 from sklearn.utils.validation import check_random_state
 from sklearn.metrics import ndcg_score
@@ -72,16 +70,6 @@ CH.setFormatter(FORMATTER)
 
 SSVM_LOGGER.addHandler(CH)
 # ================
-
-
-@JOBLIB_CACHE.cache(ignore=["candidates"], mmap_mode="r")
-def get_molecule_features_by_molecule_id_CACHED(candidates: ABCCandSQLiteDB, molecule_ids: Tuple[str, ...],
-                                                features: str) -> np.ndarray:
-    """
-    Function to load molecular features by molecule IDs from the candidate database. The method of the CandidateDB class
-    is wrapped here to allow for caching.
-    """
-    return candidates.get_molecule_features_by_molecule_id(molecule_ids, features)
 
 
 class StructuredSVMSequencesFixedMS2(_StructuredSVM):
@@ -135,31 +123,29 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         """
         self.training_data_ = data
         self.validation_data_ = validation_data
-        self.training_data_info_ = {}
 
         # Open the connection to the candidate DB
         with self.training_data_.candidates:
-            self.training_data_info_["d_features_rt_order"] = \
-                data.candidates._get_d_feature(self.mol_feat_retention_order)
+            self.training_label_space_ = self.training_data_.get_labelspace()
 
             # Set up the dual initial dual vector
-            self.alphas_ = DualVariables(C=self.C, label_space=self.training_data_.get_labelspace(),
-                                         num_init_active_vars=n_init_per_example, random_state=self.random_state)
+            self.alphas_ = DualVariables(
+                C=self.C, label_space=self.training_label_space_, num_init_active_vars=n_init_per_example,
+                random_state=self.random_state
+            )
             assert self._is_feasible_matrix(self.alphas_, self.C), "Initial dual variables must be feasible."
 
-            self.alphas_prev_ = None
-
         # Initialize the graphs for each sequence
-        self.training_graphs_ = [SpanningTrees(sequence, self.n_trees_per_sequence, i + self.random_state)
-                                 for i, sequence in enumerate(self.training_data_)]
-
-        self.training_graphs_info_ = {}
-        self.training_graphs_info_["n_edges"] = [sptree.n_edges for sptree in self.training_graphs_]
-        self.training_graphs_info_["n_edges_total"] = sum(self.training_graphs_info_["n_edges"])
+        self.training_graphs_ = [
+            SpanningTrees(sequence, self.n_trees_per_sequence, i + self.random_state)
+            for i, sequence in enumerate(self.training_data_)
+        ]
 
         if self.validation_data_ is not None:
-            self.validation_graphs_ = [SpanningTrees(sequence, self.n_trees_per_sequence, i)
-                                       for i, sequence in enumerate(self.validation_data_)]
+            self.validation_graphs_ = [
+                SpanningTrees(sequence, self.n_trees_per_sequence, i)
+                for i, sequence in enumerate(self.validation_data_)
+            ]
         else:
             self.validation_graphs_ = None
 
@@ -218,10 +204,13 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
                 # Find the most violating examples for the current batch
                 _start_time = time.time()
-                res = Parallel(n_jobs=self.n_jobs)(delayed(self.inference)(
-                    self.training_data_[i], self.training_graphs_[i], loss_augmented=True, return_graphical_model=True,
-                    update_direction=self.update_direction)
-                                                   for i in I_batch)
+                res = Parallel(n_jobs=self.n_jobs)(
+                    delayed(self.inference)(
+                        self.training_data_[i], self.training_graphs_[i], loss_augmented=True,
+                        return_graphical_model=True, update_direction=self.update_direction
+                    )
+                    for i in I_batch
+                )
                 y_I_hat = [y_i_hat for y_i_hat, _ in res]
                 SSVM_LOGGER.info("Finding the most violating examples took %.3fs" % (time.time() - _start_time))
 
@@ -229,45 +218,40 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 _start_time = time.time()
                 if self.step_size_approach == "linesearch":
                     step_size = self._get_step_size_linesearch(I_batch, y_I_hat, [TFG for _, TFG in res])
-                elif self.step_size_approach == "linesearch_parallel":
-                    step_size = self._get_step_size_linesearch_parallel(I_batch, y_I_hat, [TFG for _, TFG in res])
                 else:
                     step_size = self._get_step_size_diminishing(n_iterations_total, N)
                 SSVM_LOGGER.info("Step-size determination using '%s' (took %.3fs): %.4f"
                                  % (self.step_size_approach, time.time() - _start_time, step_size))
 
-                # Update the dual variables
                 n_iterations_total += 1
                 SSVM_LOGGER.info("Number of active dual variables (a_iy > 0)")
                 SSVM_LOGGER.info("\tBefore update: %d" % self.alphas_.n_active())
 
-                # Track alpha^k when updating to k+1
-                self.alphas_prev_ = deepcopy(self.alphas_)
+                # Update the dual variables
+                is_new = [self.alphas_.update(i, y_i_hat, step_size) for i, y_i_hat in zip(I_batch, y_I_hat)]
 
-                if step_size > 0:
-                    is_new = [self.alphas_.update(i, y_i_hat, step_size) for i, y_i_hat in zip(I_batch, y_I_hat)]
-                    SSVM_LOGGER.info("\tAfter update: %d" % self.alphas_.n_active())
-                    SSVM_LOGGER.info("Which active sequences are new:")
-                    for _i, _is_new in zip(I_batch, is_new):
-                        SSVM_LOGGER.info("\tExample {:>4} new? {}".format(_i, _is_new))
-                    updates_made = True
+                SSVM_LOGGER.info("\tAfter update: %d" % self.alphas_.n_active())
+                SSVM_LOGGER.info("Which active sequences are new:")
+                for _i, _is_new in zip(I_batch, is_new):
+                    SSVM_LOGGER.info("\tExample {:>4} new? {}".format(_i, _is_new))
+                updates_made = True
 
-                    assert self._is_feasible_matrix(self.alphas_, self.C), \
-                        "Dual variables after update are not feasible anymore."
+                assert self._is_feasible_matrix(self.alphas_, self.C), \
+                    "Dual variables after update are not feasible anymore."
 
-                    if summary_writer is not None:
-                        _data_to_log = {
-                            "step_size": step_size,
-                            "active_variables": self.alphas_.n_active(),
-                            "training__avg_label_loss_batch": self._get_batch_label_loss(I_batch, y_I_hat),
-                            "training__cindex_pref_values": self.score(self.training_data_, stype="cindex"),
-                        }
+                if summary_writer is not None:
+                    _data_to_log = {
+                        "step_size": step_size,
+                        "active_variables": self.alphas_.n_active(),
+                        "training__avg_label_loss_batch": self._get_batch_label_loss(I_batch, y_I_hat),
+                        "training__cindex_pref_values": self.score(self.training_data_, stype="cindex"),
+                    }
 
-                        if self.validation_data_ is not None:
-                            _data_to_log["validation__cindex_pref_values"] = self.score(
-                                self.validation_data_, stype="cindex")
+                    if self.validation_data_ is not None:
+                        _data_to_log["validation__cindex_pref_values"] = self.score(
+                            self.validation_data_, stype="cindex")
 
-                        self.write_log(n_iterations_total, _data_to_log, summary_writer)
+                    self.write_log(n_iterations_total, _data_to_log, summary_writer)
 
                 n_batches_ran += 1
                 t_batch += (time.time() - _start_time_batch)
@@ -701,11 +685,12 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 s, scale_scores_to_range=False, return_as_ndarray=True, score_fill_value=0
             )
 
-            # Calculate the normalization parameter: We only use c2 parameter to make all scores positive >= 0
-            _, _c2 = ABCCandSQLiteDB.get_normalization_parameters_c1_and_c2(_raw_scores)
+            # Calculate the normalization parameter: We only use c1 parameter to make all scores positive >= 0
+            _c1, _c2 = ABCCandSQLiteDB.get_normalization_parameters_c1_and_c2(_raw_scores)
 
             # Normalize scores to [0, 1]
-            _raw_scores = ABCCandSQLiteDB.normalize_scores(_raw_scores, 0, _c2)
+            _raw_scores = ABCCandSQLiteDB.normalize_scores(_raw_scores, _c1, _c2)
+            assert (0 <= min(_raw_scores)) and (max(_raw_scores) == 1.0)
 
             # Add label loss if loss-augmented scores are requested
             if loss_augmented:
@@ -750,7 +735,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 )
             }
 
-            edge_potentials[s][t]["log_score"] /= len(G.edges)
+            edge_potentials[s][t]["log_score"] /= len(G.edges)  # |E_i|
 
             # As we do not know in which direction the edges are traversed during the message passing, we need to add
             # the transition matrices for both directions, i.e. s -> t and t -> s.
@@ -1011,8 +996,10 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 marginals = self.predict(sequence, Gs=Gs, map=False)
             else:
                 if Gs is not None:
-                    raise ValueError("When marginals are provided, than no spanning trees should be provided. It cannot "
-                                     "be ensured that the provided spanning trees have been used to calculate the marginals.")
+                    raise ValueError(
+                        "When marginals are provided, than no spanning trees should be provided. It cannot "
+                        "be ensured that the provided spanning trees have been used to calculate the marginals."
+                    )
 
             # Get the ground-truth relevance for the ranked lists
             if use_label_loss:
@@ -1039,82 +1026,6 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     # ================
     # STEP SIZE
     # ================
-    def _get_step_size_linesearch_parallel(self, I_batch: List[int], y_I_hat: List[Tuple[str, ...]],
-                                           TFG_I: List[TreeFactorGraph]) -> float:
-        """
-        Determine step-size using line-search. The calculation is distributed over multiple workers. The number of jobs
-        is equal to the batch-size (see self.batch_size).
-
-        :param I_batch: list, training example indices in the current batch
-
-        :param y_I_hat: list of tuples, list of most-violating label sequences
-
-        :param TFG_I: list of TreeFactorGraph, list of graphical models associated with the training examples. The TFGs
-            must be generated using loss-augmentation.
-
-        :return: scalar, line search step-size
-        """
-        N = len(self.training_data_)
-
-        # Update direction s
-        s = DualVariables(self.C, self.alphas_.label_space, initialize=False).set_alphas(
-            [(i, y_i_hat) for i, y_i_hat in zip(I_batch, y_I_hat)], self.C / N)
-
-        # Difference of the dual vectors: s - a
-        s_minus_a = s - self.alphas_  # type: DualVariables
-
-        if s_minus_a.get_blocks(I_batch) == ([], []):
-            # The best update direction found is equal to the current solution (model). No update needed.
-            return -1
-
-        # Pre-compute some stuff
-        l_sign_delta_t = [self.training_data_[i].get_sign_delta_t(self.training_graphs_[i][0]) for i in I_batch]
-        l_P = [self._get_P(self.training_graphs_[i][0]) for i in I_batch]
-
-        # Calculate the nominator and denominator using a helper function in parallel.
-        nom, den = zip(*Parallel(n_jobs=self.n_jobs)(
-            delayed(self._linesearch_joblib_wrapper)(s_minus_a, TFG_I[idx], I_batch, i, idx, l_sign_delta_t, l_P)
-            for idx, i in enumerate(I_batch)))
-
-        return np.maximum(0.0, np.minimum(1.0, np.sum(nom) / np.sum(den)))
-
-    def _linesearch_joblib_wrapper(self, s_minus_a, TFG_i, I_batch, i, idx_i, l_sign_delta_t, l_P):
-        """
-        Helper function to calculate the line-search step-size in parallel.
-        """
-        nom = 0.0
-        den = 0.0
-
-        l_sign_delta_t_i_T_P_i = {}
-        l_mol_features_i = {}
-
-        with self.training_data_.candidates:
-            for y, fac in s_minus_a.iter(i):
-                Z = self.label_sequence_to_Z(y, s_minus_a.label_space[i])
-                nom += fac * TFG_i.likelihood(Z, log=True)  # fac = s(i, y) - a(i, y)
-
-                l_mol_features_i[y] = get_molecule_features_by_molecule_id_CACHED(
-                    self.training_data_.candidates, tuple(y), self.mol_feat_retention_order)
-
-                # Go over all i, j for which i = j
-                l_sign_delta_t_i_T_P_i[y] = l_sign_delta_t[idx_i] @ l_P[idx_i]
-                L_yy = self.mol_kernel(l_mol_features_i[y], l_mol_features_i[y])
-                den += fac ** 2 * l_sign_delta_t_i_T_P_i[y] @ L_yy @ l_sign_delta_t_i_T_P_i[y]
-
-            for idx_j, j in enumerate(I_batch[idx_i + 1:], idx_i + 1):
-                sign_delta_t_j_T_P_j = l_sign_delta_t[idx_j] @ l_P[idx_j]
-
-                # Go over the active "dual" variables: s(i, y) - a(i, y) != 0
-                for by, fac_j in s_minus_a.iter(j):
-                    mol_features_by = get_molecule_features_by_molecule_id_CACHED(
-                        self.training_data_.candidates, tuple(by), self.mol_feat_retention_order)
-
-                    for y, fac_i in s_minus_a.iter(i):
-                        L_yby = self.mol_kernel(l_mol_features_i[y], mol_features_by)
-                        den += 2 * fac_i * fac_j * l_sign_delta_t_i_T_P_i[y] @ L_yby @ sign_delta_t_j_T_P_j
-
-        return nom, den
-
     def _get_step_size_linesearch(self, I_batch: List[int], y_I_hat: List[Tuple[str, ...]],
                                   TFG_I: List[TreeFactorGraph]) -> float:
         """
@@ -1133,15 +1044,16 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             N = len(self.training_data_)
 
             # Update direction s
-            s = DualVariables(self.C, self.training_data_.get_labelspace(), initialize=False).set_alphas(
-                [(i, y_i_hat) for i, y_i_hat in zip(I_batch, y_I_hat)], self.C / N)
+            s = DualVariables(self.C, self.training_label_space_, initialize=False).set_alphas(
+                [(i, y_i_hat) for i, y_i_hat in zip(I_batch, y_I_hat)], self.C / N
+            )
 
             # Difference of the dual vectors: s - a
             s_minus_a = s - self.alphas_  # type: DualVariables
 
             if s_minus_a.get_blocks(I_batch) == ([], []):
                 # The best update direction found is equal to the current solution (model). No update needed.
-                return -1
+                return 0
 
             # ----------------
             # Nominator
@@ -1154,23 +1066,22 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             for idx, i in enumerate(I_batch):
                 TFG = TFG_I[idx]
 
-                labelspace_i = self.training_data_[i].get_labelspace()
-
                 # Go over the active "dual" variables: s(i, y) - a(i, y) != 0
                 for y, fac in s_minus_a.iter(i):
-                    Z = self.label_sequence_to_Z(y, labelspace_i)
+                    Z = self.label_sequence_to_Z(y, self.training_label_space_[i])
                     nom += fac * TFG.likelihood(Z, log=True)  # fac = s(i, y) - a(i, y)
 
                     # Load the molecular features for the active sequence y
-                    l_mol_features[idx][y] = get_molecule_features_by_molecule_id_CACHED(
-                        self.training_data_.candidates, tuple(y), self.mol_feat_retention_order)
+                    l_mol_features[idx][y] = self.training_data_.candidates.get_molecule_features_by_molecule_id(
+                        tuple(y), self.mol_feat_retention_order
+                    )
 
             # ----------------
             # Denominator
             # ----------------
             den = 0.0
 
-            l_sign_delta_t = [self.training_data_[i].get_sign_delta_t(self.training_graphs_[i][0]) for i in I_batch]
+            l_sign_delta_t = [self._get_sign_delta(0, i) for i in I_batch]
             l_P = [self._get_P(self.training_graphs_[i][0]) for i in I_batch]
 
             # Go over all i, j for which i = j
@@ -1461,4 +1372,4 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         """
         TODO
         """
-        return get_molecule_features_by_molecule_id_CACHED(sequence.candidates, tuple(sequence.labels), features)
+        return sequence.candidates.get_molecule_features_by_molecule_id(tuple(sequence.labels), features)
