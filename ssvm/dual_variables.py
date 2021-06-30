@@ -326,8 +326,8 @@ class DualVariables(object):
     def iter(self, i: int):
         assert 0 <= i < self.N
 
-        for y_seq in self._y2col[i]:
-            yield y_seq, self._alphas[i, self._y2col[i][y_seq]]
+        for y_seq, c in self._y2col[i].items():
+            yield y_seq, self._alphas[i, c]
 
     def __mul__(self, fac: Union[float, int]) -> DUALVARIABLES_T:
         if not np.isscalar(fac):

@@ -714,11 +714,11 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             # Normalize scores by the sequence length
             _raw_scores /= len(G.nodes)  # |V_i|
 
-==== BASE ====
-        SSVM_LOGGER.info(
-            "Computing label-loss took %.3fs per node (in V)." % (_label_loss_computation_time_avg / len(G.nodes))
-        )
-==== BASE ====
+            # Add information to node-potentials
+            node_potentials[s] = {
+                "n_cand": len(_raw_scores),
+                "log_score": _raw_scores
+            }
 
         return node_potentials
 
@@ -1154,9 +1154,11 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             for idx, i in enumerate(I_batch):
                 TFG = TFG_I[idx]
 
+                labelspace_i = self.training_data_[i].get_labelspace()
+
                 # Go over the active "dual" variables: s(i, y) - a(i, y) != 0
                 for y, fac in s_minus_a.iter(i):
-                    Z = self.label_sequence_to_Z(y, self.training_data_[i].get_labelspace())
+                    Z = self.label_sequence_to_Z(y, labelspace_i)
                     nom += fac * TFG.likelihood(Z, log=True)  # fac = s(i, y) - a(i, y)
 
                     # Load the molecular features for the active sequence y
@@ -1391,15 +1393,15 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                               order_probs=edge_potentials, D=None)
 
         if update_direction == "random":
-            Z_max = [np.random.choice(range(node_potentials[s]["n_cand"])) for s in node_potentials]
+            z_max = [np.random.choice(range(node_potentials[s]["n_cand"])) for s in node_potentials]
         elif update_direction == "map":
-            Z_max, _ = TFG.MAP_only()
+            z_max, _ = TFG.MAP_only()
         elif update_direction == "max_node_score":
-            Z_max = [np.argmax(node_potentials[s]["log_score"]) for s in node_potentials]
+            z_max = [np.argmax(node_potentials[s]["log_score"]) for s in node_potentials]
         else:
             raise ValueError("Invalid update direction: '%s'. Choices are 'random' and 'map'." % update_direction)
 
-        return TFG, Z_max
+        return TFG, z_max
 
     @staticmethod
     def _get_lambda_delta(
