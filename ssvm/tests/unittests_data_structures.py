@@ -179,8 +179,8 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
         # # MS2 Scorer is MetFrag
         scores = candidates.get_ms2_scores(spectrum, ms2scorer="metfrag__norm_after_merge", scale_scores_to_range=False)
         self.assertEqual(118, len(scores))
-        self.assertEqual(1e6, np.min(scores))
-        self.assertEqual(1e6, np.max(scores))
+        self.assertEqual(1e-6, np.min(scores))
+        self.assertEqual(1e-6, np.max(scores))
 
     def test_get_molecule_features(self):
         # SIRIUS Fingerprints
@@ -538,13 +538,13 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         # MS2 Scorer is IOKR
         scores = candidates.get_ms2_scores(spectrum, ms2scorer="IOKR__696a17f3")
         self.assertEqual(2233, len(scores))
-        self.assertEqual(0.006426196626211542, np.min(scores))
+        self.assertEqual(0.00006426196626211542, np.min(scores))
         self.assertEqual(1.0, np.max(scores))
 
         # MS2 Scorer is MetFrag
         scores = candidates.get_ms2_scores(spectrum, ms2scorer="MetFrag_2.4.5__8afe4a14")
         self.assertEqual(2233, len(scores))
-        self.assertEqual(0.0028105936908001407, np.min(scores))
+        np.testing.assert_allclose(0.000028105936908001407, np.min(scores))
         self.assertEqual(1.0, np.max(scores))
 
         # ----------
@@ -1212,7 +1212,7 @@ class TestABCCandSQLiteDB(unittest.TestCase):
             np.testing.assert_array_equal(rankdata(scores, method="ordinal"), rankdata(scores_norm, method="ordinal"))
             self.assertEqual(1.0, np.max(scores_norm))
             self.assertAlmostEqual(
-                ((np.sort(scores)[1] + np.abs(np.min(scores))) / 10) / (np.max(scores) + np.abs(np.min(scores))),
+                ((np.sort(scores)[1] + np.abs(np.min(scores))) / 1000) / (np.max(scores) + np.abs(np.min(scores))),
                 np.min(scores_norm))
 
         # All scores are positive
@@ -1231,7 +1231,7 @@ class TestABCCandSQLiteDB(unittest.TestCase):
             scores = _rs.random(_rs.randint(1, 50)) - 0.5
             c1, c2 = ABCCandSQLiteDB.get_normalization_parameters_c1_and_c2(scores)
             self.assertEqual(c1, np.abs(np.min(scores)))
-            self.assertEqual(c2, np.sort(scores + c1)[1] / 10)
+            self.assertEqual(c2, np.sort(scores + c1)[1] / 1000)
             scores_norm = ABCCandSQLiteDB.normalize_scores(scores, c1, c2)
             np.testing.assert_array_equal(rankdata(scores, method="ordinal"), rankdata(scores_norm, method="ordinal"))
             self.assertEqual(1.0, np.max(scores_norm))
@@ -1494,24 +1494,23 @@ class TestBugsAndWiredStuff(unittest.TestCase):
                                  test_sequences_iokr[idx].get_labelspace())
 
 
-class DummySequence(object):
-    def __init__(self):
-        self.elements = ["F", "A", "B", "C", "D", "E"]
-        self.rts = np.random.RandomState(len(self.elements)).rand(len(self.elements))
-
-    def get_retention_time(self, s: int):
-        return self.rts[s]
-
-    def __iter__(self):
-        return self.elements.__iter__()
-
-    def __len__(self):
-        return self.elements.__len__()
-
-
 class TestRandomSpanningTrees(unittest.TestCase):
+    class DummySequence(object):
+        def __init__(self):
+            self.elements = ["F", "A", "B", "C", "D", "E"]
+            self.rts = np.random.RandomState(len(self.elements)).rand(len(self.elements))
+
+        def get_retention_time(self, s: int):
+            return self.rts[s]
+
+        def __iter__(self):
+            return self.elements.__iter__()
+
+        def __len__(self):
+            return self.elements.__len__()
+
     def test_random_seed_leads_to_different_trees(self):
-        RST = SpanningTrees(DummySequence(), n_trees=4, random_state=10)
+        RST = SpanningTrees(self.DummySequence(), n_trees=4, random_state=10)
 
         for s in range(len(RST)):
             for t in range(len(RST)):

@@ -74,7 +74,6 @@ class DualVariables(object):
         self.num_init_active_vars = num_init_active_vars
         assert self.num_init_active_vars > 0
 
-        # Store a shuffled version of the candidate sets for each example and sequence element
         self.label_space = label_space
 
         if initialize:
@@ -326,8 +325,8 @@ class DualVariables(object):
     def iter(self, i: int):
         assert 0 <= i < self.N
 
-        for y_seq in self._y2col[i]:
-            yield y_seq, self._alphas[i, self._y2col[i][y_seq]]
+        for y_seq, c in self._y2col[i].items():
+            yield y_seq, self._alphas[i, c]
 
     def __mul__(self, fac: Union[float, int]) -> DUALVARIABLES_T:
         if not np.isscalar(fac):

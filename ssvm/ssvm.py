@@ -31,9 +31,7 @@ import networkx as nx
 import logging
 import time
 
-from functools import lru_cache
 from collections import OrderedDict
-from copy import deepcopy
 from typing import List, Tuple, Dict, Union, Optional, Callable
 from sklearn.utils.validation import check_random_state
 from sklearn.metrics import ndcg_score
@@ -74,24 +72,13 @@ SSVM_LOGGER.addHandler(CH)
 # ================
 
 
-@JOBLIB_CACHE.cache(ignore=["candidates"], mmap_mode="r")
-def get_molecule_features_by_molecule_id_CACHED(candidates: ABCCandSQLiteDB, molecule_ids: Tuple[str, ...],
-                                                features: str) -> np.ndarray:
-    """
-    Function to load molecular features by molecule IDs from the candidate database. The method of the CandidateDB class
-    is wrapped here to allow for caching.
-    """
-    return candidates.get_molecule_features_by_molecule_id(molecule_ids, features)
-
-
 class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     """
     Structured Support Vector Machine (SSVM) for (MS, RT)-sequence classification.
     """
     def __init__(self, mol_feat_label_loss: str, mol_feat_retention_order: str,
-                 mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]],  n_trees_per_sequence: int = 1,
-                 retention_order_weight=None, n_jobs: int = 1, log_transform_node_potentials: bool = True,
-                 average_node_and_edge_potentials: bool = True, update_direction: str = "map", *args, **kwargs):
+                 mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]], n_trees_per_sequence: int = 1,
+                 n_jobs: int = 1, update_direction: str = "map", *args, **kwargs):
         """
         :param mol_feat_label_loss:
         :param mol_feat_retention_order:
@@ -105,24 +92,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         self.mol_feat_retention_order = mol_feat_retention_order
         self.mol_kernel = self.get_mol_kernel(mol_kernel)
         self.n_trees_per_sequence = n_trees_per_sequence
-        self.retention_order_weight = retention_order_weight
         self.n_jobs = n_jobs
-        self.log_transform_node_potentials = log_transform_node_potentials
-        self.average_node_and_edge_potentials = average_node_and_edge_potentials
         self.update_direction = update_direction
-
-        if self.retention_order_weight is None:
-            self.D_rt = 1.0
-            self.D_ms = 1.0
-        elif np.isscalar(self.retention_order_weight):
-            if not (0 <= self.retention_order_weight <= 1):
-                raise ValueError("The retention order weight must be in [0, 1].")
-
-            # Define the weight on the retention order and mass spectra scores
-            self.D_rt = self.retention_order_weight
-            self.D_ms = 1.0 - self.D_rt
-        else:
-            raise ValueError("The retention order weight must be either a scalar or None.")
 
         if self.n_trees_per_sequence > 1:
             raise ValueError("Currently only a single spanning tree per sequence is supported.")
@@ -152,31 +123,29 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         """
         self.training_data_ = data
         self.validation_data_ = validation_data
-        self.training_data_info_ = {}
 
         # Open the connection to the candidate DB
         with self.training_data_.candidates:
-            self.training_data_info_["d_features_rt_order"] = \
-                data.candidates._get_d_feature(self.mol_feat_retention_order)
+            self.training_label_space_ = self.training_data_.get_labelspace()
 
             # Set up the dual initial dual vector
-            self.alphas_ = DualVariables(C=self.C, label_space=self.training_data_.get_labelspace(),
-                                         num_init_active_vars=n_init_per_example, random_state=self.random_state)
+            self.alphas_ = DualVariables(
+                C=self.C, label_space=self.training_label_space_, num_init_active_vars=n_init_per_example,
+                random_state=self.random_state
+            )
             assert self._is_feasible_matrix(self.alphas_, self.C), "Initial dual variables must be feasible."
 
-            self.alphas_prev_ = None
-
         # Initialize the graphs for each sequence
-        self.training_graphs_ = [SpanningTrees(sequence, self.n_trees_per_sequence, i + self.random_state)
-                                 for i, sequence in enumerate(self.training_data_)]
-
-        self.training_graphs_info_ = {}
-        self.training_graphs_info_["n_edges"] = [sptree.n_edges for sptree in self.training_graphs_]
-        self.training_graphs_info_["n_edges_total"] = sum(self.training_graphs_info_["n_edges"])
+        self.training_graphs_ = [
+            SpanningTrees(sequence, self.n_trees_per_sequence, i + self.random_state)
+            for i, sequence in enumerate(self.training_data_)
+        ]
 
         if self.validation_data_ is not None:
-            self.validation_graphs_ = [SpanningTrees(sequence, self.n_trees_per_sequence, i)
-                                       for i, sequence in enumerate(self.validation_data_)]
+            self.validation_graphs_ = [
+                SpanningTrees(sequence, self.n_trees_per_sequence, i)
+                for i, sequence in enumerate(self.validation_data_)
+            ]
         else:
             self.validation_graphs_ = None
 
@@ -235,10 +204,13 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
                 # Find the most violating examples for the current batch
                 _start_time = time.time()
-                res = Parallel(n_jobs=self.n_jobs)(delayed(self.inference)(
-                    self.training_data_[i], self.training_graphs_[i], loss_augmented=True, return_graphical_model=True,
-                    update_direction=self.update_direction)
-                                                   for i in I_batch)
+                res = Parallel(n_jobs=self.n_jobs)(
+                    delayed(self.inference)(
+                        self.training_data_[i], self.training_graphs_[i], loss_augmented=True,
+                        return_graphical_model=True, update_direction=self.update_direction
+                    )
+                    for i in I_batch
+                )
                 y_I_hat = [y_i_hat for y_i_hat, _ in res]
                 SSVM_LOGGER.info("Finding the most violating examples took %.3fs" % (time.time() - _start_time))
 
@@ -246,45 +218,39 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 _start_time = time.time()
                 if self.step_size_approach == "linesearch":
                     step_size = self._get_step_size_linesearch(I_batch, y_I_hat, [TFG for _, TFG in res])
-                elif self.step_size_approach == "linesearch_parallel":
-                    step_size = self._get_step_size_linesearch_parallel(I_batch, y_I_hat, [TFG for _, TFG in res])
                 else:
                     step_size = self._get_step_size_diminishing(n_iterations_total, N)
                 SSVM_LOGGER.info("Step-size determination using '%s' (took %.3fs): %.4f"
                                  % (self.step_size_approach, time.time() - _start_time, step_size))
 
-                # Update the dual variables
                 n_iterations_total += 1
                 SSVM_LOGGER.info("Number of active dual variables (a_iy > 0)")
                 SSVM_LOGGER.info("\tBefore update: %d" % self.alphas_.n_active())
 
-                # Track alpha^k when updating to k+1
-                self.alphas_prev_ = deepcopy(self.alphas_)
+                # Update the dual variables
+                is_new = [self.alphas_.update(i, y_i_hat, step_size) for i, y_i_hat in zip(I_batch, y_I_hat)]
 
-                if step_size > 0:
-                    is_new = [self.alphas_.update(i, y_i_hat, step_size) for i, y_i_hat in zip(I_batch, y_I_hat)]
-                    SSVM_LOGGER.info("\tAfter update: %d" % self.alphas_.n_active())
-                    SSVM_LOGGER.info("Which active sequences are new:")
-                    for _i, _is_new in zip(I_batch, is_new):
-                        SSVM_LOGGER.info("\tExample {:>4} new? {}".format(_i, _is_new))
-                    updates_made = True
+                SSVM_LOGGER.info("\tAfter update: %d" % self.alphas_.n_active())
+                SSVM_LOGGER.info("Which active sequences are new:")
+                for _i, _is_new in zip(I_batch, is_new):
+                    SSVM_LOGGER.info("\tExample {:>4} new? {}".format(_i, _is_new))
 
-                    assert self._is_feasible_matrix(self.alphas_, self.C), \
-                        "Dual variables after update are not feasible anymore."
+                assert self._is_feasible_matrix(self.alphas_, self.C), \
+                    "Dual variables after update are not feasible anymore."
 
-                    if summary_writer is not None:
-                        _data_to_log = {
-                            "step_size": step_size,
-                            "active_variables": self.alphas_.n_active(),
-                            "training__avg_label_loss_batch": self._get_batch_label_loss(I_batch, y_I_hat),
-                            "training__cindex_pref_values": self.score(self.training_data_, stype="cindex"),
-                        }
+                if summary_writer is not None:
+                    _data_to_log = {
+                        "step_size": step_size,
+                        "active_variables": self.alphas_.n_active(),
+                        "training__avg_label_loss_batch": self._get_batch_label_loss(I_batch, y_I_hat),
+                        "training__cindex_pref_values": self.score(self.training_data_, stype="cindex"),
+                    }
 
-                        if self.validation_data_ is not None:
-                            _data_to_log["validation__cindex_pref_values"] = self.score(
-                                self.validation_data_, stype="cindex")
+                    if self.validation_data_ is not None:
+                        _data_to_log["validation__cindex_pref_values"] = self.score(
+                            self.validation_data_, stype="cindex")
 
-                        self.write_log(n_iterations_total, _data_to_log, summary_writer)
+                    self.write_log(n_iterations_total, _data_to_log, summary_writer)
 
                 n_batches_ran += 1
                 t_batch += (time.time() - _start_time_batch)
@@ -317,9 +283,6 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                                      (_data_to_log["validation__ndcg_ohc"], time.time() - _start_time))
 
                 self.write_log(n_iterations_total, _data_to_log, summary_writer)
-
-            if not updates_made:
-                break
 
         return self
 
@@ -563,52 +526,34 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             SSVM_LOGGER.info("Use large memory implementation of '_I_jfeat_rsvm'.")
             I = self._I_jfeat_rsvm__FOR_LARGE_MEMORY(Y)
 
-        # Note: L_i = |E_j|
-        N = len(self.training_data_)
+        II = self._II_jfeat_rsvm(Y)
 
-        # List of the molecular structures belonging to the active examples, i.e. a(i, y) > 0
-        l_Y_act_sequence = []  # length = (N, )
-        l_A_Sj = []
-        for j in range(N):
-            Sj, A_Sj = self.alphas_.get_blocks(j)
-            _, Sj = zip(*Sj)  # type: Tuple[Tuple[str, ...]]  # length = number of active sequences for example j
-            l_A_Sj.append(np.array(A_Sj))
+        return I - II
 
-            # Sj: active labels, i.e. all y in Sigma_j for which a(j, y) > 0
-            # A_Sj: dual values, array-like with shape = (|S_j|, )
+    def _get_sign_delta(self, tree_index: int, example_index: Optional[int] = None) -> np.ndarray:
+        """
+        Function returning the sign of the retention time (RT) differences for each example sequence. The RT differences
+        are normalized by the number of edges.
 
-            l_Y_act_sequence.append(get_molecule_features_by_molecule_id_CACHED(
-                self.training_data_.candidates, tuple(it.chain(*Sj)), self.mol_feat_retention_order))
+        :param tree_index: scalar, index of the tree sampled from the complete MRF graph.
 
-        II = np.zeros((len(Y), N))  # shape = (n_molecules, )
-        for j in range(N):
-            lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta(
-                l_Y_act_sequence[j], Y, self.training_graphs_[j][0], self.mol_kernel)
+        :param example_index: scalar, example index for which the RT difference should be returned. If None, differences
+            will be returned for all examples.
 
-            # Bring output to shape = (|S_j|, |E_j|, n_molecules)
-            lambda_delta = lambda_delta.reshape(
-                (
-                    self.alphas_.n_active(j),
-                    self.training_graphs_[j].get_n_edges(),
-                    len(Y)
-                ))
+        :return: array-like, shape = (sum_j |E_j|, )
+        """
+        if example_index is not None:
+            rng = [example_index]
+        else:
+            rng = range(len(self.training_data_))
 
-            II[:, j] = np.einsum("j,ijk,i",
-                                 self.training_data_[j].get_sign_delta_t(self.training_graphs_[j][0]),
-                                 lambda_delta,
-                                 l_A_Sj[j])
-
-        return I - np.sum(II, axis=1)
-
-    @lru_cache(maxsize=ssvm.cfg.LRU_CACHE_MAX_SIZE)
-    def _get_sign_delta(self, tree_index: int):
-        N = len(self.training_data_)
-
-        return np.concatenate([
-            # sign(delta t_j)
-            self.training_data_[j].get_sign_delta_t(self.training_graphs_[j][tree_index])
-            for j in range(N)  # shape = (|E_j|, )
+        out = np.concatenate([
+            # sign(delta t_j) / |E_j|
+            self.training_data_[j].get_sign_delta_t(self.training_graphs_[j][tree_index]) / len(self.training_graphs_[j][tree_index].edges)
+            for j in rng  # shape = (|E_j|, )
         ])
+
+        return out
 
     def _I_jfeat_rsvm(self, Y: np.array) -> np.ndarray:
         """
@@ -634,8 +579,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             for j in range(N)  # shape = (|E_j|, n_mol), with n_mol = Y.shape[0]
         ])
 
-        # TODO: This term is constant regardless of the dual variables.
-        # C / N * < sign_delta , lambda_delta >, shape = (n_molecules, )
+        # C / N * < sign_delta_j / E_j, lambda_delta_j > for all j, shape = (n_molecules, )
         return self.C * (sign_delta @ lambda_delta) / N
 
     def _I_jfeat_rsvm__FOR_LARGE_MEMORY(self, Y: np.array) -> np.ndarray:
@@ -652,7 +596,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         for j in range(N):
             # List of the retention time differences for all examples j over the spanning trees
-            sign_delta_j = self.training_data_[j].get_sign_delta_t(self.training_graphs_[j][0])  # shape = (|E_j|, )
+            sign_delta_j = self._get_sign_delta(0, j)  # shape = (|E_j|, ), normalized by |E_j|
 
             # List of the ground truth molecular structures for all examples j
             l_Y_gt_sequence_j = self._get_molecule_features_for_labels(
@@ -665,8 +609,43 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
             I_jfeat_rsvm += (sign_delta_j @ lambda_delta_j)
 
-        # C / N * < sign_delta , lambda_delta >, shape = (n_molecules, )
+        # C / N * < sign_delta_j / E_j, lambda_delta_j > for all j, shape = (n_molecules, )
         return self.C * I_jfeat_rsvm / N
+
+    def _II_jfeat_rsvm(self, Y: np.array) -> np.ndarray:
+        """
+        :param Y: array-like, shape = (n_molecules, n_features), molecular feature vectors to calculate the preference
+            values for.
+
+        :return: array-like, shape = (n_molecules, )
+        """
+        N = len(self.training_data_)
+        II = np.zeros((len(Y),))  # shape = (n_molecules, )
+
+        for j in range(N):
+            # Get the active sequences and their corresponding dual values, i.e. a(i, y) > 0
+            Sj, A_Sj = self.alphas_.get_blocks(j)
+            _, Sj = zip(*Sj)  # type: Tuple[Tuple[str, ...]]  # length = number of active sequences for example j
+            A_Sj = np.array(A_Sj)
+
+            # Load the molecule features for the active labels (= molecules) along all active sequences
+            # Note: The number of feature vectors will be: |E_j| * |S_j|
+            Y_sequence = self.training_data_.candidates.get_molecule_features_by_molecule_id(
+                tuple(it.chain(*Sj)), self.mol_feat_retention_order
+            )
+
+            # Compute the lambda delta vector stacked up for all active sequences
+            lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta(
+                Y_sequence, Y, self.training_graphs_[j][0], self.mol_kernel
+            )
+
+            # Bring output to shape = (|S_j|, |E_j|, n_molecules)
+            lambda_delta = lambda_delta.reshape((len(A_Sj), self.training_graphs_[j].get_n_edges(), len(Y)))
+
+            # Compute the j'th summand of the II equation
+            II += np.einsum("j,ijk,i", self._get_sign_delta(0, j), lambda_delta, A_Sj)
+
+        return II
 
     def _get_node_and_edge_potentials(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph,
                                       loss_augmented: bool = False) -> Tuple[OrderedDict, OrderedDict]:
@@ -690,47 +669,29 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     def _get_node_potentials(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph,
                              loss_augmented: bool = False) -> OrderedDict:
         """
-        Calculate the Node potentials
+        Calculate the (loss-augmented) node potentials
         """
-        _label_loss_computation_time_avg = 0.0
-
         # Calculate the node potentials. If needed, augment the MS scores with the label loss
         node_potentials = OrderedDict()
 
-        # First load all MS2 scores
-        _raw_scores = []
+        # Load the MS2 scores associated with the nodes
         for s in G.nodes:  # V
-            # Load the raw scores
-            _raw_scores.append(sequence.get_ms2_scores(s, scale_scores_to_range=False, return_as_ndarray=True))
-            node_potentials[s] = {"n_cand": len(_raw_scores[-1])}
+            # Raw scores normalized to (0, 1]
+            _raw_scores = sequence.get_ms2_scores(s, scale_scores_to_range=True, return_as_ndarray=True)
+            assert (0 <= min(_raw_scores)) and (max(_raw_scores) == 1.0)
 
-        # Calculate the normalization parameter based on ALL candidates
-        _c1, _c2 = ABCCandSQLiteDB.get_normalization_parameters_c1_and_c2(np.hstack(_raw_scores))
-
-        for idx, s in enumerate(G.nodes):  # V
-            # Normalize the raw scores using the global parameters to (0, 1] (and transform to log-scores)
-            _score = ABCCandSQLiteDB.normalize_scores(_raw_scores[idx], _c1, _c2)
-
-            if self.log_transform_node_potentials:
-                _score = np.log(_score)
-
-            node_potentials[s]["log_score"] = self.D_ms * _score
-
-            # Add label loss is loss-augmented scores are requested
+            # Add label loss if loss-augmented scores are requested
             if loss_augmented:
-                _start = time.time()
+                _raw_scores += sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s)  # l_i(y)
 
-                node_potentials[s]["log_score"] += \
-                    sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s)  # Delta_i(y)
+            # Normalize scores by the sequence length
+            _raw_scores /= len(G.nodes)  # |V_i|
 
-                _label_loss_computation_time_avg += (time.time() - _start)
-
-            if self.average_node_and_edge_potentials:
-                node_potentials[s]["log_score"] /= len(G.nodes)
-
-        SSVM_LOGGER.debug(
-            "Computing label-loss took %.3fs per node (in V)." % (_label_loss_computation_time_avg / len(G.nodes))
-        )
+            # Add information to node-potentials
+            node_potentials[s] = {
+                "n_cand": len(_raw_scores),
+                "log_score": _raw_scores
+            }
 
         return node_potentials
 
@@ -752,7 +713,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 edge_potentials[s] = OrderedDict()
 
             edge_potentials[s][t] = {
-                "log_score": self.D_rt * self._get_edge_potentials_rsvm(
+                "log_score": self._get_edge_potentials_rsvm(
                     # Retention times
                     sequence.get_retention_time(s),
                     sequence.get_retention_time(t),
@@ -762,8 +723,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 )
             }
 
-            if self.average_node_and_edge_potentials:
-                edge_potentials[s][t]["log_score"] /= len(G.edges)
+            edge_potentials[s][t]["log_score"] /= len(G.edges)  # |E_i|
 
             # As we do not know in which direction the edges are traversed during the message passing, we need to add
             # the transition matrices for both directions, i.e. s -> t and t -> s.
@@ -1024,8 +984,10 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 marginals = self.predict(sequence, Gs=Gs, map=False)
             else:
                 if Gs is not None:
-                    raise ValueError("When marginals are provided, than no spanning trees should be provided. It cannot "
-                                     "be ensured that the provided spanning trees have been used to calculate the marginals.")
+                    raise ValueError(
+                        "When marginals are provided, than no spanning trees should be provided. It cannot "
+                        "be ensured that the provided spanning trees have been used to calculate the marginals."
+                    )
 
             # Get the ground-truth relevance for the ranked lists
             if use_label_loss:
@@ -1052,82 +1014,6 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     # ================
     # STEP SIZE
     # ================
-    def _get_step_size_linesearch_parallel(self, I_batch: List[int], y_I_hat: List[Tuple[str, ...]],
-                                           TFG_I: List[TreeFactorGraph]) -> float:
-        """
-        Determine step-size using line-search. The calculation is distributed over multiple workers. The number of jobs
-        is equal to the batch-size (see self.batch_size).
-
-        :param I_batch: list, training example indices in the current batch
-
-        :param y_I_hat: list of tuples, list of most-violating label sequences
-
-        :param TFG_I: list of TreeFactorGraph, list of graphical models associated with the training examples. The TFGs
-            must be generated using loss-augmentation.
-
-        :return: scalar, line search step-size
-        """
-        N = len(self.training_data_)
-
-        # Update direction s
-        s = DualVariables(self.C, self.alphas_.label_space, initialize=False).set_alphas(
-            [(i, y_i_hat) for i, y_i_hat in zip(I_batch, y_I_hat)], self.C / N)
-
-        # Difference of the dual vectors: s - a
-        s_minus_a = s - self.alphas_  # type: DualVariables
-
-        if s_minus_a.get_blocks(I_batch) == ([], []):
-            # The best update direction found is equal to the current solution (model). No update needed.
-            return -1
-
-        # Pre-compute some stuff
-        l_sign_delta_t = [self.training_data_[i].get_sign_delta_t(self.training_graphs_[i][0]) for i in I_batch]
-        l_P = [self._get_P(self.training_graphs_[i][0]) for i in I_batch]
-
-        # Calculate the nominator and denominator using a helper function in parallel.
-        nom, den = zip(*Parallel(n_jobs=self.n_jobs)(
-            delayed(self._linesearch_joblib_wrapper)(s_minus_a, TFG_I[idx], I_batch, i, idx, l_sign_delta_t, l_P)
-            for idx, i in enumerate(I_batch)))
-
-        return np.maximum(0.0, np.minimum(1.0, np.sum(nom) / np.sum(den)))
-
-    def _linesearch_joblib_wrapper(self, s_minus_a, TFG_i, I_batch, i, idx_i, l_sign_delta_t, l_P):
-        """
-        Helper function to calculate the line-search step-size in parallel.
-        """
-        nom = 0.0
-        den = 0.0
-
-        l_sign_delta_t_i_T_P_i = {}
-        l_mol_features_i = {}
-
-        with self.training_data_.candidates:
-            for y, fac in s_minus_a.iter(i):
-                Z = self.label_sequence_to_Z(y, s_minus_a.label_space[i])
-                nom += fac * TFG_i.likelihood(Z, log=True)  # fac = s(i, y) - a(i, y)
-
-                l_mol_features_i[y] = get_molecule_features_by_molecule_id_CACHED(
-                    self.training_data_.candidates, tuple(y), self.mol_feat_retention_order)
-
-                # Go over all i, j for which i = j
-                l_sign_delta_t_i_T_P_i[y] = l_sign_delta_t[idx_i] @ l_P[idx_i]
-                L_yy = self.mol_kernel(l_mol_features_i[y], l_mol_features_i[y])
-                den += fac ** 2 * l_sign_delta_t_i_T_P_i[y] @ L_yy @ l_sign_delta_t_i_T_P_i[y]
-
-            for idx_j, j in enumerate(I_batch[idx_i + 1:], idx_i + 1):
-                sign_delta_t_j_T_P_j = l_sign_delta_t[idx_j] @ l_P[idx_j]
-
-                # Go over the active "dual" variables: s(i, y) - a(i, y) != 0
-                for by, fac_j in s_minus_a.iter(j):
-                    mol_features_by = get_molecule_features_by_molecule_id_CACHED(
-                        self.training_data_.candidates, tuple(by), self.mol_feat_retention_order)
-
-                    for y, fac_i in s_minus_a.iter(i):
-                        L_yby = self.mol_kernel(l_mol_features_i[y], mol_features_by)
-                        den += 2 * fac_i * fac_j * l_sign_delta_t_i_T_P_i[y] @ L_yby @ sign_delta_t_j_T_P_j
-
-        return nom, den
-
     def _get_step_size_linesearch(self, I_batch: List[int], y_I_hat: List[Tuple[str, ...]],
                                   TFG_I: List[TreeFactorGraph]) -> float:
         """
@@ -1146,15 +1032,16 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             N = len(self.training_data_)
 
             # Update direction s
-            s = DualVariables(self.C, self.training_data_.get_labelspace(), initialize=False).set_alphas(
-                [(i, y_i_hat) for i, y_i_hat in zip(I_batch, y_I_hat)], self.C / N)
+            s = DualVariables(self.C, self.training_label_space_, initialize=False).set_alphas(
+                [(i, y_i_hat) for i, y_i_hat in zip(I_batch, y_I_hat)], self.C / N
+            )
 
             # Difference of the dual vectors: s - a
             s_minus_a = s - self.alphas_  # type: DualVariables
 
             if s_minus_a.get_blocks(I_batch) == ([], []):
                 # The best update direction found is equal to the current solution (model). No update needed.
-                return -1
+                return 0
 
             # ----------------
             # Nominator
@@ -1169,19 +1056,20 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
                 # Go over the active "dual" variables: s(i, y) - a(i, y) != 0
                 for y, fac in s_minus_a.iter(i):
-                    Z = self.label_sequence_to_Z(y, self.training_data_[i].get_labelspace())
+                    Z = self.label_sequence_to_Z(y, self.training_label_space_[i])
                     nom += fac * TFG.likelihood(Z, log=True)  # fac = s(i, y) - a(i, y)
 
                     # Load the molecular features for the active sequence y
-                    l_mol_features[idx][y] = get_molecule_features_by_molecule_id_CACHED(
-                        self.training_data_.candidates, tuple(y), self.mol_feat_retention_order)
+                    l_mol_features[idx][y] = self.training_data_.candidates.get_molecule_features_by_molecule_id(
+                        tuple(y), self.mol_feat_retention_order
+                    )
 
             # ----------------
             # Denominator
             # ----------------
             den = 0.0
 
-            l_sign_delta_t = [self.training_data_[i].get_sign_delta_t(self.training_graphs_[i][0]) for i in I_batch]
+            l_sign_delta_t = [self._get_sign_delta(0, i) for i in I_batch]
             l_P = [self._get_P(self.training_graphs_[i][0]) for i in I_batch]
 
             # Go over all i, j for which i = j
@@ -1404,63 +1292,58 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                               order_probs=edge_potentials, D=None)
 
         if update_direction == "random":
-            Z_max = [np.random.choice(range(node_potentials[s]["n_cand"])) for s in node_potentials]
+            z_max = [np.random.choice(range(node_potentials[s]["n_cand"])) for s in node_potentials]
         elif update_direction == "map":
-            Z_max, _ = TFG.MAP_only()
+            z_max, _ = TFG.MAP_only()
         elif update_direction == "max_node_score":
-            Z_max = [np.argmax(node_potentials[s]["log_score"]) for s in node_potentials]
+            z_max = [np.argmax(node_potentials[s]["log_score"]) for s in node_potentials]
         else:
             raise ValueError("Invalid update direction: '%s'. Choices are 'random' and 'map'." % update_direction)
 
-        return TFG, Z_max
+        return TFG, z_max
 
     @staticmethod
-    def _get_lambda_delta_OLD(Y_sequence: np.ndarray, Y_candidates: np.ndarray, G: nx.Graph,
-                              mol_kernel: Callable[[np.ndarray, np.ndarray], np.ndarray]) -> np.ndarray:
+    def _get_lambda_delta(
+            Y_sequence: np.ndarray, Y_candidates: np.ndarray, G: nx.Graph,
+            mol_kernel: Callable[[np.ndarray, np.ndarray], np.ndarray]
+    ) -> np.ndarray:
         """
-        Calculate the 'Lambda_Delta(y, y_s)' term, with shape = (L - 1, ) for all y_s in Y_candidates.
+        Calculate the kernel (= molecule similarity) difference between each molecule (= label) of a given label
+        sequence (Y_sequence) and each molecule in the candidate set (Y_candidates). The function outputs a matrix of
+        shape = (|E_i|, n_candidates). Therefore, the rows of the output matrix are associated with the edges (s, t) in
+        E_i and the columns with the candidates y_u (in Y_candidates)
 
-        :param Y_sequence: array-like, shape = (L, n_features), molecule features associated with the
+        Each element ((s, t), u) of the output matrix is computed as:
 
-        :param Y_candidates: array-like, shape = (n_candidates, n_features), feature matrix
+            lambda(y_u, y_s) - lambda(y_u, y_t)
+
+        with y_u being the u'th element in Y_candidates, and y_s, y_t being the molecules associated with edge (s, t)
+        of the tree-like MRF superimposed on the sequence.
+
+        NOTE: The function supports the processing of multiple sequences, typically associated active set of
+            dual-variables of a certain example i, at the same time. Here, we denote the number of active variables of
+            example i with n_S = |S_i|.
+
+        TODO: SEE SECTION 10.4 IN THE PAPER.
+
+        :param Y_sequence: array-like, shape = (|E_i| * |S_i|, n_features), feature matrix associated with the label
+            sequence.
+
+        :param Y_candidates: array-like, shape = (n_candidates, n_features), feature matrix of the candidates. Each
+            candidate label y in Y_candidates is compared to each sequence label.
 
         :param G: networkx.Graph, spanning tree defined over the MRF associated with the label sequence.
 
         :param mol_kernel: callable, function that takes in two feature row-matrices as input and outputs the kernel
             similarity matrix.
 
-        :return: array-shape = (L - 1, n_molecules)
+        :return: array-shape = (|E_i| * |S_i|, n_candidates)
         """
-        assert len(G.nodes) > 1, "There must be at least two nodes in the graph."
-        assert len(G.edges) > 0, "There must be at least one edge in the graph."
+        Ky = mol_kernel(Y_sequence, Y_candidates)
 
-        Ky = mol_kernel(Y_sequence, Y_candidates)  # shape = (L, n_candidates)
-
-        bS, bT = zip(*G.edges)  # each of length |E| = L - 1
-
-        return Ky[list(bS)] - Ky[list(bT)]
-
-    @staticmethod
-    def _get_lambda_delta(Y_sequence: np.ndarray, Y_candidates: np.ndarray, G: nx.Graph,
-                          mol_kernel: Callable[[np.ndarray, np.ndarray], np.ndarray]) -> np.ndarray:
-        """
-        Calculate the 'Lambda_Delta(y, y_s)' term, with shape = ((L - 1) * |S|, ) for all y_s in Y_candidates.
-
-        :param Y_sequence: array-like, shape = (L * |S|, n_features), molecule features associated with the
-
-        :param Y_candidates: array-like, shape = (n_candidates, n_features), feature matrix
-
-        :param G: networkx.Graph, spanning tree defined over the MRF associated with the label sequence.
-
-        :param mol_kernel: callable, function that takes in two feature row-matrices as input and outputs the kernel
-            similarity matrix.
-
-        :return: array-shape = ((L - 1) * |S|, n_molecules)
-        """
+        # Determine the number of sequences that have been passed to the function.
         L = len(G.nodes)
         n_S = len(Y_sequence) // L
-
-        Ky = mol_kernel(Y_sequence, Y_candidates)  # shape = (L * |S|, n_candidates)
 
         bS, bT = zip(*G.edges)  # each of length |E| = L - 1
 
@@ -1477,4 +1360,4 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         """
         TODO
         """
-        return get_molecule_features_by_molecule_id_CACHED(sequence.candidates, tuple(sequence.labels), features)
+        return sequence.candidates.get_molecule_features_by_molecule_id(tuple(sequence.labels), features)

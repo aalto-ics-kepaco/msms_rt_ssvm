@@ -28,7 +28,7 @@ import numpy as np
 import scipy.sparse as sp
 import itertools as it
 
-from numba import jit, prange, guvectorize, float64, int64, int32
+from numba import jit, prange, guvectorize, float64, int64
 from sklearn.metrics.pairwise import manhattan_distances, pairwise_distances
 from joblib import delayed, Parallel
 from scipy.spatial._distance_wrap import cdist_cityblock_double_wrap

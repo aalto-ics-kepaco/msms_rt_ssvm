@@ -41,20 +41,20 @@ from ssvm.dual_variables import DualVariables
 DB_FN = "Bach2020_test_db.sqlite"
 
 
-class Test_StructuredSVM(unittest.TestCase):
+class TestStructuredSVM(unittest.TestCase):
+    class DummyDualVariables(object):
+        def __init__(self, B):
+            self.B = B
+
+        def get_dual_variable_matrix(self):
+            return self.B
+
     def test_is_feasible_matrix(self):
-        class DummyDualVariables(object):
-            def __init__(self, B):
-                self.B = B
-
-            def get_dual_variable_matrix(self):
-                return self.B
-
         C = 2.2
         N = 4
 
         # ---- Feasible dual variables ----
-        alphas = DummyDualVariables(
+        alphas = self.DummyDualVariables(
             csr_matrix([
                 [C / (N * 2), C / (N * 2), 0, 0, 0, 0, 0, 0],
                 [0, 0, C / (N * 2), C / (N * 2), 0, 0, 0, 0],
@@ -66,7 +66,7 @@ class Test_StructuredSVM(unittest.TestCase):
         self.assertFalse(_StructuredSVM._is_feasible_matrix(alphas, C + 1))
 
         # ---- Infeasible dual variables ----
-        alphas = DummyDualVariables(
+        alphas = self.DummyDualVariables(
             csr_matrix([
                 [C / (N * 3), C / (N * 2), 0, 0, 0, 0, 0, 0],
                 [0, 0, C / (N * 2), C / (N * 2), 0, 0, 0, 0],
@@ -79,6 +79,19 @@ class Test_StructuredSVM(unittest.TestCase):
 
 
 class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
+    def get_lambda_delta_ref(self, Y_sequence, Y_candidates, G, mol_kernel):
+        lambda_delta = np.zeros((len(G.edges), len(Y_candidates)))
+
+        # Sum over the edges (s, t) in E_i
+        for idx, (s, t) in enumerate(G.edges):
+            # Feature vectors associated with labels of the edge (s, t)
+            y_s = Y_sequence[s][np.newaxis, :]
+            y_t = Y_sequence[t][np.newaxis, :]
+            # Kernel value difference
+            lambda_delta[idx] = mol_kernel(y_s, Y_candidates) - mol_kernel(y_t, Y_candidates)
+
+        return lambda_delta
+
     def setUp(self) -> None:
         # ===================
         # Get list of Spectra
@@ -101,44 +114,132 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
         # ===================
         self.ssvm = StructuredSVMSequencesFixedMS2(
             mol_feat_label_loss="iokr_fps__positive", mol_feat_retention_order="substructure_count",
-            mol_kernel="minmax", C=2)
+            mol_kernel="minmax", C=2
+        )
 
-        self.N = 50
+        self.N = 25
         self.ssvm.training_data_ = SequenceSample(
             self.spectra, self.labels,
-            RandomSubsetCandSQLiteDB_Bach2020(db_fn=DB_FN, molecule_identifier="inchi", random_state=192,
-                                              number_of_candidates=50, include_correct_candidate=True),
-            N=self.N, L_min=10,
-            L_max=15, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
-        self.ssvm.alphas_ = DualVariables(
-            self.ssvm.C, label_space=self.ssvm.training_data_.get_labelspace(), num_init_active_vars=3)
-        self.ssvm.training_graphs_ = [SpanningTrees(sequence, random_state=i)
-                                      for i, sequence in enumerate(self.ssvm.training_data_)]
+            candidates=RandomSubsetCandSQLiteDB_Bach2020(
+                db_fn=DB_FN, molecule_identifier="inchi", random_state=192, number_of_candidates=15,
+                include_correct_candidate=True, init_with_open_db_conn=False
+            ),
+            N=self.N, L_min=4, L_max=32, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
 
-    def test_get_lambda_delta(self):
+        # Initialize the SSVM alpha values
+        with self.ssvm.training_data_.candidates:
+            self.ssvm.training_label_space_ = self.ssvm.training_data_.get_labelspace()
+            self.ssvm.alphas_ = DualVariables(
+                self.ssvm.C, label_space=self.ssvm.training_label_space_, num_init_active_vars=3,
+                random_state=90210
+            )
+        # Generate the training graphs
+        self.ssvm.training_graphs_ = [
+            SpanningTrees(sequence, random_state=i) for i, sequence in enumerate(self.ssvm.training_data_)
+        ]
+
+    def test_linesearch(self):
+        self.skipTest("Needs to be implemented")
+
+        n_jobs_old = self.ssvm.n_jobs
+
+        n_iter = 25
+        t_ref = 0.0
+        t_opt = 0.0
+
+        for k in range(n_iter):
+            I_batch = np.random.RandomState(k).choice(range(self.N), size=self.N, replace=False)
+            y_I_hat = []
+            TFG_I = []
+            for i in I_batch:
+                # Do the inference step
+                y_hat, TFG = self.ssvm.inference(
+                    self.ssvm.training_data_[i], self.ssvm.training_graphs_[i], loss_augmented=True,
+                    return_graphical_model=True, update_direction=self.ssvm.update_direction
+                )
+                y_I_hat.append(y_hat)
+                TFG_I.append(TFG)
+
+            # -------------------------------
+            # Calculate line-search step-size
+            # -------------------------------
+
+            # Using reference implementation
+            start = time.time()
+            gamma = self.ssvm._get_step_size_linesearch(I_batch, y_I_hat, TFG_I)
+            print(gamma)
+            t_ref += (time.time() - start)
+
+            # Update the dual variables
+            for idx, i in enumerate(I_batch):
+                self.ssvm.alphas_.update(i, y_I_hat[idx], gamma)
+
+        print("== _get_step_size_linesearch ==")
+        print("Reference: %.3fs" % (t_ref / n_iter))
+        print("Parallel: %.3fs" % (t_opt / n_iter))
+
+        self.ssvm.n_jobs = n_jobs_old
+
+    def test_get_sign_delta(self):
+        sign_delta = self.ssvm._get_sign_delta(tree_index=0)
+
+        self.assertEqual(
+            (sum(len(Gs_i[0].edges) for Gs_i in self.ssvm.training_graphs_), ),
+            sign_delta.shape
+        )
+
+        idx = 0
+        for i in range(self.N):
+            nE_i = len(self.ssvm.training_graphs_[i][0].edges)
+
+            sign_delta_i = sign_delta[idx:(idx + nE_i)]
+
+            self.assertEqual((nE_i,), sign_delta_i.shape)
+            np.testing.assert_equal(
+                self.ssvm.training_data_[i].get_sign_delta_t(self.ssvm.training_graphs_[i][0]) / nE_i,
+                sign_delta_i
+            )
+
+            # Test getting sign delta only for a single example
+            self.assertEqual((nE_i, ), self.ssvm._get_sign_delta(tree_index=0, example_index=i).shape)
+            np.testing.assert_equal(
+                sign_delta_i,
+                self.ssvm._get_sign_delta(tree_index=0, example_index=i)
+            )
+
+            idx += nE_i
+
+    def test_get_lambda_delta__single_sequence(self):
+        # We measure the run-time over 15 repetitions
+        n_rep = 15
         rt_loop = 0.0
         rt_vec = 0.0
 
-        n_rep = 15
+        # Dimensions of the sequence and candidate feature matrices
+        n_features = 301
+        n_candidates = 120
+
         for rep in range(n_rep):
-            n_features = 301
-            n_molecules = 501
-            L = 200
+            # Generate a random sequence length
+            L = np.random.RandomState(rep + 7).randint(1, 16)
+
+            # Generate a random spanning tree to super-impose it on the sequence
             G = nx.generators.trees.random_tree(L, seed=(rep + 3))
 
+            # Generate the random feature matrices for the sequence and the candidates
             Y_sequence = np.random.RandomState(rep + 5).randn(L, n_features)
-            Y_candidates = np.random.RandomState(rep + 6).randn(n_molecules, n_features)
+            Y_candidates = np.random.RandomState(rep + 6).randn(n_candidates, n_features)
 
+            # Generate the reference solution by implemented in the looped version
             start = time.time()
-            lambda_delta_ref = np.empty((L - 1, n_molecules))
-            for idx, (s, t) in enumerate(G.edges):
-                lambda_delta_ref[idx] = generalized_tanimoto_kernel_FAST(Y_sequence[s][np.newaxis, :], Y_candidates) \
-                                        - generalized_tanimoto_kernel_FAST(Y_sequence[t][np.newaxis, :], Y_candidates)
+            lambda_delta_ref = self.get_lambda_delta_ref(Y_sequence, Y_candidates, G, generalized_tanimoto_kernel_FAST)
             rt_loop += time.time() - start
 
+            # Use the vectorized implementation
             start = time.time()
-            lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta_OLD(
-                Y_sequence, Y_candidates, G, generalized_tanimoto_kernel_FAST)
+            lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta(
+                Y_sequence, Y_candidates, G, generalized_tanimoto_kernel_FAST
+            )
             rt_vec += time.time() - start
 
             self.assertEqual(lambda_delta_ref.shape, lambda_delta.shape)
@@ -148,137 +249,178 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
         print("Loop: %.3fs" % (rt_loop / n_rep))
         print("Vec: %.3fs" % (rt_vec / n_rep))
 
-    def test_get_lambda_delta_NEW(self):
-        rt_old = 0.0
-        rt_new = 0.0
+    def test_get_lambda_delta__multiple_sequences(self):
+        # Dimensions of the sequence and candidate feature matrices
+        n_features = 301
+        n_candidates = 120
 
-        n_rep = 15
-        for rep in range(n_rep):
-            n_features = 301
-            n_molecules = 501
-            L = 200
+        for rep in range(25):
+            # Generate a random sequence length
+            L = np.random.RandomState(rep + 7).randint(1, 16)
+
+            # Generate a random spanning tree to super-impose it on the sequence
             G = nx.generators.trees.random_tree(L, seed=(rep + 3))
 
-            Y_candidates = np.random.RandomState(rep + 6).randn(n_molecules, n_features)
+            # Generate the random feature matrices for the sequence and the candidates
+            Y_candidates = np.random.RandomState(rep + 6).randn(n_candidates, n_features)
 
-            l_Y_sequence = []
-            for nS in [1, 2, 3, 4, 5]:
-                l_Y_sequence.append(np.random.RandomState((nS * rep) + 5).randn(L, n_features))
+            # Generate a random number of sequences
+            nS = np.random.RandomState(rep + 4).randint(1, 7)
 
-                start = time.time()
-                lambda_delta_ref = np.dstack(
-                    [
-                        StructuredSVMSequencesFixedMS2._get_lambda_delta_OLD(
-                            Y_sequence, Y_candidates, G, generalized_tanimoto_kernel_FAST)
-                        for Y_sequence in l_Y_sequence
-                    ])
-                rt_old += time.time() - start
-                self.assertEqual((L - 1, len(Y_candidates), nS), lambda_delta_ref.shape)
+            # Generate 'nS' many random sequences (associated with active dual variables)
+            l_Y_sequence = [
+                np.random.RandomState((nS * rep) + 5).randn(L, n_features)
+                for _ in range(nS)
+            ]
 
-                start = time.time()
-                lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta(
-                    np.vstack(l_Y_sequence), Y_candidates, G, generalized_tanimoto_kernel_FAST)
-                self.assertEqual(((L - 1) * nS, len(Y_candidates)), lambda_delta.shape)
+            # Compute the lambda delta vectors for each active sequence and stack them
+            lambda_delta_ref = np.vstack(
+                [
+                    self.get_lambda_delta_ref(Y_sequence, Y_candidates, G, generalized_tanimoto_kernel_FAST)
+                    for Y_sequence in l_Y_sequence
+                ]
+            )
 
-                # Bring output to shape = (|E_j|, |S_j|, n_molecules)
-                lambda_delta = lambda_delta.reshape(
-                    (
-                        nS,
-                        L - 1,
-                        len(Y_candidates),
-                    ))
-                self.assertEqual((nS, L - 1, len(Y_candidates)), lambda_delta.shape)
-                rt_new += time.time() - start
+            # Pass all sequences at ones to the delta lambda computation and compare to the reference
+            lambda_delta = StructuredSVMSequencesFixedMS2._get_lambda_delta(
+                np.vstack(l_Y_sequence), Y_candidates, G, generalized_tanimoto_kernel_FAST
+            )
 
-                for nSi in range(nS):
-                    np.testing.assert_allclose(lambda_delta_ref[:, :, nSi], lambda_delta[nSi, :, :])
-
-        print("== get_lambda_delta ==")
-        print("Old: %.3fs" % (rt_old / n_rep))
-        print("New: %.3fs" % (rt_new / n_rep))
+            self.assertEqual(((L - 1) * nS, len(Y_candidates)), lambda_delta_ref.shape)
+            self.assertEqual(lambda_delta_ref.shape, lambda_delta.shape)
+            np.testing.assert_almost_equal(lambda_delta_ref, lambda_delta)
 
     def test_I_rsvm_jfeat(self):
-        N_E = np.sum([len(self.ssvm.training_graphs_[j][0].edges) for j in range(self.N)])  # total number of edges
+        N_E = sum(len(self.ssvm.training_graphs_[j][0].edges) for j in range(self.N))  # total number of edges
 
         rt_loop = 0.0
         rt_vec = 0.0
 
-        for i in range(5):  # inspect only the first 5 label sequences
-            Y_candidates = self.ssvm.training_data_[i].get_molecule_features_for_candidates("substructure_count", 2)
-
-            start = time.time()
-            I_ref = np.zeros((len(Y_candidates), ))
-            for j in range(self.N):
-                sign_delta_j = self.ssvm.training_data_[j].get_sign_delta_t(self.ssvm.training_graphs_[j][0])
-                lambda_delta_j = self.ssvm._get_lambda_delta(
-                    Y_sequence=self.ssvm.training_data_[j].get_molecule_features_for_labels(
-                        self.ssvm.mol_feat_retention_order),
-                    Y_candidates=Y_candidates,
-                    G=self.ssvm.training_graphs_[j][0],
-                    mol_kernel=self.ssvm.mol_kernel
+        with self.ssvm.training_data_.candidates:
+            for i in range(self.N):
+                Y_candidates = np.vstack(
+                    self.ssvm.training_data_[i].get_molecule_features_for_candidates("substructure_count")
                 )
-                I_ref += self.ssvm.C / len(self.ssvm.training_data_) * (sign_delta_j @ lambda_delta_j)
 
-                # self.assertEqual((len(ssvm.training_graphs_[j][0].edges),), sign_delta_j.shape)
-                # self.assertEqual((len(ssvm.training_graphs_[j][0].edges), len(Y_candidates)), lambda_delta_j.shape)
+                start = time.time()
+                I_ref = np.zeros((len(Y_candidates), ))
+                for j in range(self.N):
+                    # Get sign-delta / |E_j|
+                    sign_delta_j = self.ssvm.training_data_[j].get_sign_delta_t(self.ssvm.training_graphs_[j][0])
+                    sign_delta_j /= len(self.ssvm.training_graphs_[j][0].edges)  # divide by the number of edges
 
-            rt_loop += time.time() - start
+                    #
+                    lambda_delta_j = self.ssvm._get_lambda_delta(
+                        Y_sequence=self.ssvm.training_data_[j].get_molecule_features_for_labels(
+                            self.ssvm.mol_feat_retention_order),
+                        Y_candidates=Y_candidates,
+                        G=self.ssvm.training_graphs_[j][0],
+                        mol_kernel=self.ssvm.mol_kernel
+                    )
+                    I_ref += (self.ssvm.C * (sign_delta_j @ lambda_delta_j) / len(self.ssvm.training_data_))
 
-            start = time.time()
-            I = self.ssvm._I_jfeat_rsvm(Y_candidates)
-            rt_vec += time.time() - start
+                rt_loop += time.time() - start
 
-            self.assertEqual((len(Y_candidates), ), I.shape)
-            np.testing.assert_almost_equal(I_ref, I)
-            self.assertTrue(np.all((I / self.ssvm.C * self.N) >= -N_E))
-            self.assertTrue(np.all((I / self.ssvm.C * self.N) <= N_E))
+                start = time.time()
+                I = self.ssvm._I_jfeat_rsvm(Y_candidates)
+                rt_vec += time.time() - start
+
+                self.assertEqual((len(Y_candidates), ), I.shape)
+                np.testing.assert_almost_equal(I_ref, I)
+                self.assertTrue(np.all((I / self.ssvm.C * self.N) >= -N_E))
+                self.assertTrue(np.all((I / self.ssvm.C * self.N) <= N_E))
 
         print("== I_rsvm_jfeat ==")
-        print("Loop: %.3fs" % (rt_loop / 5))
-        print("Vec: %.3fs" % (rt_vec / 5))
+        print("Loop: %.3fs" % (rt_loop / self.N))
+        print("Vec: %.3fs" % (rt_vec / self.N))
 
     def test_I_rsvm_jfeat__FOR_LARGE_MEMORY(self):
         N_E = np.sum([len(self.ssvm.training_graphs_[j][0].edges) for j in range(self.N)])  # total number of edges
 
-        for i in range(10):  # inspect only the first 10 label sequences
-            Y_candidates = self.ssvm.training_data_[i].get_molecule_features_for_candidates("substructure_count", 2)
+        with self.ssvm.training_data_.candidates:
+            for i in range(self.N):
+                Y_candidates = np.vstack(
+                    self.ssvm.training_data_[i].get_molecule_features_for_candidates("substructure_count")
+                )
 
-            I = self.ssvm._I_jfeat_rsvm__FOR_LARGE_MEMORY(Y_candidates)
-            I_ref = self.ssvm._I_jfeat_rsvm(Y_candidates)
+                I = self.ssvm._I_jfeat_rsvm__FOR_LARGE_MEMORY(Y_candidates)
+                I_ref = self.ssvm._I_jfeat_rsvm(Y_candidates)
 
-            self.assertEqual((len(Y_candidates), ), I.shape)
-            np.testing.assert_allclose(I_ref, I)
-            self.assertTrue(np.all((I / self.ssvm.C * self.N) >= -N_E))
-            self.assertTrue(np.all((I / self.ssvm.C * self.N) <= N_E))
+                self.assertEqual((len(Y_candidates), ), I.shape)
+                np.testing.assert_allclose(I_ref, I)
+                self.assertTrue(np.all((I / self.ssvm.C * self.N) >= -N_E))
+                self.assertTrue(np.all((I / self.ssvm.C * self.N) <= N_E))
+
+    def test_II_rsvm_jfeat(self):
+        t_loop = 0.0
+        t_vec = 0.0
+
+        with self.ssvm.training_data_.candidates:
+            for i in range(self.N):
+                Y_candidates = np.vstack(
+                    self.ssvm.training_data_[i].get_molecule_features_for_candidates("substructure_count")
+                )
+
+                # Use implementation in the SSVM class
+                start = time.time()
+                II = self.ssvm._II_jfeat_rsvm(Y_candidates)
+                t_vec += (time.time() - start)
+
+                # -----------------
+                # Use implementation completely based on loops
+                start = time.time()
+                II_ref = np.zeros((len(Y_candidates), ))
+
+                for j in range(self.N):
+                    sign_delta = self.ssvm._get_sign_delta(0, j)
+
+                    for (_, sj), aj in zip(*self.ssvm.alphas_.get_blocks(j)):  # SUM {y in Sigma}
+                        Y_sequence = self.ssvm.training_data_.candidates.get_molecule_features_by_molecule_id(sj, "substructure_count")
+
+                        lambda_delta = self.ssvm._get_lambda_delta(
+                            Y_sequence, Y_candidates, self.ssvm.training_graphs_[j][0], self.ssvm.mol_kernel
+                        )
+
+                        for idx, y in enumerate(Y_candidates):
+                            II_ref[idx] += (aj * sign_delta @ lambda_delta[:, idx])
+                t_loop += (time.time() - start)
+
+                np.testing.assert_almost_equal(II, II_ref)
+
+        print("== II_rsvm_jfeat ==")
+        print("Loop: %.3fs" % (t_loop / self.N))
+        print("Vec: %.3fs" % (t_vec / self.N))
 
     def test_predict_molecule_preference_values(self):
-        for i in range(5):  # inspect only the first 5 label sequences
-            Y_candidates = self.ssvm.training_data_[i].get_molecule_features_for_candidates("substructure_count", 2)
-            pref = self.ssvm.predict_molecule_preference_values(Y_candidates)
-            self.assertEqual((len(Y_candidates), ), pref.shape)
+        with self.ssvm.training_data_.candidates:
+            for i in range(5):  # inspect only the first 5 label sequences
+                Y_candidates = self.ssvm.training_data_[i].get_molecule_features_for_candidates("substructure_count", 2)
+                pref = self.ssvm.predict_molecule_preference_values(Y_candidates)
+                self.assertEqual((len(Y_candidates), ), pref.shape)
 
     def test_get_node_and_edge_potentials(self):
-        i = 8
-        npot, epot = self.ssvm._get_node_and_edge_potentials(self.ssvm.training_data_[i],
-                                                             self.ssvm.training_graphs_[i][0])
+        with self.ssvm.training_data_.candidates:
+            for i in [0, 8, 5]:
+                npot, epot = self.ssvm._get_node_and_edge_potentials(self.ssvm.training_data_[i],
+                                                                     self.ssvm.training_graphs_[i][0])
 
-        self.assertEqual(len(self.ssvm.training_graphs_[i][0]), len(npot))
+                self.assertEqual(len(self.ssvm.training_graphs_[i][0]), len(npot))
 
-        for s, t in self.ssvm.training_graphs_[i][0].edges:
-            self.assertIn(s, epot)
-            self.assertIn(t, epot[s])
+                for s, t in self.ssvm.training_graphs_[i][0].edges:
+                    self.assertIn(s, epot)
+                    self.assertIn(t, epot[s])
 
-            # Reverse direction
-            self.assertIn(t, epot)
-            self.assertIn(s, epot[t])
+                    # Reverse direction
+                    self.assertIn(t, epot)
+                    self.assertIn(s, epot[t])
 
-            # Check shape of transition matrices
-            n_cand_s = len(self.ssvm.training_data_[i].get_molecule_features_for_candidates(
-                self.ssvm.mol_feat_retention_order, s))
-            n_cand_t = len(self.ssvm.training_data_[i].get_molecule_features_for_candidates(
-                self.ssvm.mol_feat_retention_order, t))
-            self.assertEqual((n_cand_s, n_cand_t), epot[s][t]["log_score"].shape)
-            self.assertEqual((n_cand_t, n_cand_s), epot[t][s]["log_score"].shape)
+                    # Check shape of transition matrices
+                    n_cand_s = len(self.ssvm.training_data_[i].get_molecule_features_for_candidates(
+                        self.ssvm.mol_feat_retention_order, s))
+                    n_cand_t = len(self.ssvm.training_data_[i].get_molecule_features_for_candidates(
+                        self.ssvm.mol_feat_retention_order, t))
+                    self.assertEqual((n_cand_s, n_cand_t), epot[s][t]["log_score"].shape)
+                    self.assertEqual((n_cand_t, n_cand_s), epot[t][s]["log_score"].shape)
 
     def test_inference(self):
         for i in [0, 8, 3]:
