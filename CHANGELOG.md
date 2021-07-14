@@ -1,5 +1,9 @@
 # Version History
 
+## v2.1.0 (New feature)
+
+- Added support for the molecular descriptors in the MassBank DB
+
 ## v2.0.0
 
 ### Default Behavior

@@ -159,8 +159,9 @@ class ABCCandSQLiteDB(ABC):
         pass
 
     @abstractmethod
-    def _get_molecule_feature_query(self, spectrum: Spectrum, feature: str, candidate_subset: Optional[List] = None) \
-            -> str:
+    def _get_molecule_feature_query(
+            self, spectrum: Spectrum, feature: str, feature_table: str, candidate_subset: Optional[List] = None
+    ) -> str:
         """
         Function to construct the SQLite query to load the molecule features (e.g. fingerprint vectors) of the
         candidates associated with the given MS/MS spectrum.
@@ -176,6 +177,8 @@ class ABCCandSQLiteDB(ABC):
         :param spectrum: matchms.Spectrum, MS/MS spectrum for which the molecule features should be loaded.
 
         :param feature: string, name of the molecule feature to load.
+
+        :param feature_table: string, name of the meta-table in which the feature was found.
 
         :param candidate_subset: list of strings, molecule identifiers to restrict the candidate set for which the
             features are returned.
@@ -212,7 +215,9 @@ class ABCCandSQLiteDB(ABC):
         pass
 
     @abstractmethod
-    def _get_molecule_feature_by_id_query(self, molecule_ids: Union[List[str], Tuple[str, ...]], features: str) -> str:
+    def _get_molecule_feature_by_id_query(
+            self, molecule_ids: Union[List[str], Tuple[str, ...]], features: str, feature_table: str
+    ) -> str:
         """
         Function to construct the SQLite query to load the molecule features (e.g. fingerprint vectors) for the given
         molecule identifier.
@@ -234,31 +239,37 @@ class ABCCandSQLiteDB(ABC):
         """
         pass
 
-    def _get_d_and_mode_feature(self, feature: str) -> Tuple[int, str]:
+    def _get_d_and_mode_feature(self, feature: str, feature_table: str) -> Tuple[int, str]:
         """
         :param feature: string, identifier of the requested molecule feature.
+
+        :param feature_table: string, name of the meta-table in which the feature was found.
 
         :return: Tuple = (scalar, string), dimensionality of the feature and feature mode
         """
         return self.db.execute(
-            "SELECT length, mode FROM fingerprints_meta WHERE name IS ?", (feature, )
+            "SELECT length, mode FROM %s WHERE name IS ?" % feature_table, (feature, )
         ).fetchone()
 
-    def _get_d_feature(self, feature: str) -> int:
+    def _get_d_feature(self, feature: str, feature_table: str) -> int:
         """
         :param feature: string, identifier of the requested molecule feature.
+
+        :param feature_table: string, name of the meta-table in which the feature was found.
 
         :return: scalar, dimensionality of the feature
         """
-        return self._get_d_and_mode_feature(feature)[0]
+        return self._get_d_and_mode_feature(feature, feature_table)[0]
 
-    def _get_mode_feature(self, feature: str) -> str:
+    def _get_mode_feature(self, feature: str, feature_table: str) -> str:
         """
         :param feature: string, identifier of the requested molecule feature.
 
+         :param feature_table: string, name of the meta-table in which the feature was found.
+
         :return: string, data-type mode of the feature
         """
-        return self._get_d_and_mode_feature(feature)[1]
+        return self._get_d_and_mode_feature(feature, feature_table)[1]
 
     @abstractmethod
     def _ensure_ms2scorer_is_available(self, ms2scorer: str) -> None:
@@ -270,16 +281,26 @@ class ABCCandSQLiteDB(ABC):
         """
         pass
 
-    def _ensure_feature_is_available(self, feature: str) -> None:
+    def _ensure_feature_is_available(self, feature: str) -> str:
         """
         Raises an ValueError, if the requested molecular feature is not in the database.
 
         :param feature: string, identifier of the requested molecule feature.
+
+        :return: string, table in which the feature has been found
+
         :raises: ValueError
         """
-        for row in self.db.execute("SELECT name FROM fingerprints_meta"):
-            if row[0] == feature:
-                return
+        # Get the available tables in the database
+        table_names, = zip(*self.db.execute("SELECT name FROM sqlite_schema").fetchall())
+
+        for feature_table in ["fingerprints_meta", "descriptors_meta"]:
+            if feature_table not in table_names:
+                continue
+
+            for row in self.db.execute("SELECT name FROM %s" % feature_table):
+                if row[0] == feature:
+                    return feature_table
 
         raise ValueError("Requested feature is not in the database: '%s'." % feature)
 
@@ -296,7 +317,8 @@ class ABCCandSQLiteDB(ABC):
         raise ValueError("Molecule identifier '%s' is not available." % molecule_identifier)
 
     @abstractmethod
-    def _get_molecule_feature_matrix(self, data: Union[List[Tuple], Tuple[Tuple]], features: str) -> np.ndarray:
+    def _get_molecule_feature_matrix(self, data: Union[List[Tuple], Tuple[Tuple]], features: str, feature_table: str) \
+            -> np.ndarray:
         """
         Function to parse the molecular features stored as strings in the candidate database and load them into a numpy
         array.
@@ -310,6 +332,8 @@ class ABCCandSQLiteDB(ABC):
 
         :param features: string, identifier of the molecular feature. This information is needed to properly parse the
             feature string representation and store it in a numpy array.
+
+        :param feature_table: string, name of the meta-table in which the feature was found.
 
         :return: array-like, shape = (n_molecules, d_features)
         """
@@ -377,6 +401,8 @@ class ABCCandSQLiteDB(ABC):
     def get_molecule_features(self, spectrum: Spectrum, features: str, return_dataframe: bool = False) \
             -> Union[np.ndarray, pd.DataFrame]:
         """
+        Load the specified molecule features for the candidates of the given spectrum.
+
         :param spectrum: matchms.Spectrum, of the sequence element to get the molecular features.
 
         :param features: string, identifier of the feature to load from the database.
@@ -386,16 +412,19 @@ class ABCCandSQLiteDB(ABC):
 
         :return: array-like, shape = (n_cand, d_feature), feature matrix
         """
-        self._ensure_feature_is_available(features)
+        feature_table = self._ensure_feature_is_available(features)
 
         # Query data from DB
         identifier, feature_rows = self._unpack_molecule_features(
             self.db.execute(
-                self._get_molecule_feature_query(spectrum, features, self._get_candidate_subset(spectrum))
+                self._get_molecule_feature_query(
+                    spectrum, features, feature_table, self._get_candidate_subset(spectrum)
+                )
             )
         )
 
-        feature_matrix = self._get_molecule_feature_matrix(feature_rows, features)
+        # Parse the feature strings into a feature matrix
+        feature_matrix = self._get_molecule_feature_matrix(feature_rows, features, feature_table)
 
         if return_dataframe:
             df_features = pd.concat((pd.DataFrame({"identifier": identifier}), pd.DataFrame(feature_matrix)), axis=1)
@@ -433,11 +462,11 @@ class ABCCandSQLiteDB(ABC):
 
         :return: array-like, shape = (n_mol, d_feature), feature matrix. Row i corresponds to molecule i.
         """
-        self._ensure_feature_is_available(features)
+        feature_table = self._ensure_feature_is_available(features)
 
         # Query data from DB
         identifiers, feature_rows = self._unpack_molecule_features(
-            self.db.execute(self._get_molecule_feature_by_id_query(molecule_ids, features))
+            self.db.execute(self._get_molecule_feature_by_id_query(molecule_ids, features, feature_table))
         )
 
         # Parse feature strings into a matrix
@@ -633,11 +662,14 @@ class ABCCandSQLiteDB_Bach2020(ABCCandSQLiteDB):
 
         return query
 
-    def _get_molecule_feature_query(self, spectrum: Spectrum, feature: str, candidate_subset: Optional[List] = None) \
-            -> str:
+    def _get_molecule_feature_query(
+            self, spectrum: Spectrum, feature: str, feature_table: str, candidate_subset: Optional[List] = None
+    ) -> str:
         """
         See base-class.
         """
+        assert feature_table == "fingerprints_meta", "Ups."
+
         query = "SELECT m.%s AS identifier, %s AS molecular_feature FROM candidates_spectra" \
                 "   INNER JOIN molecules m ON m.inchi = candidates_spectra.candidate" \
                 "   INNER JOIN fingerprints_data fd ON fd.molecule = candidates_spectra.candidate" \
@@ -673,7 +705,9 @@ class ABCCandSQLiteDB_Bach2020(ABCCandSQLiteDB):
 
         return query
 
-    def _get_molecule_feature_by_id_query(self, molecule_ids: Union[List[str], Tuple[str, ...]], features: str) -> str:
+    def _get_molecule_feature_by_id_query(
+            self, molecule_ids: Union[List[str], Tuple[str, ...]], features: str, feature_table: str
+    ) -> str:
         """
         See base-class.
         """
@@ -681,6 +715,8 @@ class ABCCandSQLiteDB_Bach2020(ABCCandSQLiteDB):
         # Note: The order in which we provide the molecule ids is preserved in the output. But, if a molecule id appears
         #       multiple times, than its first appearance defines its position in the output.
         # Read: https://www.sqlite.org/lang_expr.html#case
+        assert feature_table == "fingerprints_meta", "Ups"
+
         _order_query_str = "\n".join(["WHEN '%s' THEN %d" % (mid, i) for i, mid in enumerate(molecule_ids, start=1)])
 
         query = "SELECT %s AS identifier, %s AS molecular_feature FROM molecules" \
@@ -693,13 +729,16 @@ class ABCCandSQLiteDB_Bach2020(ABCCandSQLiteDB):
 
         return query
 
-    def _get_molecule_feature_matrix(self, data: Union[pd.Series, List, Tuple], features: str) -> np.ndarray:
+    def _get_molecule_feature_matrix(self, data: Union[pd.Series, List, Tuple], features: str, feature_table: str) \
+            -> np.ndarray:
         """
         See base-class.
         """
+        assert feature_table == "fingerprints_meta", "Ups"
+
         # Determine number of samples and feature dimension
         n = len(data)
-        d, mode = self._get_d_and_mode_feature(features)
+        d, mode = self._get_d_and_mode_feature(features, feature_table)
 
         if mode == "count":
             # Set up an output array
@@ -757,16 +796,30 @@ class ABCCandSQLiteDB_Massbank(ABCCandSQLiteDB):
 
         return query
 
-    def _get_molecule_feature_query(self, spectrum: Spectrum, feature: str, candidate_subset: Optional[List] = None) \
-            -> str:
+    def _get_molecule_feature_query(
+            self, spectrum: Spectrum, feature: str, feature_table: str, candidate_subset: Optional[List] = None
+    ) -> str:
         """
         See base-class.
         """
-        query = "SELECT m.%s AS identifier, fd.bits, fd.vals FROM candidates_spectra" \
-                "   INNER JOIN molecules m ON m.cid = candidates_spectra.candidate" \
-                "   INNER JOIN fingerprints_data__%s fd ON fd.molecule = candidates_spectra.candidate" \
-                "   WHERE spectrum IS '%s'" \
-                % (self.molecule_identifier, feature, spectrum.get("spectrum_id"))
+        if feature_table.startswith("fingerprints"):
+            # Fingerprints
+            query = "SELECT m.%s AS identifier, fd.bits, fd.vals FROM candidates_spectra" \
+                    "   INNER JOIN molecules m ON m.cid = candidates_spectra.candidate" \
+                    "   INNER JOIN fingerprints_data__%s fd ON fd.molecule = candidates_spectra.candidate" \
+                    "   WHERE spectrum IS '%s'" \
+                    % (self.molecule_identifier, feature, spectrum.get("spectrum_id"))
+        elif feature_table.startswith("descriptors"):
+            # Descriptors
+            query = "SELECT m.%s AS identifier, dd.desc_vals FROM candidates_spectra" \
+                    "   INNER JOIN molecules m ON m.cid = candidates_spectra.candidate" \
+                    "   INNER JOIN descriptors_data__%s dd ON dd.molecule = candidates_spectra.candidate" \
+                    "   WHERE spectrum IS '%s'" \
+                    % (self.molecule_identifier, feature, spectrum.get("spectrum_id"))
+        else:
+            raise AssertionError(
+                "Ups, that should not happen: feature_table = '%s', feature = '%s'" % (feature_table, feature)
+            )
 
         if candidate_subset is not None:
             query += " AND identifier IN %s" % self._in_sql(candidate_subset)
@@ -798,7 +851,9 @@ class ABCCandSQLiteDB_Massbank(ABCCandSQLiteDB):
 
         return query
 
-    def _get_molecule_feature_by_id_query(self, molecule_ids: Union[List[str], Tuple[str, ...]], features: str) -> str:
+    def _get_molecule_feature_by_id_query(
+            self, molecule_ids: Union[List[str], Tuple[str, ...]], features: str, feature_table: str
+    ) -> str:
         """
         See base-class.
         """
@@ -808,23 +863,39 @@ class ABCCandSQLiteDB_Massbank(ABCCandSQLiteDB):
         # Read: https://www.sqlite.org/lang_expr.html#case
         _order_query_str = "\n".join(["WHEN '%s' THEN %d" % (mid, i) for i, mid in enumerate(molecule_ids, start=1)])
 
-        query = "SELECT %s AS identifier, bits, vals FROM fingerprints_data__%s fd" \
-                "   INNER JOIN main.molecules mols ON mols.cid = fd.molecule" \
-                "   WHERE identifier IN %s" \
-                "   GROUP BY identifier" \
-                "   ORDER BY CASE identifier" \
-                "         %s" \
-                "      END" % (self.molecule_identifier, features, self._in_sql(molecule_ids), _order_query_str)
+        if feature_table.startswith("fingerprints"):
+            # Fingerprints
+            query = "SELECT %s AS identifier, bits, vals FROM fingerprints_data__%s fd" \
+                    "   INNER JOIN main.molecules mols ON mols.cid = fd.molecule" \
+                    "   WHERE identifier IN %s" \
+                    "   GROUP BY identifier" \
+                    "   ORDER BY CASE identifier" \
+                    "         %s" \
+                    "      END" % (self.molecule_identifier, features, self._in_sql(molecule_ids), _order_query_str)
+        elif feature_table.startswith("descriptors"):
+            # Descriptors
+            query = "SELECT %s AS identifier, desc_vals FROM descriptors_data__%s dd" \
+                    "   INNER JOIN main.molecules mols ON mols.cid = dd.molecule" \
+                    "   WHERE identifier IN %s" \
+                    "   GROUP BY identifier" \
+                    "   ORDER BY CASE identifier" \
+                    "         %s" \
+                    "      END" % (self.molecule_identifier, features, self._in_sql(molecule_ids), _order_query_str)
+        else:
+            raise AssertionError(
+                "Ups, that should not happen: feature_table = '%s', feature = '%s'" % (feature_table, features)
+            )
 
         return query
 
-    def _get_molecule_feature_matrix(self, data: Union[pd.Series, List, Tuple], features: str) -> np.ndarray:
+    def _get_molecule_feature_matrix(self, data: Union[pd.Series, List, Tuple], features: str, feature_table: str) \
+            -> np.ndarray:
         """
         See base-class.
         """
         # Determine number of samples and feature dimension
         n = len(data)
-        d, mode = self._get_d_and_mode_feature(features)
+        d, mode = self._get_d_and_mode_feature(features, feature_table)
 
         if mode == "binary":
             dtype = float  # tanimoto kernel fastest with float-type
@@ -839,8 +910,16 @@ class ABCCandSQLiteDB_Massbank(ABCCandSQLiteDB):
         X = np.zeros((n, d), dtype=dtype)
 
         if mode in ["count", "real"]:
-            for i, (bits, vals) in enumerate(data):
-                X[i, list(map(int, bits.split(",")))] = list(map(dtype, vals.split(",")))
+            if feature_table.startswith("fingerprints"):
+                for i, (bits, vals) in enumerate(data):
+                    X[i, list(map(int, bits.split(",")))] = list(map(dtype, vals.split(",")))
+            elif feature_table.startswith("descriptors"):
+                for i, (vals, _) in enumerate(data):
+                    X[i] = list(map(dtype, vals.split(",")))
+            else:
+                raise AssertionError(
+                    "Ups, that should not happen: feature_table = '%s', feature = '%s'" % (feature_table, features)
+                )
         elif mode == "binary":
             for i, (bits, _) in enumerate(data):
                 X[i, list(map(int, bits.split(",")))] = 1
