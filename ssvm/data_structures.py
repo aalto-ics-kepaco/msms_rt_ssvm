@@ -474,7 +474,7 @@ class ABCCandSQLiteDB(ABC):
         return [row[0] for row in self.db.execute(self._get_labelspace_query(spectrum, candidate_subset))]
 
     def get_ms2_scores(self, spectrum: Spectrum, ms2scorer: str, scale_scores_to_range: bool = True,
-                       return_dataframe: bool = False, return_as_ndarray: bool = False, score_fill_value: float = 1e6,
+                       return_dataframe: bool = False, return_as_ndarray: bool = False, score_fill_value: float = 1e-6,
                        **kwargs) -> Union[pd.DataFrame, List[float]]:
         """
 
@@ -564,7 +564,7 @@ class ABCCandSQLiteDB(ABC):
 
         :return: tuple of scalars (c1, c2)
             - 'c1' is the abs of the smallest score if any score < 0 else 0
-            - 'c2' is ten-times smaller than the smallest positive score
+            - 'c2' is thousand-times smaller than the smallest positive score
         """
         if np.any(np.isnan(scores)):
             raise ValueError("NaN scores are not allowed. Cannot compute the regularization parameters.")
@@ -577,7 +577,7 @@ class ABCCandSQLiteDB(ABC):
             return c1, 1e-6
 
         # Parameter to avoid zero entries
-        c2 = (np.min(scores[(scores + c1) > 0]) + c1) / 10
+        c2 = (np.min(scores[(scores + c1) > 0]) + c1) / 1000
 
         return c1, c2
 

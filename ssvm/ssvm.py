@@ -234,7 +234,6 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 SSVM_LOGGER.info("Which active sequences are new:")
                 for _i, _is_new in zip(I_batch, is_new):
                     SSVM_LOGGER.info("\tExample {:>4} new? {}".format(_i, _is_new))
-                updates_made = True
 
                 assert self._is_feasible_matrix(self.alphas_, self.C), \
                     "Dual variables after update are not feasible anymore."
@@ -284,9 +283,6 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                                      (_data_to_log["validation__ndcg_ohc"], time.time() - _start_time))
 
                 self.write_log(n_iterations_total, _data_to_log, summary_writer)
-
-            if not updates_made:
-                break
 
         return self
 
@@ -680,16 +676,8 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         # Load the MS2 scores associated with the nodes
         for s in G.nodes:  # V
-            # Raw scores (no additional normalization)
-            _raw_scores = sequence.get_ms2_scores(
-                s, scale_scores_to_range=False, return_as_ndarray=True, score_fill_value=0
-            )
-
-            # Calculate the normalization parameter: We only use c1 parameter to make all scores positive >= 0
-            _c1, _c2 = ABCCandSQLiteDB.get_normalization_parameters_c1_and_c2(_raw_scores)
-
-            # Normalize scores to [0, 1]
-            _raw_scores = ABCCandSQLiteDB.normalize_scores(_raw_scores, _c1, _c2)
+            # Raw scores normalized to (0, 1]
+            _raw_scores = sequence.get_ms2_scores(s, scale_scores_to_range=True, return_as_ndarray=True)
             assert (0 <= min(_raw_scores)) and (max(_raw_scores) == 1.0)
 
             # Add label loss if loss-augmented scores are requested
