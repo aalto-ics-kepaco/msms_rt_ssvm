@@ -33,8 +33,10 @@ import time
 
 from collections import OrderedDict
 from typing import List, Tuple, Dict, Union, Optional, Callable
+
 from sklearn.utils.validation import check_random_state
 from sklearn.metrics import ndcg_score
+
 from joblib.parallel import Parallel, delayed
 from joblib.memory import Memory
 
@@ -44,9 +46,8 @@ from msmsrt_scorer.lib.cindex_measure import cindex
 
 import ssvm.cfg
 from ssvm.data_structures import SequenceSample, Sequence, LabeledSequence, SpanningTrees
-from ssvm.data_structures import ABCCandSQLiteDB
 from ssvm.factor_graphs import get_random_spanning_tree
-from ssvm.kernel_utils import _min_max_dense_jit, generalized_tanimoto_kernel_FAST
+from ssvm.kernel_utils import _min_max_dense_jit, generalized_tanimoto_kernel_FAST, rbf_kernel
 from ssvm.kernel_utils import _min_max_dense_ufunc, _min_max_dense_ufunc_int, tanimoto_kernel_FAST
 from ssvm.utils import item_2_idc
 from ssvm.dual_variables import DualVariables
@@ -78,7 +79,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     """
     def __init__(self, mol_feat_label_loss: str, mol_feat_retention_order: str,
                  mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]], n_trees_per_sequence: int = 1,
-                 n_jobs: int = 1, update_direction: str = "map", *args, **kwargs):
+                 n_jobs: int = 1, update_direction: str = "map", gamma: Optional[float] = None, *args, **kwargs):
         """
         :param mol_feat_label_loss:
         :param mol_feat_retention_order:
@@ -90,7 +91,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         self.mol_feat_label_loss = mol_feat_label_loss
         self.mol_feat_retention_order = mol_feat_retention_order
-        self.mol_kernel = self.get_mol_kernel(mol_kernel)
+        self.mol_kernel = self.get_mol_kernel(mol_kernel, kernel_parameters={"gamma": gamma})
         self.n_trees_per_sequence = n_trees_per_sequence
         self.n_jobs = n_jobs
         self.update_direction = update_direction
@@ -1192,12 +1193,19 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                     tf.summary.scalar(k, data=v, step=n_iter)
 
     @staticmethod
-    def get_mol_kernel(mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]]) \
-            -> Callable[[np.ndarray, np.ndarray], np.ndarray]:
+    def get_mol_kernel(
+            mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]],
+            kernel_parameters: Optional[Dict] = None
+    ) -> Callable[[np.ndarray, np.ndarray], np.ndarray]:
         """
 
-        :param mol_kernel:
-        :return:
+        :param mol_kernel: string or callable
+            string: name of the kernel function
+            callable: kernel function
+
+        :param kernel_parameters: dictionary, containing the kernel parameters for the specified kernel
+
+        :return: callable, kernel function
         """
         if callable(mol_kernel):
             return mol_kernel
@@ -1211,6 +1219,12 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             return _min_max_dense_ufunc
         elif mol_kernel == "minmax_ufunc_int":
             return _min_max_dense_ufunc_int
+        elif mol_kernel == "rbf":
+            # Define wrapper around the RBF kernel to bind the specified gamma parameter value
+            def _rbf_kernel(X, Y):
+                return rbf_kernel(X, Y, gamma=kernel_parameters["gamma"])
+
+            return _rbf_kernel
         else:
             raise ValueError("Invalid molecule kernel: '{}'".format(mol_kernel))
 

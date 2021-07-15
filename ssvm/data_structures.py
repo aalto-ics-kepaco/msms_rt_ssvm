@@ -249,6 +249,15 @@ class ABCCandSQLiteDB(ABC):
         """
         pass
 
+    def set_feature_transformer(
+            self,
+            feature_transformer: Union[Dict[str, Union[Pipeline, BaseEstimator]], Union[Pipeline, BaseEstimator]] = None
+    ):
+        """
+        Function to modify the feature transformer of the candidate DB wrapper.
+        """
+        self.feature_transformer = feature_transformer
+
     def _get_d_and_mode_feature(self, feature: str, feature_table: str) -> Tuple[int, str]:
         """
         :param feature: string, identifier of the requested molecule feature.

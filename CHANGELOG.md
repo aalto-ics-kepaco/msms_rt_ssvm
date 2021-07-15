@@ -1,5 +1,11 @@
 # Version History
 
+## v2.3.0 (New feature)
+
+- SSVM class now supports the RBF kernel
+  - Gamma parameter can be passed as argument to the SSVM class
+- Feature transformer of the candidate DB wrapper can be modified through a setter-function  
+
 ## v2.2.0 (New feature)
 
 - Added function to compute the RBF scale using the median heuristic

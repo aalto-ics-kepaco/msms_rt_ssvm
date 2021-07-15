@@ -32,13 +32,13 @@ from sklearn.base import TransformerMixin, BaseEstimator
 from sklearn.feature_selection import SelectorMixin
 from sklearn.utils.validation import check_is_fitted
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics.pairwise import pairwise_distances
+from sklearn.metrics.pairwise import euclidean_distances
 
 from numba import jit, prange
 from numba.typed import List as NumbaList
 
 
-def get_rbf_gamma_based_in_median_heuristic(X: np.array, standardize: bool = False, n_jobs: int = 1) -> float:
+def get_rbf_gamma_based_in_median_heuristic(X: np.array, standardize: bool = False) -> float:
     """
     Function implementing a heuristic to estimate the width of an RBF kernel (as defined in the Scikit-learn package)
     from data.
@@ -48,8 +48,6 @@ def get_rbf_gamma_based_in_median_heuristic(X: np.array, standardize: bool = Fal
     :param standardize: boolean, indicating whether the data should be normalized (z-transformation) before the gamma is
         estimated.
 
-    :param n_jobs: scalar, number of parallel jobs used to compute the pairwise distances
-
     :return: scalar, gamma (of the sklearn RBF kernel) estimated from the data
     """
     # Z-transform the data if requested
@@ -57,7 +55,7 @@ def get_rbf_gamma_based_in_median_heuristic(X: np.array, standardize: bool = Fal
         X = StandardScaler(copy=True).fit_transform(X)
 
     # Compute all pairwise euclidean distances
-    D = pairwise_distances(X, n_jobs=n_jobs).flatten()
+    D = euclidean_distances(X).flatten()
 
     # Get the median of the distances
     sigma = np.median(D)
