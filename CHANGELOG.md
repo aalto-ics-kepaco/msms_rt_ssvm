@@ -1,5 +1,9 @@
 # Version History
 
+## v2.2.0 (New feature)
+
+- Added function to compute the RBF scale using the median heuristic
+
 ## v2.1.0 (New feature)
 
 - Added support for the molecular descriptors in the MassBank DB

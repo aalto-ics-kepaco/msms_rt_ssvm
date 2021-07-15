@@ -39,7 +39,6 @@ from sklearn.pipeline import Pipeline
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.preprocessing import StandardScaler
 
-from ssvm.feature_utils import RemoveCorrelatedFeatures
 from ssvm.data_structures import ABCCandSQLiteDB
 from ssvm.data_structures import CandSQLiteDB_Bach2020, RandomSubsetCandSQLiteDB_Bach2020
 from ssvm.data_structures import CandSQLiteDB_Massbank, RandomSubsetCandSQLiteDB_Massbank
