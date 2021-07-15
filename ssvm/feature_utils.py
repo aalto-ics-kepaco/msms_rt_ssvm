@@ -31,9 +31,41 @@ from typing import Union, List, Optional
 from sklearn.base import TransformerMixin, BaseEstimator
 from sklearn.feature_selection import SelectorMixin
 from sklearn.utils.validation import check_is_fitted
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics.pairwise import pairwise_distances
 
 from numba import jit, prange
 from numba.typed import List as NumbaList
+
+
+def get_rbf_gamma_based_in_median_heuristic(X: np.array, standardize: bool = False, n_jobs: int = 1) -> float:
+    """
+    Function implementing a heuristic to estimate the width of an RBF kernel (as defined in the Scikit-learn package)
+    from data.
+
+    :param X: array-like, shape = (n_samples, n_features), feature matrix
+
+    :param standardize: boolean, indicating whether the data should be normalized (z-transformation) before the gamma is
+        estimated.
+
+    :param n_jobs: scalar, number of parallel jobs used to compute the pairwise distances
+
+    :return: scalar, gamma (of the sklearn RBF kernel) estimated from the data
+    """
+    # Z-transform the data if requested
+    if standardize:
+        X = StandardScaler(copy=True).fit_transform(X)
+
+    # Compute all pairwise euclidean distances
+    D = pairwise_distances(X, n_jobs=n_jobs).flatten()
+
+    # Get the median of the distances
+    sigma = np.median(D)
+
+    # Convert to sigma to gamma as defined in the sklearn package
+    gamma = 1 / (2 * sigma**2)
+
+    return gamma
 
 
 class RemoveCorrelatedFeatures(SelectorMixin, BaseEstimator):
@@ -221,10 +253,12 @@ class CountingFpsBinarizer(TransformerMixin, BaseEstimator):
 
 
 if __name__ == "__main__":
-    trans = RemoveCorrelatedFeatures()
+    # trans = RemoveCorrelatedFeatures()
+    #
+    # X = np.random.RandomState(1092).rand(40, 10)
+    #
+    # X[:, 9] = X[:, 0]
+    #
+    # print(trans.fit(X).get_support())
 
-    X = np.random.RandomState(1092).rand(40, 10)
-
-    X[:, 9] = X[:, 0]
-
-    print(trans.fit(X).get_support())
+    print(get_rbf_gamma_based_in_median_heuristic(np.random.rand(100, 10), standardize=True))
