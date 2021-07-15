@@ -1,5 +1,34 @@
 # Version History
 
+## v2.1.0 (New feature)
+
+- Added support for the molecular descriptors in the MassBank DB
+- Added support for feature transformers for the candidate DB wrapper
+  - we use the Scikit learn framework for the transformer implementation
+  - pipelines are supported
+  - transformers respectively pipelines needs to be pre-fitted and passed as parameter to the candidate DB wrapper
+  - transformations are applied when features are loaded from the DB
+
+## v2.0.0
+
+### Default Behavior
+
+The default setup has been synchronized with the paper:
+
+- MS2 scores are normalized to [0, 1] for each candidate set separately
+- The **average node** (1 / |V|) and **edge** (1 / |E|) **scores** are used
+
+### FIX in edge score normalization
+
+- in the previous implementations only edge scores of the prediction sequence have been normalized
+- training (model) sequence edge scores where (wrongly) not normalized
+- that has been fixed in the prediction and line-search implementation
+
+### No log-transformation of the node scores
+
+- node potentials are defined by psi = exp(MS2 score). Therefore, the log(psi) = MS2 score
+- MS2 scores are normalized to [0, 1]
+
 ## v1.2.4 (Minor improvements)
 
 - Allow the computation of the baseline performance for top-k scoring (using max-marginals) based on the MS2 score only

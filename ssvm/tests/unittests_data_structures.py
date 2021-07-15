@@ -35,6 +35,11 @@ from matchms.Spectrum import Spectrum
 from joblib import Parallel, delayed
 from scipy.stats import rankdata
 
+from sklearn.pipeline import Pipeline
+from sklearn.feature_selection import VarianceThreshold
+from sklearn.preprocessing import StandardScaler
+
+from ssvm.feature_utils import RemoveCorrelatedFeatures
 from ssvm.data_structures import ABCCandSQLiteDB
 from ssvm.data_structures import CandSQLiteDB_Bach2020, RandomSubsetCandSQLiteDB_Bach2020
 from ssvm.data_structures import CandSQLiteDB_Massbank, RandomSubsetCandSQLiteDB_Massbank
@@ -179,8 +184,8 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
         # # MS2 Scorer is MetFrag
         scores = candidates.get_ms2_scores(spectrum, ms2scorer="metfrag__norm_after_merge", scale_scores_to_range=False)
         self.assertEqual(118, len(scores))
-        self.assertEqual(1e6, np.min(scores))
-        self.assertEqual(1e6, np.max(scores))
+        self.assertEqual(1e-6, np.min(scores))
+        self.assertEqual(1e-6, np.max(scores))
 
     def test_get_molecule_features(self):
         # SIRIUS Fingerprints
@@ -213,6 +218,27 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
         self.assertEqual((1280, ), fp_i.shape)
         np.array_equal(fp_i, fp_i_ref)
 
+        # Bouwmeester et al. (2019) descriptors
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "KW45044969"})
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey1")
+
+        desc = candidates.get_molecule_features(spectrum, features="bouwmeester__smiles_can")
+        self.assertEqual((339, 196), desc.shape)
+        self.assertFalse(np.any(np.isnan(desc)))
+
+        df = candidates.get_molecule_features(spectrum, features="bouwmeester__smiles_can", return_dataframe=True)
+        self.assertEqual((339, 1 + 196), df.shape)
+
+        ref_descs = [
+            ("JATOIOIIXORRLF", "2.2505765195661276,588.1625722468402,12.303118619434356,8.776359180062045,9.59285576098977,8.044624757173649,4.868749138635866,6.233897510305976,3.4014670750900127,4.423595627720499,2.162972904196923,2.566041356664746,1.4551450719093095,1.809457319866485,10.399000581649606,8.417796984328938,0.0,5.749511833283905,0.0,11.126902983393991,12.13273413692322,12.13273413692322,30.33183534230805,4.183085432649707,4.552749873690364,250.0299798,0.0,-1.8499999999999996,17.0,240.19499999999996,7071.721377876014,11.63001993693029,4.565685103723021,3.3024254077918185,99.43968244116651,10.488900419365788,0.4459747048137353,10.488900419365788,0.4459747048137353,0.07609363189720364,0.3618096010624026,-4.454659260309061,-0.3618096010624026,2.5351999999999997,64.05460000000004,250.27499999999998,1.0,4.0,0.0,0.0,0.0,2.0,0.0,2.0,3.0,1.0,5.0,0.0,3.0,0.0,0.0,0.0,88.0,4.183085432649707,5.749511833283905,0.0,0.0,0.0,10.399000581649606,4.552749873690364,0.0,8.417796984328938,0.0,42.46456947923127,23.259637120317212,0.0,0.0,2.0,17.15363229066901,10.399000581649606,0.0,0.0,0.0,0.0,0.0,54.59730361615449,0.0,16.876414816677897,4.183085432649707,0.0,5.749511833283905,0.0,12.9705468580193,10.399000581649606,0.0,0.0,54.59730361615449,0.0,11.126902983393991,0.0,63.60000000000001,33.80553398601559,0.0,0.0,0.0,1.957586451247166,0.07609363189720364,16.03211185781577,0.0,0.0,-4.454659260309061,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0"),
+            ("ZQJJGLRMKXLYTQ", "2.250456030139938,602.7222724681443,12.250712376627058,8.881171665676636,9.697668246604362,8.16470379794645,5.0411565874769755,6.026755147130464,3.4281342285081533,4.5648840591942745,2.1829390583281376,3.1867093796204986,1.3919360981392794,2.2583498768604438,11.594891607029837,9.589074368143644,0.0,6.4208216229260096,16.231357223906805,5.386224214464796,11.761884949391115,18.19910120538483,12.13273413692322,0.0,9.523678331894054,250.0299798,0.16666666666666666,-1.7499999999999996,17.0,240.19499999999996,7784.75003983114,11.72715976331361,5.053433909859866,2.87974497096204,101.25309879607984,11.5739630574452,0.48120831865481606,11.5739630574452,0.3495474441740278,0.024735607205845334,0.3495474441740278,-0.8725213634836646,-0.48120831865481606,2.3598,65.46080000000002,250.27499999999995,1.0,4.0,0.0,0.0,0.0,1.0,1.0,2.0,4.0,1.0,5.0,0.0,4.0,0.0,0.0,0.0,88.0,9.523678331894054,5.583020141642242,0.0,0.0,0.0,11.594891607029837,4.794537184071822,4.794537184071822,0.0,11.761884949391115,18.19910120538483,12.13273413692322,11.139077821211584,11.316305098443785,2.0,14.318215515965875,28.700434593449998,0.0,0.0,0.0,11.316305098443785,5.752853606746789,40.75195884545786,0.0,0.0,5.625586319077987,0.0,0.0,11.761884949391115,16.82868628953934,4.794537184071822,0.0,6.4208216229260096,44.439006938950996,0.0,10.969244356107037,0.0,67.51,5.126489040060469,1.2031264172335598,22.39491072317867,9.355555147997878,0.12423458889728756,-0.512964248971193,8.95057939106415,0.024735607205845334,0.0,0.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0"),
+            ("ZPBSSLBUJMLESN", "3.0586897626128566,701.7625637729037,12.629392033067417,8.79038045871581,9.606877039643535,7.947706970623633,4.795262425588228,6.235325754388867,3.5438512452502637,4.902232215370441,2.482800355462781,3.411970242978388,1.740919785352966,2.566907287907442,20.763122167835235,13.524324379169643,0.0,10.949675706161791,5.386224214464796,0.0,12.142387175295491,24.26546827384644,0.0,6.578935683598497,4.552749873690364,250.0299798,0.0,-1.8499999999999996,17.0,240.19499999999996,5998.775278840748,11.63001993693029,3.868405274120684,1.9008241027006003,98.57621861007776,11.29709939531368,0.5058345503991459,11.29709939531368,0.29836686307903043,0.2604861111111112,0.29836686307903043,-4.490462962962963,-0.5058345503991459,2.4351000000000007,65.51840000000003,250.27499999999998,2.0,4.0,0.0,0.0,0.0,2.0,0.0,2.0,3.0,2.0,5.0,0.0,2.0,0.0,0.0,0.0,88.0,5.106527394840706,10.644995308801679,0.0,0.0,10.118126859033554,0.0,4.552749873690364,0.0,8.417796984328938,0.0,36.92042406427882,11.452591282926406,10.949675706161791,0.0,2.0,18.077074252860008,26.966595394797025,0.0,0.0,0.0,4.895483475517775,0.0,42.47422251760354,0.0,5.749511833283905,0.0,0.0,5.749511833283905,0.0,18.077074252860008,10.118126859033554,0.0,5.563451491696996,41.80625450142432,0.0,16.848468535763473,0.0,74.6,31.759926303854872,0.0,-0.4810185185185183,10.692512282690855,0.2604861111111112,-0.48499999999999965,8.178457105064247,1.3298148148148148,3.4852848639455782,-4.490462962962963,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,2.0,0.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0")
+        ]
+
+        for mol_id, ref_desc in ref_descs:
+            desc_i = df[df["identifier"] == mol_id].iloc[0, 1:].values
+            np.array_equal(desc_i, np.fromstring(ref_desc, sep=","))
+
     def test_get_molecule_feature_by_id_query(self):
         molecule_ids = [
             "UKQKUSAOCWFKSE-UHFFFAOYSA-N",
@@ -232,7 +258,9 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
 
         conn = sqlite3.connect(MASSBANK_DB_FN)
         mol_ids_from_query, *_ = zip(
-            *conn.execute(candidates._get_molecule_feature_by_id_query(molecule_ids, "FCFP__count__all")).fetchall()
+            *conn.execute(
+                candidates._get_molecule_feature_by_id_query(molecule_ids, "FCFP__count__all", "fingerprints_meta")
+            ).fetchall()
         )
         conn.close()
 
@@ -467,6 +495,58 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
             np.testing.assert_equal(feature_matrix[rnd_idc], df_features_shf.iloc[:, 1:].values)
             self.assertListEqual([molecule_ids[i] for i in rnd_idc], df_features_shf["identifier"].to_list())
 
+    def test_molecule_feature_transformation(self):
+        # Load Bouwmeester molecular descriptors for all candidates of a certain spectrum and train a transformer
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "BS40569952"})
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey1")
+
+        desc = candidates.get_molecule_features(spectrum, features="bouwmeester__smiles_can")
+        self.assertEqual((1923, 196), desc.shape)
+        self.assertFalse(np.any(np.isnan(desc)))
+
+        # Train a variance filter
+        var_threshold = 0.01 ** 2
+        var_trans = VarianceThreshold(threshold=var_threshold).fit(desc)
+
+        for idx, ft in enumerate([var_trans, {"bouwmeester__smiles_can": var_trans}, None, {"bla": var_trans}]):
+            candidates_w_trans = CandSQLiteDB_Massbank(
+                MASSBANK_DB_FN, molecule_identifier="inchikey1", feature_transformer=ft
+            )
+            desc_trans = candidates_w_trans.get_molecule_features(spectrum, features="bouwmeester__smiles_can")
+
+            if idx in [0, 1]:
+                # Transformation is applied
+                self.assertEqual((1923, np.sum(var_trans.get_support())), desc_trans.shape)
+                self.assertTrue(np.all(np.var(desc_trans, axis=0) > var_threshold))
+            else:
+                # Transformation is not applied
+                self.assertEqual((1923, 196), desc.shape)
+                self.assertEqual(0, np.min(np.var(desc_trans, axis=0)))
+
+        # Train a filter pipeline
+        pipeline = Pipeline([
+            ("var_filter", VarianceThreshold(threshold=var_threshold)),
+            ("std_scaler", StandardScaler())
+        ]).fit(desc)
+
+        for idx, ft in enumerate([pipeline, {"bouwmeester__smiles_can": pipeline}, None, {"bla": pipeline}]):
+            candidates_w_trans = CandSQLiteDB_Massbank(
+                MASSBANK_DB_FN, molecule_identifier="inchikey1", feature_transformer=ft
+            )
+            desc_trans = candidates_w_trans.get_molecule_features(spectrum, features="bouwmeester__smiles_can")
+
+            if idx in [0, 1]:
+                # Transformation is applied
+                n_feat = np.sum(pipeline.named_steps["var_filter"].get_support())
+                self.assertEqual((1923, n_feat), desc_trans.shape)
+                self.assertTrue(np.all(np.var(desc_trans, axis=0) > var_threshold))
+                self.assertTrue(np.all(np.isclose(np.mean(desc_trans, axis=0), 0)))
+            else:
+                # Transformation is not applied
+                self.assertEqual((1923, 196), desc.shape)
+                self.assertEqual(0, np.min(np.var(desc_trans, axis=0)))
+                np.testing.assert_array_equal(np.mean(desc, axis=0), np.mean(desc_trans, axis=0))
+
     def test_ensure_feature_is_available(self):
         candidates = CandSQLiteDB_Massbank(db_fn=MASSBANK_DB_FN)
 
@@ -476,8 +556,9 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
             candidates._ensure_feature_is_available("")
             candidates._ensure_feature_is_available("substructure_count")
 
-        candidates._ensure_feature_is_available("FCFP__count__all")
-        candidates._ensure_feature_is_available("sirius_fps")
+        self.assertEqual("fingerprints_meta", candidates._ensure_feature_is_available("FCFP__count__all"))
+        self.assertEqual("fingerprints_meta", candidates._ensure_feature_is_available("sirius_fps"))
+        self.assertEqual("descriptors_meta", candidates._ensure_feature_is_available("bouwmeester__smiles_can"))
 
     def test_ensure_molecule_identifier_is_available(self):
         candidates = CandSQLiteDB_Massbank(db_fn=MASSBANK_DB_FN)
@@ -538,13 +619,13 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         # MS2 Scorer is IOKR
         scores = candidates.get_ms2_scores(spectrum, ms2scorer="IOKR__696a17f3")
         self.assertEqual(2233, len(scores))
-        self.assertEqual(0.006426196626211542, np.min(scores))
+        self.assertEqual(0.00006426196626211542, np.min(scores))
         self.assertEqual(1.0, np.max(scores))
 
         # MS2 Scorer is MetFrag
         scores = candidates.get_ms2_scores(spectrum, ms2scorer="MetFrag_2.4.5__8afe4a14")
         self.assertEqual(2233, len(scores))
-        self.assertEqual(0.0028105936908001407, np.min(scores))
+        np.testing.assert_allclose(0.000028105936908001407, np.min(scores))
         self.assertEqual(1.0, np.max(scores))
 
         # ----------
@@ -602,7 +683,9 @@ class TestCandidateSQLiteDB(unittest.TestCase):
 
         conn = sqlite3.connect(BACH2020_DB_FN)
         mol_ids_from_query, _ = zip(
-            *conn.execute(candidates._get_molecule_feature_by_id_query(molecule_ids, "substructure_count")).fetchall()
+            *conn.execute(
+                candidates._get_molecule_feature_by_id_query(molecule_ids, "substructure_count", "fingerprints_meta")
+            ).fetchall()
         )
         conn.close()
 
@@ -919,8 +1002,8 @@ class TestCandidateSQLiteDB(unittest.TestCase):
             candidates._ensure_feature_is_available(None)
             candidates._ensure_feature_is_available("")
 
-        candidates._ensure_feature_is_available("substructure_count")
-        candidates._ensure_feature_is_available("iokr_fps__positive")
+        self.assertEqual("fingerprints_meta", candidates._ensure_feature_is_available("substructure_count"))
+        self.assertEqual("fingerprints_meta", candidates._ensure_feature_is_available("iokr_fps__positive"))
 
     def test_ensure_molecule_identifier_is_available(self):
         candidates = CandSQLiteDB_Bach2020(db_fn=BACH2020_DB_FN)
@@ -1212,7 +1295,7 @@ class TestABCCandSQLiteDB(unittest.TestCase):
             np.testing.assert_array_equal(rankdata(scores, method="ordinal"), rankdata(scores_norm, method="ordinal"))
             self.assertEqual(1.0, np.max(scores_norm))
             self.assertAlmostEqual(
-                ((np.sort(scores)[1] + np.abs(np.min(scores))) / 10) / (np.max(scores) + np.abs(np.min(scores))),
+                ((np.sort(scores)[1] + np.abs(np.min(scores))) / 1000) / (np.max(scores) + np.abs(np.min(scores))),
                 np.min(scores_norm))
 
         # All scores are positive
@@ -1231,7 +1314,7 @@ class TestABCCandSQLiteDB(unittest.TestCase):
             scores = _rs.random(_rs.randint(1, 50)) - 0.5
             c1, c2 = ABCCandSQLiteDB.get_normalization_parameters_c1_and_c2(scores)
             self.assertEqual(c1, np.abs(np.min(scores)))
-            self.assertEqual(c2, np.sort(scores + c1)[1] / 10)
+            self.assertEqual(c2, np.sort(scores + c1)[1] / 1000)
             scores_norm = ABCCandSQLiteDB.normalize_scores(scores, c1, c2)
             np.testing.assert_array_equal(rankdata(scores, method="ordinal"), rankdata(scores_norm, method="ordinal"))
             self.assertEqual(1.0, np.max(scores_norm))
@@ -1494,24 +1577,23 @@ class TestBugsAndWiredStuff(unittest.TestCase):
                                  test_sequences_iokr[idx].get_labelspace())
 
 
-class DummySequence(object):
-    def __init__(self):
-        self.elements = ["F", "A", "B", "C", "D", "E"]
-        self.rts = np.random.RandomState(len(self.elements)).rand(len(self.elements))
-
-    def get_retention_time(self, s: int):
-        return self.rts[s]
-
-    def __iter__(self):
-        return self.elements.__iter__()
-
-    def __len__(self):
-        return self.elements.__len__()
-
-
 class TestRandomSpanningTrees(unittest.TestCase):
+    class DummySequence(object):
+        def __init__(self):
+            self.elements = ["F", "A", "B", "C", "D", "E"]
+            self.rts = np.random.RandomState(len(self.elements)).rand(len(self.elements))
+
+        def get_retention_time(self, s: int):
+            return self.rts[s]
+
+        def __iter__(self):
+            return self.elements.__iter__()
+
+        def __len__(self):
+            return self.elements.__len__()
+
     def test_random_seed_leads_to_different_trees(self):
-        RST = SpanningTrees(DummySequence(), n_trees=4, random_state=10)
+        RST = SpanningTrees(self.DummySequence(), n_trees=4, random_state=10)
 
         for s in range(len(RST)):
             for t in range(len(RST)):
