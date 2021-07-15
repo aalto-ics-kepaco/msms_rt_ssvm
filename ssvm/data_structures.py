@@ -34,8 +34,12 @@ from functools import lru_cache
 from copy import deepcopy
 from collections import OrderedDict
 from typing import List, Tuple, Union, Dict, Optional, Callable, Iterator, TypeVar
+
 from sklearn.model_selection import GroupKFold, GroupShuffleSplit
 from sklearn.utils.validation import check_random_state
+from sklearn.base import BaseEstimator
+from sklearn.pipeline import Pipeline
+
 from matchms.Spectrum import Spectrum
 
 import ssvm.cfg
@@ -102,8 +106,11 @@ class ABCCandSQLiteDB(ABC):
     The wrapper class provides high-level accessing / query functions to retrieve information from DB needed for the
     Structure Support Vector Machine (SSVM) training respectively running the evaluation.
     """
-    def __init__(self, db_fn: str, cand_def: str = "fixed", molecule_identifier: str = "inchikey",
-                 init_with_open_db_conn: bool = True):
+    def __init__(
+            self, db_fn: str, cand_def: str = "fixed", molecule_identifier: str = "inchikey",
+            init_with_open_db_conn: bool = True,
+            feature_transformer: Union[Dict[str, Union[Pipeline, BaseEstimator]], Union[Pipeline, BaseEstimator]] = None
+    ):
         """
         :param db_fn: string, pathname of the candidate database.
 
@@ -117,20 +124,23 @@ class ABCCandSQLiteDB(ABC):
             different molecules (~ candidates) in the DB. For example, if 'inchikey's are used, than two molecules are
             considered to be different, if there 'inchikey' differs. If otherwise, the identifier is specified to be
             'inchikey1' than only the first part of the inchikey of two molecules is considered, which for example
-            results in two stereo-isomers being considered equal. If multiple molecules (~ candidates) in the DV have
+            results in two stereo-isomers being considered equal. If multiple molecules (~ candidates) in the DB have
             the same identifier, than for example their MS/MS scores are aggregated (maximum score is returned), when
             the MS/MS scores are queried from the DB.
 
         :param init_with_open_db_conn: boolean, indicating whether a connection to the database should be established
             (i.e. an SQLite connection is opened) when the DB class is instantiated. If False, the connections needs to
             be established whenever any information is queried from the DB (e.g. using the implemented context-manager).
-             This is useful, if the DB is shared across parallel processes using joblib.Parallel (with loky backend),
-             where the data to be shared across the processes needs to be pickleable (which sqlite3.connections are not).
+            This is useful, if the DB is shared across parallel processes using joblib.Parallel (with loky backend),
+            where the data to be shared across the processes needs to be pickleable (which sqlite3.connections are not).
+
+        :param feature_transformer: Dict or Transformer (Pipeline),
         """
         self.db_fn = db_fn
         self.cand_def = cand_def
         self.molecule_identifier = molecule_identifier
         self.init_with_open_db_conn = init_with_open_db_conn
+        self.feature_transformer = feature_transformer
 
         if self.init_with_open_db_conn:
             self.db = self.connect_to_db()
@@ -426,12 +436,30 @@ class ABCCandSQLiteDB(ABC):
         # Parse the feature strings into a feature matrix
         feature_matrix = self._get_molecule_feature_matrix(feature_rows, features, feature_table)
 
+        # Apply feature transformation if a transformer is provided for the requested feature
+        feature_matrix = self._transform_feature_matrix(feature_matrix, features)
+
+        # Prepare output format
         if return_dataframe:
             df_features = pd.concat((pd.DataFrame({"identifier": identifier}), pd.DataFrame(feature_matrix)), axis=1)
         else:
             df_features = feature_matrix
 
         return df_features
+
+    def _transform_feature_matrix(self, feature_matrix: np.ndarray, features: str) -> np.ndarray:
+        """
+        Apply the specified feature transformation to the feature matrix.
+        """
+        if isinstance(self.feature_transformer, dict):
+            feature_transformer = self.feature_transformer.get(features, None)  # type: Union[BaseEstimator, Pipeline]
+        else:
+            feature_transformer = self.feature_transformer  # type: Union[BaseEstimator, Pipeline, None]
+
+        if feature_transformer is not None:
+            feature_matrix = feature_transformer.transform(feature_matrix)
+
+        return feature_matrix
 
     @staticmethod
     def _unpack_molecule_features(res: sqlite3.Cursor):
@@ -470,8 +498,12 @@ class ABCCandSQLiteDB(ABC):
         )
 
         # Parse feature strings into a matrix
-        feature_matrix = self._get_molecule_feature_matrix(feature_rows, features)
+        feature_matrix = self._get_molecule_feature_matrix(feature_rows, features, feature_table)
 
+        # Apply feature transformation if a transformer is provided for the requested feature
+        feature_matrix = self._transform_feature_matrix(feature_matrix, features)
+
+        # Prepare output format
         if return_dataframe:
             df_features = pd.DataFrame(feature_matrix, index=identifiers) \
                 .rename_axis("identifier") \
@@ -914,7 +946,7 @@ class ABCCandSQLiteDB_Massbank(ABCCandSQLiteDB):
                 for i, (bits, vals) in enumerate(data):
                     X[i, list(map(int, bits.split(",")))] = list(map(dtype, vals.split(",")))
             elif feature_table.startswith("descriptors"):
-                for i, (vals, _) in enumerate(data):
+                for i, (vals, ) in enumerate(data):
                     X[i] = list(map(dtype, vals.split(",")))
             else:
                 raise AssertionError(
