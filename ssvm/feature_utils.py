@@ -24,12 +24,66 @@
 #
 ####
 import numpy as np
+import networkx as nx
 
 from typing import Union, List, Optional
+
 from sklearn.base import TransformerMixin, BaseEstimator
+from sklearn.feature_selection import SelectorMixin
 from sklearn.utils.validation import check_is_fitted
+
 from numba import jit, prange
 from numba.typed import List as NumbaList
+
+
+class RemoveCorrelatedFeatures(SelectorMixin, BaseEstimator):
+    def __init__(self, corr_threshold: float = 0.98):
+        """
+        The Bouwmeester feature selection based on the feature correlation. For that, we group highly correlated
+        features and keep only one of each group.
+
+        :param corr_threshold: scalar, correlation threshold over which the two features are considered to belong to the
+            same group.
+        """
+        self.corr_threshold = corr_threshold
+
+    def fit(self, X, y=None):
+        """
+        :param X: array-like, shape = (n_samples, n_features), feature matrix
+
+        :param y: ignored
+
+        :return: self
+        """
+        # Compute the absolute correlation between features
+        R = np.abs(np.corrcoef(X.T))
+
+        # Check for invalid correlation coefficients
+        if np.any(np.isnan(R)):
+            raise ValueError(
+                "Nan-values in the correlation coefficients. Perhaps there are constant feature dimensions. Apply "
+                "variance feature selector first."
+            )
+
+        # Generate a graph encoding the connection between highly correlated features
+        G = nx.from_numpy_array(R > self.corr_threshold)
+
+        # Fill the support mask: An index is one if the feature will be kept
+        self.support_mask_ = np.zeros(X.shape[1], dtype=bool)
+
+        for cc in nx.connected_components(G):
+            # Keep one node / feature per group of correlated features
+            self.support_mask_[next(iter(cc))] = True
+
+        return self
+
+    def _get_support_mask(self) -> np.ndarray:
+        """
+        :return: array-like, shape = (n_features, ), binary mask indicating which features to keep
+        """
+        check_is_fitted(self)
+
+        return self.support_mask_
 
 
 class CountingFpsBinarizer(TransformerMixin, BaseEstimator):
@@ -164,3 +218,13 @@ class CountingFpsBinarizer(TransformerMixin, BaseEstimator):
     def __len__(self) -> int:
         check_is_fitted(self, ["d_out_"])
         return self.d_out_
+
+
+if __name__ == "__main__":
+    trans = RemoveCorrelatedFeatures()
+
+    X = np.random.RandomState(1092).rand(40, 10)
+
+    X[:, 9] = X[:, 0]
+
+    print(trans.fit(X).get_support())

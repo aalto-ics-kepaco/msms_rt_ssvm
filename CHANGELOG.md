@@ -1,5 +1,14 @@
 # Version History
 
+## v2.1.0 (New feature)
+
+- Added support for the molecular descriptors in the MassBank DB
+- Added support for feature transformers for the candidate DB wrapper
+  - we use the Scikit learn framework for the transformer implementation
+  - pipelines are supported
+  - transformers respectively pipelines needs to be pre-fitted and passed as parameter to the candidate DB wrapper
+  - transformations are applied when features are loaded from the DB
+
 ## v2.0.0
 
 ### Default Behavior

@@ -28,7 +28,43 @@ import unittest
 import numpy as np
 
 from ssvm.kernel_utils import minmax_kernel, tanimoto_kernel
-from ssvm.feature_utils import CountingFpsBinarizer
+from ssvm.feature_utils import CountingFpsBinarizer, RemoveCorrelatedFeatures
+
+
+class TestCorrelatedFeatureRemoval(unittest.TestCase):
+    def test_corner_cases(self):
+        # No feature exceeds the correlation threshold
+        X = np.random.RandomState(13).rand(1010, 29)
+        mask = RemoveCorrelatedFeatures().fit(X).get_support()
+        self.assertTrue(np.all(mask))
+
+        # All features are correlated
+        X = np.array([
+            np.random.RandomState(101).rand(5),
+            np.random.RandomState(101).rand(5),
+            np.random.RandomState(101).rand(5),
+        ]).T
+
+        mask = RemoveCorrelatedFeatures().fit(X).get_support()
+        self.assertEqual(1, np.sum(mask))
+
+    def test_correct_feature_removal(self):
+        X = np.random.RandomState(43).random((3, 4))
+        # array([[0.11505457, 0.60906654, 0.13339096, 0.24058962],
+        #        [0.32713906, 0.85913749, 0.66609021, 0.54116221],
+        #        [0.02901382, 0.7337483 , 0.39495002, 0.80204712]])
+
+        R = np.corrcoef(X.T)
+        # array([[1., 0.69228233, 0.69857039, -0.24099928],
+        #        [0.69228233, 1., 0.99996171, 0.53351747],
+        #        [0.69857039, 0.99996171, 1., 0.52609601],
+        #        [-0.24099928, 0.53351747, 0.52609601, 1.]])
+
+        mask_ref = [True, True, False, True]
+
+        mask = RemoveCorrelatedFeatures().fit(X).get_support()
+
+        np.testing.assert_array_equal(mask_ref, mask)
 
 
 class TestCountingFpsBinarizer(unittest.TestCase):
@@ -66,7 +102,7 @@ class TestCountingFpsBinarizer(unittest.TestCase):
 
     def test_length(self):
         trans = CountingFpsBinarizer(bin_centers=np.array([1, 2, 3, 4, 8]), compress=True)
-        Z = trans.fit_transform(self.X2)
+        trans.fit(self.X2)
 
         self.assertEqual(1 + 2 + 2 + 4 + 4 + 5 + 5, len(trans))
 
