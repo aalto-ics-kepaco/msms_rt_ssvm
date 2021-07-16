@@ -29,7 +29,7 @@ import scipy.sparse as sp
 import itertools as it
 
 from numba import jit, prange, guvectorize, float64, int64
-from sklearn.metrics.pairwise import manhattan_distances, pairwise_distances
+from sklearn.metrics.pairwise import manhattan_distances, pairwise_distances, euclidean_distances
 from joblib import delayed, Parallel
 from scipy.spatial._distance_wrap import cdist_cityblock_double_wrap
 
@@ -94,6 +94,38 @@ def check_input(X, Y, datatype=None, shallow=False):
             pass
 
     return X, Y, is_sparse
+
+
+def rbf_kernel(X, Y, gamma=None):
+    """
+    Compute the rbf (gaussian) kernel between X and Y::
+
+        K(x, y) = exp(-gamma ||x-y||^2)
+
+    for each pair of rows x in X and y in Y.
+
+    Read more in the :ref:`User Guide <rbf_kernel>`.
+
+    Parameters
+    ----------
+    X : ndarray of shape (n_samples_X, n_features)
+
+    Y : ndarray of shape (n_samples_Y, n_features), default=None
+
+    gamma : float, default=None
+        If None, defaults to 1.0 / n_features.
+
+    Returns
+    -------
+    kernel_matrix : ndarray of shape (n_samples_X, n_samples_Y)
+    """
+    if gamma is None:
+        gamma = 1.0 / X.shape[1]
+
+    K = euclidean_distances(X, Y, squared=True)
+    K *= -gamma
+    np.exp(K, K)  # exponentiate K in-place
+    return K
 
 
 def minmax_kernel(X, Y=None, shallow_input_check=True, n_jobs=1, use_numba=False):

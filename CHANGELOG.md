@@ -1,5 +1,16 @@
 # Version History
 
+## v2.3.0 (New feature)
+
+- SSVM class now supports the RBF kernel --> scale parameter can be passed as argument to the SSVM class
+- A new 'kernel_loss' (for the labels) was implemented
+  - it used the kernel for the molecule features directly for the computation of the label-loss
+  
+### Minor changes
+
+- Feature transformer in the candidate DB wrapper --> Implementation of getter- and setter-functions 
+- Sequence samples now have a parameter storing all spectra IDs associated with it
+
 ## v2.2.0 (New feature)
 
 - Added function to compute the RBF scale using the median heuristic

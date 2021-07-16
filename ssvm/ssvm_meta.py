@@ -37,7 +37,7 @@ class _StructuredSVM(object):
     """
 
     def __init__(self, C: Union[int, float] = 1, n_epochs: int = 100, batch_size: Union[int, None] = 1,
-                 label_loss: str = "hamming", step_size_approach: str = "diminishing",
+                step_size_approach: str = "diminishing",
                  random_state: Optional[Union[int, np.random.RandomState]] = None):
         """
         Structured Support Vector Machine (SSVM)
@@ -49,7 +49,7 @@ class _StructuredSVM(object):
         :param batch_size: scalar or None, Batch size, i.e. number of examples updated in each iteration. If None, the
             batch encompasses the complete dataset.
 
-        :param label_loss: string, indicating which label-loss is used.
+
 
         :param step_size_approach: string, indicating which strategy is used to determine the step-size.
 
@@ -62,27 +62,15 @@ class _StructuredSVM(object):
         self.C = C
         self.n_epochs = n_epochs
         self.batch_size = batch_size
-        self.label_loss = label_loss
+
         self.random_state = random_state
         self.step_size_approach = step_size_approach
 
-        if self.label_loss == "hamming":
-            self.label_loss_fun = hamming_loss
-        elif self.label_loss == "tanimoto_loss":
-            self.label_loss_fun = tanimoto_loss
-        elif self.label_loss == "minmax_loss":
-            self.label_loss_fun = minmax_loss
-        elif self.label_loss == "generalized_tanimoto_loss":
-            self.label_loss_fun = generalized_tanimoto_loss
-        else:
+        if self.step_size_approach not in ["diminishing", "linesearch"]:
             raise ValueError(
-                "Invalid label loss '%s'. Choices are 'hamming', 'tanimoto_loss', 'minmax_loss' and "
-                "'generalized_tanimoto_loss'."
+                "Invalid stepsize method '%s'. Choices are 'diminishing' and 'linesearch'."
+                % self.step_size_approach
             )
-
-        if self.step_size_approach not in ["diminishing", "linesearch", "linesearch_parallel"]:
-            raise ValueError("Invalid stepsize method '%s'. Choices are 'diminishing' and 'linesearch'." %
-                             self.step_size_approach)
 
     @staticmethod
     def _is_feasible_matrix(alphas: DualVariables, C: Union[int, float]) -> bool:
