@@ -55,7 +55,7 @@ def get_rbf_gamma_based_in_median_heuristic(X: np.array, standardize: bool = Fal
         X = StandardScaler(copy=True).fit_transform(X)
 
     # Compute all pairwise euclidean distances
-    D = euclidean_distances(X).flatten()
+    D = euclidean_distances(X)
 
     # Get the median of the distances
     sigma = np.median(D)

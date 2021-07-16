@@ -1,5 +1,9 @@
 # Version History
 
+## v2.3.1 (Minor change)
+
+- small performance improvement in the median heuristic 
+
 ## v2.3.0 (New feature)
 
 - SSVM class now supports the RBF kernel --> scale parameter can be passed as argument to the SSVM class
