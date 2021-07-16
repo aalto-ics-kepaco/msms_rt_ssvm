@@ -140,7 +140,7 @@ class ABCCandSQLiteDB(ABC):
         self.cand_def = cand_def
         self.molecule_identifier = molecule_identifier
         self.init_with_open_db_conn = init_with_open_db_conn
-        self.feature_transformer = feature_transformer
+        self.feature_transformer = deepcopy(feature_transformer)
 
         if self.init_with_open_db_conn:
             self.db = self.connect_to_db()
@@ -256,7 +256,13 @@ class ABCCandSQLiteDB(ABC):
         """
         Function to modify the feature transformer of the candidate DB wrapper.
         """
-        self.feature_transformer = feature_transformer
+        self.feature_transformer = deepcopy(feature_transformer)
+
+    def get_feature_transformer(self) -> Union[Dict[str, Union[Pipeline, BaseEstimator]], Union[Pipeline, BaseEstimator]]:
+        """
+        Function to access the feature transformer of the candidate DB wrapper.
+        """
+        return deepcopy(self.feature_transformer)
 
     def _get_d_and_mode_feature(self, feature: str, feature_table: str) -> Tuple[int, str]:
         """
@@ -1431,9 +1437,9 @@ class SequenceSample(object):
         self.sort_sequence_by_rt = sort_sequence_by_rt
         self.ms2scorer = ms2scorer
         self.use_sequence_specific_candidates = use_sequence_specific_candidates
+        self.spectra_ids = [spectrum.get("spectrum_id") for spectrum in self.spectra]
 
-        assert pd.Series([spectrum.get("spectrum_id") for spectrum in self.spectra]).is_unique, \
-            "Spectra IDs must be unique."
+        assert pd.Series(self.spectra_ids).is_unique, "Spectra IDs must be unique."
         assert self.L_min > 0
 
         if self.L_max is None:
@@ -1639,6 +1645,17 @@ class SequenceSample(object):
             labelspace = self.__getitem__(idx).get_labelspace()
 
         return labelspace
+
+    def get_spectra_ids(self) -> List[str]:
+        """
+        Returns all spectra ids associated with the sequence sample
+
+        :return: list of strings, spectrum ids
+        """
+        return self.spectra_ids
+
+    def get_spectra(self) -> List[Spectrum]:
+        return self.spectra
 
 
 class SpanningTrees(object):

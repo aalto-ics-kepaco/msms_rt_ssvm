@@ -25,6 +25,8 @@
 ####
 import numpy as np
 
+from typing import Callable
+
 from scipy.sparse import issparse
 
 from ssvm.kernel_utils import tanimoto_kernel_FAST as tanimoto_kernel
@@ -56,6 +58,19 @@ def hamming_loss(y: np.ndarray, Y: np.ndarray) -> np.ndarray:
         loss = np.sum(y != Y, axis=1) / d
 
     return loss
+
+
+def kernel_loss(y: np.ndarray, Y: np.ndarray, kernel_function: Callable[[np.ndarray, np.ndarray], np.ndarray]) \
+        -> np.ndarray:
+    """
+    :param y: array-like, shape = (d,), binary vector (e.g. ground truth fingerprint)
+
+    :param Y: array-like, shape = (n, d) or (d, ), matrix of binary vectors stored row-wise (e.g. candidate
+        fingerprints) or just a single binary vector
+
+    :param kernel_function: callable, kernel function to compute the similarity between the examples
+    """
+    return 1 - kernel_function(np.atleast_2d(y), np.atleast_2d(Y)).flatten()
 
 
 def tanimoto_loss(y: np.ndarray, Y: np.ndarray) -> np.ndarray:

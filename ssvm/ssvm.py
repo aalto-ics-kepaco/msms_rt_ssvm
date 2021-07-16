@@ -52,6 +52,7 @@ from ssvm.kernel_utils import _min_max_dense_ufunc, _min_max_dense_ufunc_int, ta
 from ssvm.utils import item_2_idc
 from ssvm.dual_variables import DualVariables
 from ssvm.ssvm_meta import _StructuredSVM
+from ssvm.loss_functions import hamming_loss, tanimoto_loss, minmax_loss, generalized_tanimoto_loss, kernel_loss
 
 
 JOBLIB_CACHE = Memory(ssvm.cfg.JOBLIB_MEMORY_CACHE_LOCATION, verbose=0)
@@ -77,24 +78,44 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     """
     Structured Support Vector Machine (SSVM) for (MS, RT)-sequence classification.
     """
-    def __init__(self, mol_feat_label_loss: str, mol_feat_retention_order: str,
-                 mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]], n_trees_per_sequence: int = 1,
-                 n_jobs: int = 1, update_direction: str = "map", gamma: Optional[float] = None, *args, **kwargs):
-        """
-        :param mol_feat_label_loss:
-        :param mol_feat_retention_order:
-        :param mol_kernel:
-        :param n_trees_per_sequence: scalar, number of spanning trees per sequence.
-        :param args:
-        :param kwargs:
+    def __init__(
+            self, mol_feat_label_loss: str, mol_feat_retention_order: str,
+            mol_kernel: Union[str, Callable[[np.ndarray, np.ndarray], np.ndarray]], n_trees_per_sequence: int = 1,
+            n_jobs: int = 1, update_direction: str = "map", gamma: Optional[float] = None, label_loss: str = "kernel_loss",
+            *args, **kwargs
+    ):
         """
 
+        """
         self.mol_feat_label_loss = mol_feat_label_loss
         self.mol_feat_retention_order = mol_feat_retention_order
         self.mol_kernel = self.get_mol_kernel(mol_kernel, kernel_parameters={"gamma": gamma})
         self.n_trees_per_sequence = n_trees_per_sequence
         self.n_jobs = n_jobs
         self.update_direction = update_direction
+        self.label_loss = label_loss
+
+        if self.label_loss == "hamming":
+            raise NotImplementedError(
+                "Currently the Hamming-loss implementation is not really a hamming-loss on the label sequences."
+            )
+        elif self.label_loss == "tanimoto_loss":
+            self.label_loss_fun = tanimoto_loss
+        elif self.label_loss == "minmax_loss":
+            self.label_loss_fun = minmax_loss
+        elif self.label_loss == "generalized_tanimoto_loss":
+            self.label_loss_fun = generalized_tanimoto_loss
+        elif self.label_loss == "kernel_loss":
+            # Generalization of the kernel losses, the kernel functions for the features is used for the loss as well.
+            def _label_loss(y, Y):
+                return kernel_loss(y, Y, self.mol_kernel)
+
+            self.label_loss_fun = _label_loss
+        else:
+            raise ValueError(
+                "Invalid label loss '%s'. Choices are 'hamming', 'tanimoto_loss', 'minmax_loss', "
+                "'generalized_tanimoto_loss' and 'kernel_loss'."
+            )
 
         if self.n_trees_per_sequence > 1:
             raise ValueError("Currently only a single spanning tree per sequence is supported.")
