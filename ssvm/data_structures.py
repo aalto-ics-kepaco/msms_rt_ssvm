@@ -1263,7 +1263,7 @@ class Sequence(object):
         return labelspace
 
     def get_ms2_scores(self, s: Optional[int] = None, scale_scores_to_range: bool = True,
-                       return_as_ndarray: bool = False, score_fill_value: float = 1e6) \
+                       return_as_ndarray: bool = False, score_fill_value: float = 1e-6) \
             -> Union[List[List[float]], List[float], List[np.ndarray], np.ndarray]:
         """
         Get the MS2 scores for the given sequence index
@@ -1282,8 +1282,10 @@ class Sequence(object):
             raise ValueError("No MS2 scorer specified!")
 
         if s is None:
-            ms2_scores = [self.get_ms2_scores(s, scale_scores_to_range, return_as_ndarray, score_fill_value)
-                          for s in range(self.__len__())]
+            ms2_scores = [
+                self.get_ms2_scores(s, scale_scores_to_range, return_as_ndarray, score_fill_value)
+                for s in range(self.__len__())
+            ]
         else:
             ms2_scores = self.candidates.get_ms2_scores(self.spectra[s], self.ms2scorer,
                                                         scale_scores_to_range=scale_scores_to_range,

@@ -1,5 +1,9 @@
 # Version History
 
+## v2.3.2 (Patch)
+
+- fix constant in MS2 score loading function when accessing directly via the LabeledSequence class
+
 ## v2.3.1 (Minor change)
 
 - small performance improvement in the median heuristic 
