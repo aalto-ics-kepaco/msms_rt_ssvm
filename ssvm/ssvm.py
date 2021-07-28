@@ -832,8 +832,12 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             n_trees_per_sequence = self.n_trees_per_sequence
 
         if l_Gs is None:
-            l_Gs = [SpanningTrees(seq, n_trees=n_trees_per_sequence,
-                                  random_state=kwargs.get("spanning_tree_random_state", None)) for seq in data]
+            l_Gs = [
+                SpanningTrees(
+                    seq, n_trees=n_trees_per_sequence, random_state=kwargs.get("spanning_tree_random_state", None)
+                )
+                for seq in data
+            ]
 
         if stype == "top1_mm":
             scores = Parallel(n_jobs=n_jobs_for_data)(
@@ -855,10 +859,16 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                     only_ms2_performance=only_ms2_performance) for sequence, Gs in zip(data, l_Gs))
         elif stype == "ndcg_ll":
             scores = Parallel(n_jobs=n_jobs_for_data)(
-                delayed(self.ndcg_score)(sequence, Gs=Gs, use_label_loss=True) for sequence, Gs in zip(data, l_Gs))
+                delayed(self.ndcg_score)(
+                        sequence, Gs=Gs, use_label_loss=True, k=kwargs.get("max_k_ndcg", None)
+                ) for sequence, Gs in zip(data, l_Gs)
+            )
         elif stype == "ndcg_ohc":
             scores = Parallel(n_jobs=n_jobs_for_data)(
-                delayed(self.ndcg_score)(sequence, Gs=Gs, use_label_loss=False) for sequence, Gs in zip(data, l_Gs))
+                delayed(self.ndcg_score)(
+                    sequence, Gs=Gs, use_label_loss=False, k=kwargs.get("max_k_ndcg", None))
+                for sequence, Gs in zip(data, l_Gs)
+            )
         elif stype == "cindex":
             scores = Parallel(n_jobs=n_jobs_for_data)(delayed(self.cindex)(sequence) for sequence in data)
         else:
@@ -971,7 +981,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         return top1
 
     def ndcg_score(self, sequence: LabeledSequence, Gs: Optional[SpanningTrees] = None, use_label_loss: bool = True,
-                   marginals: Optional[Dict] = None) -> float:
+                   marginals: Optional[Dict] = None, k: Optional[int] = None) -> float:
         """
         Compute the Normalized Discounted Cumulative Gain (NDCG) for the given (MS, RT)-sequence.
 
@@ -993,6 +1003,10 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             using 1 - label_loss for each candidate as GT relevance value (True). If set to False, a one-hot-encoding
             vector with a one at the correct candidate and zero otherwise is used as GT relevance vector.
 
+        :param marginals: dict, TODO
+
+        :param k: scalar, Only consider the highest k scores in the ranking.
+
         :return: scalar, NDCG value averaged across the sequence
         """
         def _one_hot_vector(idx, length):
@@ -1002,7 +1016,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         with sequence.candidates:
             if marginals is None:
-                # Calculate the marginals
+                # Calculate the max-marginals
                 marginals = self.predict(sequence, Gs=Gs, map=False)
             else:
                 if Gs is not None:
@@ -1029,7 +1043,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             scores = np.ones(len(marginals))
             for s in marginals:
                 if len(marginals[s]["score"]) > 1:
-                    scores[s] = ndcg_score(gt_relevance[s][np.newaxis, :], marginals[s]["score"][np.newaxis, :])
+                    scores[s] = ndcg_score(gt_relevance[s][np.newaxis, :], marginals[s]["score"][np.newaxis, :], k=k)
 
         return scores.mean().item()
 

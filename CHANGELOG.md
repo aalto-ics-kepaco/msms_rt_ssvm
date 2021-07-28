@@ -1,5 +1,9 @@
 # Version History
 
+## v2.4.0 (New feature)
+
+- the "k" parameter for the scikit-learn "ndcg_score" function can be passed to the SSVM scoring function
+
 ## v2.3.2 (Patch)
 
 - fix constant in MS2 score loading function when accessing directly via the LabeledSequence class
