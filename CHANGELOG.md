@@ -1,5 +1,10 @@
 # Version History
 
+## v2.5.0 (New feature)
+
+- Implement a Zero-One loss for the margin computation
+- The molecule identifier (label) is used to compute the loss
+
 ## v2.4.0 (New feature)
 
 - the "k" parameter for the scikit-learn "ndcg_score" function can be passed to the SSVM scoring function

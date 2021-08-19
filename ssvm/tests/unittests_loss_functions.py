@@ -2,7 +2,7 @@
 #
 # The MIT License (MIT)
 #
-# Copyright 2020 Eric Bach <eric.bach@aalto.fi>
+# Copyright 2020, 2021 Eric Bach <eric.bach@aalto.fi>
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -28,7 +28,24 @@ import numpy as np
 
 from sklearn.metrics import hamming_loss as hamming_loss_sk
 
-from ssvm.loss_functions import hamming_loss, tanimoto_loss
+from ssvm.loss_functions import hamming_loss, tanimoto_loss, zeroone_loss
+
+
+class TestZeroOneLoss(unittest.TestCase):
+    def test_correctness(self):
+        y = "ABC"
+
+        # Correct example is in the label list
+        Y = ["VPB", "ASL", "ABC", "ASF"]
+        np.testing.assert_equal(zeroone_loss(y, Y), [1, 1, 0, 1])
+
+        # Correct example is not in the label list
+        Y = ["VPB", "ASL", "CBA", "ASF"]
+        np.testing.assert_equal(zeroone_loss(y, Y), [1, 1, 1, 1])
+
+        # Correct example is multiple times in the label list
+        Y = ["VPB", "ABC", "ABC", "ASF"]
+        np.testing.assert_equal(zeroone_loss(y, Y), [1, 0, 0, 1])
 
 
 class TestHammingLoss(unittest.TestCase):

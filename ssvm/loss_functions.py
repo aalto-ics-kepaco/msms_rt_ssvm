@@ -2,7 +2,7 @@
 #
 # The MIT License (MIT)
 #
-# Copyright 2020 Eric Bach <eric.bach@aalto.fi>
+# Copyright 2020, 2021 Eric Bach <eric.bach@aalto.fi>
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -25,7 +25,7 @@
 ####
 import numpy as np
 
-from typing import Callable
+from typing import Callable, List
 
 from scipy.sparse import issparse
 
@@ -56,6 +56,21 @@ def hamming_loss(y: np.ndarray, Y: np.ndarray) -> np.ndarray:
     else:
         assert Y.shape[1] == d
         loss = np.sum(y != Y, axis=1) / d
+
+    return loss
+
+
+def zeroone_loss(y: str, Y: List[str]) -> np.ndarray:
+    """
+    :param y: string, label of the ground truth molecular structure
+
+    :param Y: list of strings, shape = (n, ), list of molecular candidate labels
+
+    :return: :return: array-like, shape = (n,), zero-one loss values between the y label and all labels in Y
+    """
+    loss = np.ones(len(Y))
+
+    loss[np.array(Y) == y] = 0
 
     return loss
 
