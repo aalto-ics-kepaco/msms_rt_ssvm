@@ -150,6 +150,31 @@ class ABCCandSQLiteDB(ABC):
         if self.cand_def != "fixed":
             raise NotImplementedError("Currently only fixed candidate set definition supported.")
 
+        # Get the set of available "molecule identifiers" and "molecular features" from the DB
+        with self:
+            # --------------------
+            # Molecule identifiers
+            self.available_molecule_identifier = set(
+                row[1] for row in self.db.execute("PRAGMA table_info(molecules)")
+            )
+            # --------------------
+
+            # ------------------
+            # Molecular features
+            self.available_molecular_features = dict()
+
+            # Get the available tables in the database
+            table_names, = zip(*self.db.execute("SELECT name FROM sqlite_schema").fetchall())
+
+            for feature_table in ["fingerprints_meta", "descriptors_meta"]:
+                if feature_table not in table_names:
+                    continue
+
+                for row in self.db.execute("SELECT name FROM %s" % feature_table):
+                    self.available_molecular_features[row[0]] = feature_table
+            # --------------------
+
+        # Make sure the requested molecular identifier is in the DB
         with self:
             self._ensure_molecule_identifier_is_available(self.molecule_identifier)
 
@@ -316,18 +341,10 @@ class ABCCandSQLiteDB(ABC):
 
         :raises: ValueError
         """
-        # Get the available tables in the database
-        table_names, = zip(*self.db.execute("SELECT name FROM sqlite_schema").fetchall())
-
-        for feature_table in ["fingerprints_meta", "descriptors_meta"]:
-            if feature_table not in table_names:
-                continue
-
-            for row in self.db.execute("SELECT name FROM %s" % feature_table):
-                if row[0] == feature:
-                    return feature_table
-
-        raise ValueError("Requested feature is not in the database: '%s'." % feature)
+        try:
+            return self.available_molecular_features[feature]
+        except KeyError:
+            raise ValueError("Requested feature is not in the database: '%s'." % feature)
 
     def _ensure_molecule_identifier_is_available(self, molecule_identifier: str):
         """
@@ -335,11 +352,8 @@ class ABCCandSQLiteDB(ABC):
 
         :param molecule_identifier: string, column name of the molecule identifier
         """
-        for row in self.db.execute("PRAGMA table_info(molecules)"):
-            if molecule_identifier == row[1]:
-                return
-
-        raise ValueError("Molecule identifier '%s' is not available." % molecule_identifier)
+        if molecule_identifier not in self.available_molecule_identifier:
+            raise ValueError("Molecule identifier '%s' is not available." % molecule_identifier)
 
     @abstractmethod
     def _get_molecule_feature_matrix(self, data: Union[List[Tuple], Tuple[Tuple]], features: str, feature_table: str) \
@@ -1373,9 +1387,11 @@ class LabeledSequence(Sequence):
         else:
             return self.get_labelspace(s).index(self.labels[s])
 
-    def get_label_loss(self, label_loss_fun: Callable[[np.ndarray, np.ndarray], np.ndarray], features: str,
-                       s: Optional[int] = None) \
-            -> Union[List[np.ndarray], np.ndarray]:
+    def get_label_loss(
+            self,
+            label_loss_fun: Union[Callable[[np.ndarray, np.ndarray], np.ndarray], Callable[[str, List[str]], np.ndarray]],
+            features: str, s: Optional[int] = None
+    ) -> Union[List[np.ndarray], np.ndarray]:
         """
 
 
@@ -1392,8 +1408,16 @@ class LabeledSequence(Sequence):
         if s is None:
             return [self.get_label_loss(label_loss_fun, features, s) for s in range(self.__len__())]
         else:
-            Y = self.get_molecule_features_for_candidates(features, s)
-            return label_loss_fun(Y[self.get_index_of_correct_structure(s)], Y)
+            if features in self.candidates.available_molecular_features:
+                Y = self.get_molecule_features_for_candidates(features, s)
+                y_gt = Y[self.get_index_of_correct_structure(s)]
+            elif features == "MOL_ID":
+                Y = self.get_labelspace(s)
+                y_gt = self.labels[s]
+            else:
+                raise ValueError("")
+
+            return label_loss_fun(y_gt, Y)
 
     def get_molecule_features_for_labels(self, features: str) -> np.ndarray:
         """

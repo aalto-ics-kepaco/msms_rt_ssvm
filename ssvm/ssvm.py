@@ -2,7 +2,7 @@
 #
 # The MIT License (MIT)
 #
-# Copyright 2020 Eric Bach <eric.bach@aalto.fi>
+# Copyright 2020, 2021 Eric Bach <eric.bach@aalto.fi>
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -52,7 +52,7 @@ from ssvm.kernel_utils import _min_max_dense_ufunc, _min_max_dense_ufunc_int, ta
 from ssvm.utils import item_2_idc
 from ssvm.dual_variables import DualVariables
 from ssvm.ssvm_meta import _StructuredSVM
-from ssvm.loss_functions import hamming_loss, tanimoto_loss, minmax_loss, generalized_tanimoto_loss, kernel_loss
+from ssvm.loss_functions import tanimoto_loss, minmax_loss, generalized_tanimoto_loss, kernel_loss, zeroone_loss
 
 
 JOBLIB_CACHE = Memory(ssvm.cfg.JOBLIB_MEMORY_CACHE_LOCATION, verbose=0)
@@ -111,14 +111,22 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 return kernel_loss(y, Y, self.mol_kernel)
 
             self.label_loss_fun = _label_loss
+        elif self.label_loss == "zeroone_loss":
+            if self.mol_feat_label_loss != "MOL_ID":
+                raise NotImplementedError(
+                    "The zero-one-loss is currently only supported for molecule identifiers. That means, that the "
+                    "molecular feature for the label loss ('mol_feat_label_loss') needs to be specified as 'MOL_ID'."
+                )
+
+            self.label_loss_fun = zeroone_loss
         else:
             raise ValueError(
                 "Invalid label loss '%s'. Choices are 'hamming', 'tanimoto_loss', 'minmax_loss', "
-                "'generalized_tanimoto_loss' and 'kernel_loss'."
+                "'generalized_tanimoto_loss', 'kernel_loss' and 'zeroone_loss'."
             )
 
         if self.n_trees_per_sequence > 1:
-            raise ValueError("Currently only a single spanning tree per sequence is supported.")
+            raise NotImplementedError("Currently only a single spanning tree per sequence is supported.")
 
         super().__init__(*args, **kwargs)
 
@@ -356,6 +364,9 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         """
         Function to calculate the label loss for a set of most-violating label sequences.
         """
+        if self.label_loss == "zeroone_loss":
+            raise NotImplementedError("NOT IMPLEMENTED FOR ZERO-ONE-LOSS.")
+
         lloss = 0
         with self.training_data_.candidates:
             for idx, i in enumerate(I_batch):
@@ -1033,7 +1044,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                     for s in marginals
                 ]
             else:
-                # One-hot-encoding of the positive of the correct molecular structure
+                # One-hot-encoding: Index corresponding to the correct molecular structure is the only non-zero entry.
                 gt_relevance = [
                     _one_hot_vector(marginals[s]["label"].index(sequence.get_labels(s)), marginals[s]["n_cand"])
                     for s in marginals

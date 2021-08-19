@@ -42,7 +42,8 @@ from sklearn.preprocessing import StandardScaler
 from ssvm.data_structures import ABCCandSQLiteDB
 from ssvm.data_structures import CandSQLiteDB_Bach2020, RandomSubsetCandSQLiteDB_Bach2020
 from ssvm.data_structures import CandSQLiteDB_Massbank, RandomSubsetCandSQLiteDB_Massbank
-from ssvm.data_structures import SequenceSample, Sequence, SpanningTrees
+from ssvm.data_structures import SequenceSample, Sequence, SpanningTrees, LabeledSequence
+from ssvm.loss_functions import zeroone_loss
 
 BACH2020_DB_FN = "Bach2020_test_db.sqlite"
 MASSBANK_DB_FN = "Massbank_test_db.sqlite"
@@ -1337,10 +1338,32 @@ class TestABCCandSQLiteDB(unittest.TestCase):
 class TestSequence(unittest.TestCase):
     def setUp(self) -> None:
         self.spectra_ids = ["Challenge-016", "Challenge-017", "Challenge-018", "Challenge-019", "Challenge-001"]
+        self.gt_labels = [
+            "FGXWKSZFVQUSTL-UHFFFAOYSA-N",
+            "ZZORFUFYDOWNEF-UHFFFAOYSA-N",
+            "FUYLLJCBCKRIAL-UHFFFAOYSA-N",
+            "SUBDBMMJDZJVOS-UHFFFAOYSA-N",
+            "UWPJYQYRSWYIGZ-UHFFFAOYSA-N"
+        ]
         self.rts = np.random.RandomState(len(self.spectra_ids)).randint(low=1, high=21, size=len(self.spectra_ids))
-        self.spectra = [Spectrum(np.array([]), np.array([]), {"spectrum_id": spectrum_id, "retention_time": rt})
-                        for spectrum_id, rt in zip(self.spectra_ids, self.rts)]
+        self.spectra = [
+            Spectrum(
+                np.array([]), np.array([]),
+                {"spectrum_id": spectrum_id, "retention_time": rt, "molecule_identifier": mol_id}
+            )
+            for spectrum_id, rt, mol_id in zip(self.spectra_ids, self.rts, self.gt_labels)
+        ]
         self.sequence = Sequence(spectra=self.spectra, candidates=CandSQLiteDB_Bach2020(BACH2020_DB_FN))
+        self.lsequence = LabeledSequence(
+            spectra=self.spectra, candidates=CandSQLiteDB_Bach2020(BACH2020_DB_FN), labels=self.gt_labels
+        )
+
+    def test_get_label_loss(self):
+        # Zero-One loss based on the molecule labels (e.g. InChIKey)
+        for s in range(5):
+            ll = self.lsequence.get_label_loss(zeroone_loss, "MOL_ID", s)
+            self.assertEqual(1, np.sum(ll == 0))
+            self.assertEqual(0, ll[self.lsequence.get_index_of_correct_structure(s)])
 
     def test_get_number_of_candidates(self):
         n_cand = self.sequence.get_n_cand()
