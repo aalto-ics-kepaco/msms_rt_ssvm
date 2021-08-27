@@ -637,6 +637,17 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
         candidates._ensure_molecule_identifier_is_available("inchikey")
         candidates._ensure_molecule_identifier_is_available("cid")
 
+    def test_ensure_ms2_scorer_is_available(self):
+        candidates = CandSQLiteDB_Massbank(db_fn=MASSBANK_DB_FN)
+
+        with self.assertRaises(ValueError):
+            candidates._ensure_ms2scorer_is_available("super_metfrag")
+            candidates._ensure_ms2scorer_is_available(None)
+            candidates._ensure_ms2scorer_is_available("")
+
+        candidates._ensure_ms2scorer_is_available("sirius__sd__correct_mf")
+        candidates._ensure_ms2scorer_is_available("metfrag__norm_after_merge")
+
 
 class TestCandidateSQLiteDB(unittest.TestCase):
     @staticmethod
@@ -1652,12 +1663,12 @@ class TestBugsAndWiredStuff(unittest.TestCase):
         test_sequences_metfrag = SequenceSample(
             [self.spectra[idx] for idx in test], [self.labels[idx] for idx in test],
             CandSQLiteDB_Bach2020(db_fn=BACH2020_DB_FN, molecule_identifier="inchikey1", init_with_open_db_conn=True),
-            N=50, L_min=30, L_max=50, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
+            N=50, L_min=30, L_max=50, random_state=19, ms_scorer="MetFrag_2.4.5__8afe4a14")
 
         test_sequences_iokr = SequenceSample(
             [self.spectra[idx] for idx in test], [self.labels[idx] for idx in test],
             CandSQLiteDB_Bach2020(db_fn=BACH2020_DB_FN, molecule_identifier="inchikey1", init_with_open_db_conn=True),
-            N=50, L_min=30, L_max=50, random_state=19, ms2scorer="IOKR__696a17f3")
+            N=50, L_min=30, L_max=50, random_state=19, ms_scorer="IOKR__696a17f3")
 
         for idx in range(len(test_sequences_metfrag)):
             self.assertListEqual(test_sequences_metfrag[idx].get_labelspace(),

@@ -1487,7 +1487,7 @@ class SequenceSample(object):
     """
     def __init__(self, spectra: List[Spectrum], labels: List[str], candidates: ABCCandSQLiteDB, N: int,
                  L_min: int, L_max: Optional[int] = None, random_state: Optional[int] = None,
-                 sort_sequence_by_rt: bool = False, ms2scorer: Optional[str] = None,
+                 sort_sequence_by_rt: bool = False, ms_scorer: Optional[Union[List[str], str]] = None,
                  use_sequence_specific_candidates: bool = False):
         """
         :param data: list of matchms.Spectrum, spectra to sample sequences from
@@ -1514,7 +1514,7 @@ class SequenceSample(object):
         self.L_max = L_max
         self.random_state = random_state
         self.sort_sequence_by_rt = sort_sequence_by_rt
-        self.ms2scorer = ms2scorer
+        self.ms_scorer = ms_scorer
         self.use_sequence_specific_candidates = use_sequence_specific_candidates
         self.spectra_ids = [spectrum.get("spectrum_id") for spectrum in self.spectra]
 
@@ -1615,7 +1615,7 @@ class SequenceSample(object):
                 seq_candidates = self.candidates
 
             sequences.append(
-                LabeledSequence(seq_spectra, candidates=seq_candidates, ms_scorer=self.ms2scorer, labels=seq_labels)
+                LabeledSequence(seq_spectra, candidates=seq_candidates, ms_scorer=self.ms_scorer, labels=seq_labels)
             )
             datasets.append(ds)
 
@@ -1694,11 +1694,11 @@ class SequenceSample(object):
             yield (
                 SequenceSample([self.spectra[i] for i in train], [self.labels[i] for i in train],
                                candidates=self.candidates, N=N_train, L_min=self.L_min, L_max=self.L_max,
-                               random_state=self.random_state, ms2scorer=self.ms2scorer,
+                               random_state=self.random_state, ms_scorer=self.ms_scorer,
                                use_sequence_specific_candidates=use_sequence_specific_candidates_for_training),
                 SequenceSample([self.spectra[i] for i in test], [self.labels[i] for i in test],
                                candidates=candidates_test, N=N_test, L_min=L_min_test, L_max=L_max_test,
-                               random_state=self.random_state, ms2scorer=self.ms2scorer,
+                               random_state=self.random_state, ms_scorer=self.ms_scorer,
                                use_sequence_specific_candidates=False)
             )
 

@@ -124,7 +124,7 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
                 db_fn=DB_FN, molecule_identifier="inchi", random_state=192, number_of_candidates=15,
                 include_correct_candidate=True, init_with_open_db_conn=False
             ),
-            N=self.N, L_min=4, L_max=32, random_state=19, ms2scorer="MetFrag_2.4.5__8afe4a14")
+            N=self.N, L_min=4, L_max=32, random_state=19, ms_scorer="MetFrag_2.4.5__8afe4a14")
 
         # Initialize the SSVM alpha values
         with self.ssvm.training_data_.candidates:
