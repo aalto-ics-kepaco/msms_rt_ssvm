@@ -1,5 +1,10 @@
 # Version History
 
+## v2.6.0 (New feature)
+
+- Allow loading of combination of MS2 scores 
+- Scores of different MS2 scorers are combined using a weighted sum
+
 ## v2.5.0 (New feature)
 
 - Implement a Zero-One loss for the margin computation

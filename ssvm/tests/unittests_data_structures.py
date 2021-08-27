@@ -77,6 +77,60 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
         candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey1")
         self.assertEqual(1923, candidates.get_n_cand(spectrum))
 
+    def test_get_multiple_ms2_scores(self):
+        # ----------
+        # SPECTRUM 1
+        # ----------
+
+        # - MetFrag has not scored that spectrum
+        # - SIRIUS scores are available
+
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "LQB6372613"})
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey")
+
+        for s2w in [0, 0.32, 0.5, 0.72, 1]:
+            scores = candidates.get_ms2_scores(
+                spectrum, ms2scorer=["sirius__sd__correct_mf", "metfrag__norm_after_merge"],
+                ms2scorer_weights=[1 - s2w, s2w]
+            )
+
+            self.assertEqual(118, len(scores))
+            self.assertTrue(np.all(np.array(scores) > 0))
+            self.assertEqual(1.0, np.max(scores))
+
+            _scores_sirius = candidates.get_ms2_scores(
+                spectrum, ms2scorer="sirius__sd__correct_mf", return_as_ndarray=True
+            )
+            np.testing.assert_equal(((1 - s2w) * _scores_sirius + s2w), scores)
+
+        # ----------
+        # SPECTRUM 2
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "BML0302194"})
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey")
+
+        for s2w in [0, 0.32, 0.5, 0.72, 1]:
+            scores = candidates.get_ms2_scores(
+                spectrum, ms2scorer=["sirius__sd__correct_mf", "metfrag__norm_after_merge"],
+                ms2scorer_weights=[1 - s2w, s2w]
+            )
+
+            self.assertEqual(1271, len(scores))
+            self.assertTrue(np.all(np.array(scores) > 0))
+            self.assertEqual(1.0, np.max(scores))
+
+            _scores_sirius = candidates.get_ms2_scores(
+                spectrum, ms2scorer="sirius__sd__correct_mf", return_as_ndarray=True
+            )
+            _scores_metfrag = candidates.get_ms2_scores(
+                spectrum, ms2scorer="metfrag__norm_after_merge", return_as_ndarray=True
+            )
+
+            _scores_comb = ((1 - s2w) * _scores_sirius + s2w * _scores_metfrag)
+            _scores_comb /= np.max(_scores_comb)
+
+            np.testing.assert_equal(_scores_comb, scores)
+
     def test_get_ms2_scores__normalized(self):
         # ----------
         # SPECTRUM 1
@@ -170,7 +224,7 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
         self.assertEqual(970.7812377005032, np.max(scores))
 
         # ----------
-        # SPECTRUM 2
+        # SPECTRUM 3
         # ----------
         spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "LQB6372613"})
         candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey")
@@ -181,7 +235,7 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
         self.assertEqual(-307.381287577836, np.min(scores))
         self.assertEqual(-147.8959133560828, np.max(scores))
 
-        # # MS2 Scorer is MetFrag
+        # MS2 Scorer is MetFrag
         scores = candidates.get_ms2_scores(spectrum, ms2scorer="metfrag__norm_after_merge", scale_scores_to_range=False)
         self.assertEqual(118, len(scores))
         self.assertEqual(1e-6, np.min(scores))
