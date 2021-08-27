@@ -2,8 +2,14 @@
 
 ## v2.6.0 (New feature)
 
+### Support for multiple MS scores
+
 - Allow loading of combination of MS2 scores 
 - Scores of different MS2 scorers are combined using a weighted sum
+
+### Support for constant MS score
+
+- for testing purposes a non-informative MS score can be used by specifying "CONST_MS_SCORE"
 
 ## v2.5.0 (New feature)
 

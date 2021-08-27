@@ -174,6 +174,11 @@ class ABCCandSQLiteDB(ABC):
                     self.available_molecular_features[row[0]] = feature_table
             # --------------------
 
+            # -------------------
+            # MS2 scoring methods
+            self.available_ms2_scores = self._get_available_ms2scorer()
+            # -------------------
+
         # Make sure the requested molecular identifier is in the DB
         with self:
             self._ensure_molecule_identifier_is_available(self.molecule_identifier)
@@ -322,6 +327,12 @@ class ABCCandSQLiteDB(ABC):
         return self._get_d_and_mode_feature(feature, feature_table)[1]
 
     @abstractmethod
+    def _get_available_ms2scorer(self) -> set:
+        """
+        Function returning all MS2 scorer available in the database.
+        """
+        pass
+
     def _ensure_ms2scorer_is_available(self, ms2scorer: str) -> None:
         """
         Raises an ValueError, if the requested MS2 scorer is not in the database.
@@ -329,7 +340,8 @@ class ABCCandSQLiteDB(ABC):
         :param ms2scorer: string, identifier of the requested MS2 scorer
         :raises: ValueError
         """
-        pass
+        if ms2scorer not in self.available_ms2_scores:
+            raise ValueError("Requested MS2 scorer is not in the database: '%s'." % ms2scorer)
 
     def _ensure_feature_is_available(self, feature: str) -> str:
         """
@@ -563,16 +575,16 @@ class ABCCandSQLiteDB(ABC):
         """
         return [row[0] for row in self.db.execute(self._get_labelspace_query(spectrum, candidate_subset))]
 
-    def get_ms2_scores(
-            self, spectrum: Spectrum, ms2scorer: Union[str, List[str]], scale_scores_to_range: bool = True,
+    def get_ms_scores(
+            self, spectrum: Spectrum, ms_scorer: Union[str, List[str]], scale_scores_to_range: bool = True,
             return_dataframe: bool = False, return_as_ndarray: bool = False, score_fill_value: float = 1e-6,
-            ms2scorer_weights: Optional[List[float]] = None, **kwargs
+            ms_scorer_weights: Optional[List[float]] = None, **kwargs
     ) -> Union[pd.DataFrame, List[float]]:
         """
 
-        :param spectrum: matchms.Spectrum, of the sequence element to get the MS2 scores.
+        :param spectrum: matchms.Spectrum, of the sequence element to get the MS(2) scores.
 
-        :param ms2scorer: string | List of strings, identifier(s) of the MS2 scoring method(s) for which the scores
+        :param ms_scorer: string | List of strings, identifier(s) of the MS(2) scoring method(s) for which the scores
             should be loaded from the database. If multiple scores are requested, they
 
         :param scale_scores_to_range: boolean, indicating whether the scores should be normalized to the range (0, 1].
@@ -586,7 +598,7 @@ class ABCCandSQLiteDB(ABC):
         :param score_fill_value: float, value used to replace the missing MS2 scores, if _no_ candidate was assigned a
             scores. That can happen if the in-silico tool failed for the particular spectrum.
 
-        :param ms2scorer_weights: List of floats, weights for each MS2 scorer when combining using weighted sum.
+        :param ms_scorer_weights: List of floats, weights for each MS2 scorer when combining using weighted sum.
 
         :return: list of scalars or pandas.DataFrame, (normalized, if requested) MS2 scores
         """
@@ -598,63 +610,72 @@ class ABCCandSQLiteDB(ABC):
             candidate_subset = self._get_candidate_subset(spectrum)
 
         # Ensure MS2 scorers are provided as list
-        if isinstance(ms2scorer, str):
-            ms2scorer = [ms2scorer]
-            ms2scorer_weights = [1.0]
+        if isinstance(ms_scorer, str):
+            ms_scorer = [ms_scorer]
+            ms_scorer_weights = [1.0]
         else:
-            if ms2scorer_weights is None:
-                ms2scorer_weights = [1.0 / len(ms2scorer) for _ in range(len(ms2scorer))]
+            if ms_scorer_weights is None:
+                ms_scorer_weights = [1.0 / len(ms_scorer) for _ in range(len(ms_scorer))]
 
-            if len(ms2scorer) != len(ms2scorer_weights):
+            if len(ms_scorer) != len(ms_scorer_weights):
                 raise ValueError(
                     "Number of MS2 scorer and scorer weights must be equal: %d vs. %d"
-                    % (len(ms2scorer), len(ms2scorer_weights))
+                    % (len(ms_scorer), len(ms_scorer_weights))
                 )
-
-        # Check that the requested MS2 scores are available
-        for ms2s in ms2scorer:
-            self._ensure_ms2scorer_is_available(ms2s)
 
         # Load the MS2 scores for each requested scorer separately
         df_scores = []
-        for idx, ms2s in enumerate(ms2scorer):
-            # Load the MS2 scores: The molecule identifier is used as index
-            df_scores.append(
-                pd.read_sql_query(
-                    self._get_ms2_score_query(spectrum, ms2s, candidate_subset), self.db, index_col="identifier"
+        for idx, mss in enumerate(ms_scorer):
+            # Load the MS scores: The molecule identifier is used as index
+            if mss in self.available_ms2_scores:
+                # -- MS2 --
+                df_scores.append(
+                    pd.read_sql_query(
+                        self._get_ms2_score_query(spectrum, mss, candidate_subset), self.db, index_col="identifier"
+                    )
                 )
-            )
 
-            # Fill missing MS2 scores with the minimum score
-            _fill_value = df_scores[idx]["ms2_score"].min(skipna=True)
-            if np.isnan(_fill_value):
-                # If no MS2 scores for the candidates are available (scoring failed), than we use a small positive constant.
-                _fill_value = score_fill_value
-            df_scores[idx]["ms2_score"] = df_scores[idx]["ms2_score"].fillna(value=_fill_value)
+                # Fill missing MS2 scores with the minimum score
+                _fill_value = df_scores[idx]["ms_score"].min(skipna=True)
+                if np.isnan(_fill_value):
+                    # If no MS2 scores for the candidates are available (scoring failed), than we use a small positive constant.
+                    _fill_value = score_fill_value
+                df_scores[idx]["ms_score"] = df_scores[idx]["ms_score"].fillna(value=_fill_value)
 
-            if scale_scores_to_range:
-                # Scale scores to (0, 1]
-                c1, c2 = self.get_normalization_parameters_c1_and_c2(df_scores[idx]["ms2_score"].values)
-                df_scores[idx]["ms2_score"] = self.normalize_scores(df_scores[idx]["ms2_score"].values, c1, c2)
+                if scale_scores_to_range:
+                    # Scale scores to (0, 1]
+                    c1, c2 = self.get_normalization_parameters_c1_and_c2(df_scores[idx]["ms_score"].values)
+                    df_scores[idx]["ms_score"] = self.normalize_scores(df_scores[idx]["ms_score"].values, c1, c2)
+                # ---------
+            elif mss == "CONST_MS_SCORE":
+                # -- Ignore MS information --
+                df_scores.append(
+                    pd.DataFrame(
+                        {"identifier": self.get_labelspace(spectrum, candidate_subset), "ms_score": 1.0}
+                    ).set_index("identifier")
+                )
+                # ---------------------------
+            else:
+                raise ValueError("Unsupported MS scorer: '%s'" % mss)
 
         # Combine the results
-        df_out = ms2scorer_weights[0] * df_scores[0]  # type: pd.DataFrame
-        for w, d in zip(ms2scorer_weights[1:], df_scores[1:]):
-            assert len(d) == len(df_out), "UPS: When combining MS2 scores all score-tables must have the same size!"
+        df_out = ms_scorer_weights[0] * df_scores[0]  # type: pd.DataFrame
+        for w, d in zip(ms_scorer_weights[1:], df_scores[1:]):
+            assert len(d) == len(df_out), "UPS: When combining MS scores all score-tables must have the same size!"
             df_out += (w * d)
 
         if scale_scores_to_range:
             # Scale scores to (0, 1]
-            df_out["ms2_score"] /= df_out["ms2_score"].max()
+            df_out["ms_score"] /= df_out["ms_score"].max()
 
         # Prepare output
         if return_dataframe:
             df_out = df_out.reset_index()
         else:
             if return_as_ndarray:
-                df_out = df_out["ms2_score"].values
+                df_out = df_out["ms_score"].values
             else:
-                df_out = df_out["ms2_score"].tolist()
+                df_out = df_out["ms_score"].tolist()
 
         return df_out
 
@@ -733,15 +754,11 @@ class ABCCandSQLiteDB_Bach2020(ABCCandSQLiteDB):
         """
         super().__init__(*args, **kwargs)
 
-    def _ensure_ms2scorer_is_available(self, ms2scorer: str) -> None:
+    def _get_available_ms2scorer(self) -> set:
         """
         See base-class
         """
-        for p, in self.db.execute("SELECT name FROM participants"):
-            if p == ms2scorer:
-                return
-
-        raise ValueError("Requested MS2 scores are not available: '%s'" % ms2scorer)
+        return set((p for p, in self.db.execute("SELECT name FROM participants")))
 
     def _get_labelspace_query(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> str:
         """
@@ -785,7 +802,7 @@ class ABCCandSQLiteDB_Bach2020(ABCCandSQLiteDB):
         """
         See base-class.
         """
-        query = "SELECT m.%s AS identifier, MAX(score) AS ms2_score" \
+        query = "SELECT m.%s AS identifier, MAX(score) AS ms_score" \
                 "   FROM (SELECT * FROM candidates_spectra WHERE candidates_spectra.spectrum IS '%s') cs" \
                 "   INNER JOIN molecules m ON m.inchi = cs.candidate" \
                 "   LEFT OUTER JOIN (" \
@@ -867,15 +884,11 @@ class ABCCandSQLiteDB_Massbank(ABCCandSQLiteDB):
         """
         super().__init__(*args, **kwargs)
 
-    def _ensure_ms2scorer_is_available(self, ms2scorer: str) -> None:
+    def _get_available_ms2scorer(self) -> set:
         """
         See base-class
         """
-        for p, in self.db.execute("SELECT name FROM scoring_methods"):
-            if p == ms2scorer:
-                return
-
-        raise ValueError("Requested MS2 scores are not available: '%s'" % ms2scorer)
+        return set((p for p, in self.db.execute("SELECT name FROM scoring_methods")))
 
     def _get_labelspace_query(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> str:
         """
@@ -931,7 +944,7 @@ class ABCCandSQLiteDB_Massbank(ABCCandSQLiteDB):
         """
         See base-class.
         """
-        query = "SELECT m.%s AS identifier, MAX(score) AS ms2_score" \
+        query = "SELECT m.%s AS identifier, MAX(score) AS ms_score" \
                 "   FROM (SELECT * FROM candidates_spectra WHERE candidates_spectra.spectrum IS '%s') cs" \
                 "   INNER JOIN molecules m ON m.cid = cs.candidate" \
                 "   LEFT OUTER JOIN (" \
@@ -1223,10 +1236,13 @@ class RandomSubsetCandSQLiteDB_Massbank(ABCRandomSubsetCandSQLiteDB, ABCCandSQLi
 
 
 class Sequence(object):
-    def __init__(self, spectra: List[Spectrum], candidates: ABCCandSQLiteDB, ms2scorer: Optional[str, List[str]] = None):
+    def __init__(
+            self, spectra: List[Spectrum], candidates: ABCCandSQLiteDB,
+            ms_scorer: Optional[Union[str, List[str]]] = None
+    ):
         self.spectra = spectra
         self.candidates = candidates
-        self.ms2scorer = ms2scorer
+        self.ms_scorer = ms_scorer
 
         self.L = len(self.spectra)
 
@@ -1312,9 +1328,10 @@ class Sequence(object):
 
         return labelspace
 
-    def get_ms2_scores(self, s: Optional[int] = None, scale_scores_to_range: bool = True,
-                       return_as_ndarray: bool = False, score_fill_value: float = 1e-6) \
-            -> Union[List[List[float]], List[float], List[np.ndarray], np.ndarray]:
+    def get_ms_scores(
+            self, s: Optional[int] = None, scale_scores_to_range: bool = True, return_as_ndarray: bool = False,
+            score_fill_value: float = 1e-6
+    ) -> Union[List[List[float]], List[float], List[np.ndarray], np.ndarray]:
         """
         Get the MS2 scores for the given sequence index
 
@@ -1328,17 +1345,17 @@ class Sequence(object):
         :param score_fill_value: float, value used to replace the missing MS2 scores, if _no_ candidate was assigned a
             scores. That can happen if the in-silico tool failed for the particular spectrum.
         """
-        if self.ms2scorer is None:
+        if self.ms_scorer is None:
             raise ValueError("No MS2 scorer specified!")
 
         if s is None:
             ms2_scores = [
-                self.get_ms2_scores(s, scale_scores_to_range, return_as_ndarray, score_fill_value)
+                self.get_ms_scores(s, scale_scores_to_range, return_as_ndarray, score_fill_value)
                 for s in range(self.__len__())
             ]
         else:
-            ms2_scores = self.candidates.get_ms2_scores(
-                self.spectra[s], self.ms2scorer, scale_scores_to_range=scale_scores_to_range,
+            ms2_scores = self.candidates.get_ms_scores(
+                self.spectra[s], self.ms_scorer, scale_scores_to_range=scale_scores_to_range,
                 return_as_ndarray=return_as_ndarray, score_fill_value=score_fill_value
             )
 
@@ -1358,14 +1375,14 @@ class LabeledSequence(Sequence):
     """
     Class representing the a _labeled_ (MS, RT)-sequence (x, t, y) with associated molecular candidate set C.
     """
-    def __init__(self, spectra: List[Spectrum], candidates: ABCCandSQLiteDB, ms2scorer: Optional[str] = None,
+    def __init__(self, spectra: List[Spectrum], candidates: ABCCandSQLiteDB, ms_scorer: Optional[str] = None,
                  labels: Optional[List[str]] = None, label_key: str = "molecule_id"):
         """
         :param spectra: list of strings, spectrum-ids belonging sequence
 
         :param candidates: ABCCandSQLiteDB, candidate set wrapper
 
-        :param ms2scorer: string, of the MS2 scoring method for which the MS2 scores should be loaded, e.g. during the
+        :param ms_scorer: string, of the MS2 scoring method for which the MS2 scores should be loaded, e.g. during the
             Structured SVM training.
 
         :param labels: list of strings, ground truth molecule identifiers belonging to the spectra of the sequence
@@ -1391,7 +1408,7 @@ class LabeledSequence(Sequence):
 
             self.labels = labels
 
-        super(LabeledSequence, self).__init__(spectra=spectra, candidates=candidates, ms2scorer=ms2scorer)
+        super(LabeledSequence, self).__init__(spectra=spectra, candidates=candidates, ms_scorer=ms_scorer)
 
     def get_labels(self, s: Optional[int] = None) -> Union[str, List[str]]:
         """
@@ -1598,7 +1615,7 @@ class SequenceSample(object):
                 seq_candidates = self.candidates
 
             sequences.append(
-                LabeledSequence(seq_spectra, candidates=seq_candidates, ms2scorer=self.ms2scorer, labels=seq_labels)
+                LabeledSequence(seq_spectra, candidates=seq_candidates, ms_scorer=self.ms2scorer, labels=seq_labels)
             )
             datasets.append(ds)
 

@@ -77,6 +77,17 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
         candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey1")
         self.assertEqual(1923, candidates.get_n_cand(spectrum))
 
+    def test_get_constant_ms_score(self):
+        # ----------
+        # SPECTRUM 1
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "AU88550178"})
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey")
+
+        scores = candidates.get_ms_scores(spectrum, ms_scorer="CONST_MS_SCORE")
+        self.assertEqual(3934, len(scores))
+        self.assertTrue(np.all(np.array(scores) == 1.0))
+
     def test_get_multiple_ms2_scores(self):
         # ----------
         # SPECTRUM 1
@@ -89,17 +100,17 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
         candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey")
 
         for s2w in [0, 0.32, 0.5, 0.72, 1]:
-            scores = candidates.get_ms2_scores(
-                spectrum, ms2scorer=["sirius__sd__correct_mf", "metfrag__norm_after_merge"],
-                ms2scorer_weights=[1 - s2w, s2w]
+            scores = candidates.get_ms_scores(
+                spectrum, ms_scorer=["sirius__sd__correct_mf", "metfrag__norm_after_merge"],
+                ms_scorer_weights=[1 - s2w, s2w]
             )
 
             self.assertEqual(118, len(scores))
             self.assertTrue(np.all(np.array(scores) > 0))
             self.assertEqual(1.0, np.max(scores))
 
-            _scores_sirius = candidates.get_ms2_scores(
-                spectrum, ms2scorer="sirius__sd__correct_mf", return_as_ndarray=True
+            _scores_sirius = candidates.get_ms_scores(
+                spectrum, ms_scorer="sirius__sd__correct_mf", return_as_ndarray=True
             )
             np.testing.assert_equal(((1 - s2w) * _scores_sirius + s2w), scores)
 
@@ -110,20 +121,20 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
         candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey")
 
         for s2w in [0, 0.32, 0.5, 0.72, 1]:
-            scores = candidates.get_ms2_scores(
-                spectrum, ms2scorer=["sirius__sd__correct_mf", "metfrag__norm_after_merge"],
-                ms2scorer_weights=[1 - s2w, s2w]
+            scores = candidates.get_ms_scores(
+                spectrum, ms_scorer=["sirius__sd__correct_mf", "metfrag__norm_after_merge"],
+                ms_scorer_weights=[1 - s2w, s2w]
             )
 
             self.assertEqual(1271, len(scores))
             self.assertTrue(np.all(np.array(scores) > 0))
             self.assertEqual(1.0, np.max(scores))
 
-            _scores_sirius = candidates.get_ms2_scores(
-                spectrum, ms2scorer="sirius__sd__correct_mf", return_as_ndarray=True
+            _scores_sirius = candidates.get_ms_scores(
+                spectrum, ms_scorer="sirius__sd__correct_mf", return_as_ndarray=True
             )
-            _scores_metfrag = candidates.get_ms2_scores(
-                spectrum, ms2scorer="metfrag__norm_after_merge", return_as_ndarray=True
+            _scores_metfrag = candidates.get_ms_scores(
+                spectrum, ms_scorer="metfrag__norm_after_merge", return_as_ndarray=True
             )
 
             _scores_comb = ((1 - s2w) * _scores_sirius + s2w * _scores_metfrag)
@@ -139,13 +150,13 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
         candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey")
 
         # MS2 Scorer is SIRIUS
-        scores = candidates.get_ms2_scores(spectrum, ms2scorer="sirius__sd__correct_mf")
+        scores = candidates.get_ms_scores(spectrum, ms_scorer="sirius__sd__correct_mf")
         self.assertEqual(3934, len(scores))
         self.assertTrue(np.all(np.array(scores) > 0))
         self.assertEqual(1.0, np.max(scores))
 
         # MS2 Scorer is MetFrag
-        scores = candidates.get_ms2_scores(spectrum, ms2scorer="metfrag__norm_after_merge")
+        scores = candidates.get_ms_scores(spectrum, ms_scorer="metfrag__norm_after_merge")
         self.assertEqual(3934, len(scores))
         self.assertEqual(0.0627934092603395, np.min(scores))
         self.assertEqual(1.0, np.max(scores))
@@ -157,13 +168,13 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
         candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey")
 
         # MS2 Scorer is SIRIUS
-        scores = candidates.get_ms2_scores(spectrum, ms2scorer="sirius__sd__correct_mf")
+        scores = candidates.get_ms_scores(spectrum, ms_scorer="sirius__sd__correct_mf")
         self.assertEqual(2308, len(scores))
         self.assertTrue(np.all(np.array(scores) > 0))
         self.assertEqual(1.0, np.max(scores))
 
         # MS2 Scorer is MetFrag
-        scores = candidates.get_ms2_scores(spectrum, ms2scorer="metfrag__norm_after_merge")
+        scores = candidates.get_ms_scores(spectrum, ms_scorer="metfrag__norm_after_merge")
         self.assertEqual(2308, len(scores))
         self.assertEqual(0.11534319471384565, np.min(scores))
         self.assertEqual(1.0, np.max(scores))
@@ -175,13 +186,13 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
         candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey")
 
         # MS2 Scorer is SIRIUS
-        scores = candidates.get_ms2_scores(spectrum, ms2scorer="sirius__sd__correct_mf")
+        scores = candidates.get_ms_scores(spectrum, ms_scorer="sirius__sd__correct_mf")
         self.assertEqual(118, len(scores))
         self.assertTrue(np.all(np.array(scores) > 0))
         self.assertEqual(1.0, np.max(scores))
 
         # # MS2 Scorer is MetFrag
-        scores = candidates.get_ms2_scores(spectrum, ms2scorer="metfrag__norm_after_merge")
+        scores = candidates.get_ms_scores(spectrum, ms_scorer="metfrag__norm_after_merge")
         self.assertEqual(118, len(scores))
         self.assertEqual(1.0, np.min(scores))
         self.assertEqual(1.0, np.max(scores))
@@ -194,13 +205,13 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
         candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey")
 
         # MS2 Scorer is SIRIUS
-        scores = candidates.get_ms2_scores(spectrum, ms2scorer="sirius__sd__correct_mf", scale_scores_to_range=False)
+        scores = candidates.get_ms_scores(spectrum, ms_scorer="sirius__sd__correct_mf", scale_scores_to_range=False)
         self.assertEqual(3934, len(scores))
         self.assertEqual(-516.7701408961747, np.min(scores))
         self.assertEqual(-60.65141796101968, np.max(scores))
 
         # MS2 Scorer is MetFrag
-        scores = candidates.get_ms2_scores(spectrum, ms2scorer="metfrag__norm_after_merge", scale_scores_to_range=False)
+        scores = candidates.get_ms_scores(spectrum, ms_scorer="metfrag__norm_after_merge", scale_scores_to_range=False)
         self.assertEqual(3934, len(scores))
         self.assertEqual(59.08480943917096, np.min(scores))
         self.assertEqual(940.939664451204, np.max(scores))
@@ -212,13 +223,13 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
         candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey")
 
         # MS2 Scorer is SIRIUS
-        scores = candidates.get_ms2_scores(spectrum, ms2scorer="sirius__sd__correct_mf", scale_scores_to_range=False)
+        scores = candidates.get_ms_scores(spectrum, ms_scorer="sirius__sd__correct_mf", scale_scores_to_range=False)
         self.assertEqual(2308, len(scores))
         self.assertEqual(-616.7732484911674, np.min(scores))
         self.assertEqual(-138.34323578753632, np.max(scores))
 
         # MS2 Scorer is MetFrag
-        scores = candidates.get_ms2_scores(spectrum, ms2scorer="metfrag__norm_after_merge", scale_scores_to_range=False)
+        scores = candidates.get_ms_scores(spectrum, ms_scorer="metfrag__norm_after_merge", scale_scores_to_range=False)
         self.assertEqual(2308, len(scores))
         self.assertEqual(111.97300932463722, np.min(scores))
         self.assertEqual(970.7812377005032, np.max(scores))
@@ -230,13 +241,13 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
         candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey")
 
         # MS2 Scorer is SIRIUS
-        scores = candidates.get_ms2_scores(spectrum, ms2scorer="sirius__sd__correct_mf", scale_scores_to_range=False)
+        scores = candidates.get_ms_scores(spectrum, ms_scorer="sirius__sd__correct_mf", scale_scores_to_range=False)
         self.assertEqual(118, len(scores))
         self.assertEqual(-307.381287577836, np.min(scores))
         self.assertEqual(-147.8959133560828, np.max(scores))
 
         # MS2 Scorer is MetFrag
-        scores = candidates.get_ms2_scores(spectrum, ms2scorer="metfrag__norm_after_merge", scale_scores_to_range=False)
+        scores = candidates.get_ms_scores(spectrum, ms_scorer="metfrag__norm_after_merge", scale_scores_to_range=False)
         self.assertEqual(118, len(scores))
         self.assertEqual(1e-6, np.min(scores))
         self.assertEqual(1e-6, np.max(scores))
@@ -671,13 +682,13 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         candidates = CandSQLiteDB_Bach2020(BACH2020_DB_FN, molecule_identifier="inchikey")
 
         # MS2 Scorer is IOKR
-        scores = candidates.get_ms2_scores(spectrum, ms2scorer="IOKR__696a17f3")
+        scores = candidates.get_ms_scores(spectrum, ms_scorer="IOKR__696a17f3")
         self.assertEqual(2233, len(scores))
         self.assertEqual(0.00006426196626211542, np.min(scores))
         self.assertEqual(1.0, np.max(scores))
 
         # MS2 Scorer is MetFrag
-        scores = candidates.get_ms2_scores(spectrum, ms2scorer="MetFrag_2.4.5__8afe4a14")
+        scores = candidates.get_ms_scores(spectrum, ms_scorer="MetFrag_2.4.5__8afe4a14")
         self.assertEqual(2233, len(scores))
         np.testing.assert_allclose(0.000028105936908001407, np.min(scores))
         self.assertEqual(1.0, np.max(scores))
@@ -689,13 +700,13 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         candidates = CandSQLiteDB_Bach2020(BACH2020_DB_FN, molecule_identifier="inchikey")
 
         # MS2 Scorer is IOKR
-        scores = candidates.get_ms2_scores(spectrum, ms2scorer="IOKR__696a17f3")
+        scores = candidates.get_ms_scores(spectrum, ms_scorer="IOKR__696a17f3")
         self.assertEqual(16, len(scores))
         self.assertEqual(0.7441697188705315, np.min(scores))
         self.assertEqual(1.0, np.max(scores))
 
         # MS2 Scorer is MetFrag
-        scores = candidates.get_ms2_scores(spectrum, ms2scorer="MetFrag_2.4.5__8afe4a14")
+        scores = candidates.get_ms_scores(spectrum, ms_scorer="MetFrag_2.4.5__8afe4a14")
         self.assertEqual(16, len(scores))
         self.assertEqual(0.18165470462229025, np.min(scores))
         self.assertEqual(1.0, np.max(scores))
@@ -1040,7 +1051,7 @@ class TestCandidateSQLiteDB(unittest.TestCase):
         # Do not enforce the ground truth structure to be in the candidate set
         candidates = CandSQLiteDB_Bach2020(db_fn=BACH2020_DB_FN, molecule_identifier="inchikey")
 
-        scores = candidates.get_ms2_scores(spectrum, "MetFrag_2.4.5__8afe4a14", return_dataframe=True)
+        scores = candidates.get_ms_scores(spectrum, "MetFrag_2.4.5__8afe4a14", return_dataframe=True)
         fps = candidates.get_molecule_features(spectrum, "iokr_fps__positive", return_dataframe=True)
         labspace = candidates.get_labelspace(spectrum)
 
@@ -1145,7 +1156,7 @@ class TestRandomSubsetCandidateSQLiteDB_Massbank(unittest.TestCase):
         candidates = RandomSubsetCandSQLiteDB_Massbank(
             number_of_candidates=102, db_fn=MASSBANK_DB_FN, molecule_identifier="inchikey", include_correct_candidate=True)
 
-        scores = candidates.get_ms2_scores(spectrum, "sirius__sd__correct_mf", return_dataframe=True)
+        scores = candidates.get_ms_scores(spectrum, "sirius__sd__correct_mf", return_dataframe=True)
         fps = candidates.get_molecule_features(spectrum, "sirius_fps", return_dataframe=True)
         labspace = candidates.get_labelspace(spectrum)
 
@@ -1267,7 +1278,7 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
         candidates = RandomSubsetCandSQLiteDB_Bach2020(
             number_of_candidates=102, db_fn=BACH2020_DB_FN, molecule_identifier="inchikey", include_correct_candidate=True)
 
-        scores = candidates.get_ms2_scores(spectrum, "MetFrag_2.4.5__8afe4a14", return_dataframe=True)
+        scores = candidates.get_ms_scores(spectrum, "MetFrag_2.4.5__8afe4a14", return_dataframe=True)
         fps = candidates.get_molecule_features(spectrum, "iokr_fps__positive", return_dataframe=True)
         labspace = candidates.get_labelspace(spectrum)
 

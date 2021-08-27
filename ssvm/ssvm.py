@@ -710,7 +710,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         # Load the MS2 scores associated with the nodes
         for s in G.nodes:  # V
             # Raw scores normalized to (0, 1]
-            _raw_scores = sequence.get_ms2_scores(s, scale_scores_to_range=True, return_as_ndarray=True)
+            _raw_scores = sequence.get_ms_scores(s, scale_scores_to_range=True, return_as_ndarray=True)
             assert (0 <= min(_raw_scores)) and (max(_raw_scores) == 1.0)
 
             # Add label loss if loss-augmented scores are requested
@@ -955,7 +955,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 marginals = {
                     s: {
                         "label": sequence.get_labelspace(s),
-                        "score": sequence.get_ms2_scores(s, return_as_ndarray=True),
+                        "score": sequence.get_ms_scores(s, return_as_ndarray=True),
                     }
                     for s in range(len(sequence))
                 }
