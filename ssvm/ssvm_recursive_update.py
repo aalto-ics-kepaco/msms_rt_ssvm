@@ -708,7 +708,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         _raw_scores = []
         for s in G.nodes:  # V
             # Load the raw scores
-            _raw_scores.append(sequence.get_ms2_scores(s, scale_scores_to_range=False, return_as_ndarray=True))
+            _raw_scores.append(sequence.get_ms_scores(s, scale_scores_to_range=False, return_as_ndarray=True))
             node_potentials[s] = {"n_cand": len(_raw_scores[-1])}
 
         # Calculate the normalization parameter based on ALL candidates
