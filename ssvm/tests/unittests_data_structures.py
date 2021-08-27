@@ -1117,6 +1117,59 @@ class TestCandidateSQLiteDB(unittest.TestCase):
 
 
 class TestRandomSubsetCandidateSQLiteDB_Massbank(unittest.TestCase):
+    def test_get_ms_scores(self):
+        # ----------
+        # SPECTRUM 1
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "BS40569952",
+                                                         "molecule_id": "CKEXCBVNKRHAMX"})
+
+        # Do not enforce the ground truth structure to be in the candidate set
+        candidates = RandomSubsetCandSQLiteDB_Massbank(
+            number_of_candidates=102, db_fn=MASSBANK_DB_FN, molecule_identifier="inchikey1", include_correct_candidate=False)
+
+        # MetFrag Scores
+        df_scores = candidates.get_ms_scores(spectrum, ms_scorer="metfrag__norm_after_merge")
+        self.assertEqual(102, len(df_scores))
+
+        # Constant candidate scores
+        df_scores = candidates.get_ms_scores(spectrum, ms_scorer="CONST_MS_SCORE")
+        self.assertEqual(102, len(df_scores))
+
+        # ----------
+        # SPECTRUM 2
+        # ----------
+        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "KW13980462",
+                                                         "molecule_id": "YPLYFEUBZLLLIY-UHFFFAOYSA-N"})
+
+        # Enforce the ground truth structure to be in the candidate set
+        candidates = RandomSubsetCandSQLiteDB_Massbank(
+            number_of_candidates=12, db_fn=MASSBANK_DB_FN, molecule_identifier="inchikey", include_correct_candidate=True)
+
+        # MetFrag Scores
+        df_scores = candidates.get_ms_scores(spectrum, ms_scorer="metfrag__norm_after_merge")
+        self.assertEqual(12, len(df_scores))
+
+        # Constant candidate scores
+        df_scores = candidates.get_ms_scores(spectrum, ms_scorer="CONST_MS_SCORE")
+        self.assertEqual(12, len(df_scores))
+
+        # --------------------
+
+        # Enforce the ground truth structure to be in the candidate set
+        candidates = RandomSubsetCandSQLiteDB_Massbank(
+            number_of_candidates=100000, db_fn=MASSBANK_DB_FN, molecule_identifier="inchikey",
+            include_correct_candidate=True
+        )
+
+        # MetFrag Scores
+        df_scores = candidates.get_ms_scores(spectrum, ms_scorer="metfrag__norm_after_merge")
+        self.assertEqual(3834, len(df_scores))
+
+        # Constant candidate scores
+        df_scores = candidates.get_ms_scores(spectrum, ms_scorer="CONST_MS_SCORE")
+        self.assertEqual(3834, len(df_scores))
+
     def test_get_labelspace(self):
         # ----------
         # SPECTRUM 1

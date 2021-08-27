@@ -651,7 +651,7 @@ class ABCCandSQLiteDB(ABC):
                 # -- Ignore MS information --
                 df_scores.append(
                     pd.DataFrame(
-                        {"identifier": self.get_labelspace(spectrum, candidate_subset), "ms_score": 1.0}
+                        {"identifier": self.get_labelspace(spectrum), "ms_score": 1.0}
                     ).set_index("identifier")
                 )
                 # ---------------------------
