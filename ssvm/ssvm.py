@@ -710,7 +710,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         # Load the MS2 scores associated with the nodes
         for s in G.nodes:  # V
             # Raw scores normalized to (0, 1]
-            _raw_scores = sequence.get_ms2_scores(s, scale_scores_to_range=True, return_as_ndarray=True)
+            _raw_scores = sequence.get_ms_scores(s, scale_scores_to_range=True, return_as_ndarray=True)
             assert (0 <= min(_raw_scores)) and (max(_raw_scores) == 1.0)
 
             # Add label loss if loss-augmented scores are requested
@@ -861,13 +861,13 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             return_percentage = kwargs.get("return_percentage", True)
             max_k = kwargs.get("max_k", 50)
             topk_method = kwargs.get("topk_method", "casmi")
-            only_ms2_performance = kwargs.get("only_ms2_performance", False)
+            only_ms_performance = kwargs.get("only_ms_performance", False)
 
             scores = Parallel(n_jobs=n_jobs_for_data)(
                 delayed(self.topk_score)(
                     sequence, Gs=Gs, return_percentage=return_percentage, max_k=max_k,  pad_output=True,
                     n_jobs_for_trees=n_jobs_for_trees, topk_method=topk_method,
-                    only_ms2_performance=only_ms2_performance) for sequence, Gs in zip(data, l_Gs))
+                    only_ms_performance=only_ms_performance) for sequence, Gs in zip(data, l_Gs))
         elif stype == "ndcg_ll":
             scores = Parallel(n_jobs=n_jobs_for_data)(
                 delayed(self.ndcg_score)(
@@ -916,7 +916,7 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
     def topk_score(self, sequence: LabeledSequence, Gs: Optional[SpanningTrees] = None, return_percentage: bool = True,
                    max_k: Optional[int] = None, pad_output: bool = False, n_jobs_for_trees: Optional[int] = None,
-                   topk_method="casmi2016", only_ms2_performance: bool = False) \
+                   topk_method="casmi2016", only_ms_performance: bool = False) \
             -> Union[int, float, np.ndarray]:
         """
         Calculate top-k accuracy of the ranked candidate lists based on the max-marginals.
@@ -942,20 +942,20 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         :param topk_method: string, which method to use for the top-k accuracy calculation
 
-        :param only_ms2_performance: boolean, indicting whether only the "baseline" performance using the MS2 scores
+        :param only_ms_performance: boolean, indicting whether only the "baseline" performance using the MS2 scores
             should be returned. If true, no marginals are predicted, but the MS2 scores are considered to be the
             marginal values.
 
         :return: array-like, shape = (max_k, ), list of top-k, e.g. top-1, top-2, ..., accuracies. Note, the array is
             zero-based, i.e. at index 0 we have top-1. If max_k == 1, the output is a scalar.
         """
-        if only_ms2_performance:
+        if only_ms_performance:
             with sequence.candidates:
                 # Create "pseudo" marginals based on the MS2 score
                 marginals = {
                     s: {
                         "label": sequence.get_labelspace(s),
-                        "score": sequence.get_ms2_scores(s, return_as_ndarray=True),
+                        "score": sequence.get_ms_scores(s, return_as_ndarray=True),
                     }
                     for s in range(len(sequence))
                 }
