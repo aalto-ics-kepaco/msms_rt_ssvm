@@ -524,15 +524,24 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         mms = Parallel(n_jobs=n_jobs)(delayed(self._max_marginals_joblib_wrapper)(sequence, G) for G in Gs)
         mm_agg = mms[0]
 
-        # Aggregate max-marginals by simply averaging them
+        # Aggregate max-marginals by simply averaging them. For the MAP estimate we use the majority vote
         if len(Gs) > 1:
+            maps = [
+                [
+                    mm_agg[node]["map_idx"]
+                ]
+                for node in Gs.get_nodes()
+            ]  # list of MAP estimates for each node
+
             for mm in mms[1:]:
-                for node in Gs.get_nodes():
+                for idx, node in enumerate(Gs.get_nodes()):
                     assert mm_agg[node]["n_cand"] == mm[node]["n_cand"]
                     mm_agg[node]["score"] += mm[node]["score"]
+                    maps[idx].append(mm[node]["map_idx"])
 
-                for node in Gs.get_nodes():
-                    mm_agg[node]["score"] /= len(Gs)
+                for idx, node in enumerate(Gs.get_nodes()):
+                    mm_agg[node]["score"] /= len(Gs)  # average
+                    mm_agg[node]["map_idx"] = np.argmax(np.bincount(mm_agg[node]["map_idx"]))  # majority
 
         return mm_agg
 
@@ -1325,13 +1334,26 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         """
         Max-max_marginals
         """
-        # Calculate the normalized max-max_marginals
-        marg = TreeFactorGraph(candidates=node_potentials, var_conn_graph=G, make_order_probs=None,
-                               order_probs=edge_potentials, D=None) \
-            .max_product() \
-            .get_max_marginals(normalize)
+        # Run forward message passing in the tree factor graph
+        tfg = TreeFactorGraph(
+            candidates=node_potentials, var_conn_graph=G, make_order_probs=None, order_probs=edge_potentials, D=None
+        ).max_product()
 
-        return {s: {"label": sequence.get_labelspace(s), "score": marg[s], "n_cand": len(marg[s])} for s in G.nodes}
+        # Calculate the normalized max-max_marginals
+        marg = tfg.get_max_marginals(normalize)
+
+        # Extract the MAP estimate
+        map = tfg.MAP()[0]
+
+        return {
+            s: {
+                "label": sequence.get_labelspace(s),
+                "score": marg[s],
+                "n_cand": len(marg[s]),
+                "map_idx": map[s]
+            }
+            for s in G.nodes
+        }
 
     @staticmethod
     def _inference(node_potentials: OrderedDict, edge_potentials: OrderedDict, G: nx.Graph,

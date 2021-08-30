@@ -1,5 +1,9 @@
 # Version History
 
+## v2.7.0 (New feature)
+
+- return MAP estimate together with the max-marginals
+
 ## v2.6.0 (New feature)
 
 ### Support for multiple MS scores
