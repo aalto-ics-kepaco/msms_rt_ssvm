@@ -563,17 +563,41 @@ class ABCCandSQLiteDB(ABC):
 
         return df_features
 
-    def get_labelspace(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> List[str]:
+    def get_labelspace(
+            self, spectrum: Spectrum, candidate_subset: Optional[List] = None, return_inchikeys: bool = False
+    ) -> Union[List[Union[str, int]], Dict[str, List]]:
         """
         Returns the label-space for the given spectrum.
 
         :param spectrum: matchms.Spectrum, of the sequence element to get the label space.
 
-        :param candidate_subset:
+        :param candidate_subset: Optional[List], list of molecule identifiers to restrict the label space to a candidate
+            subset. If None, all candidates are returned.
 
-        :return: list of strings, molecule identifiers for the given spectrum.
+        :param return_inchikeys: boolean, indicating whether the "inchikey" and "inchikey1" should be returned for each
+            candidate.
+
+        :return: Union[
+            List[Union[str, int]], molecule identifiers for the given spectrum;
+            Dict[str, List], dictionary of lists storing the "molecule_identifier" and inchikey information
+        ]
         """
-        return [row[0] for row in self.db.execute(self._get_labelspace_query(spectrum, candidate_subset))]
+        cur = self.db.execute(self._get_labelspace_query(spectrum, candidate_subset))
+
+        if return_inchikeys:
+            d = {
+                "molecule_identifier": [],
+                "inchikey": [],
+                "inchikey1": []
+            }
+            for row in cur:
+                d["molecule_identifier"].append(row[0])
+                d["inchikey"].append(row[1])
+                d["inchikey1"].append(row[2])
+
+            return d
+        else:
+            return [row[0] for row in cur]
 
     def get_ms_scores(
             self, spectrum: Spectrum, ms_scorer: Union[str, List[str]], scale_scores_to_range: bool = True,
@@ -764,7 +788,7 @@ class ABCCandSQLiteDB_Bach2020(ABCCandSQLiteDB):
         """
         See base-class.
         """
-        query = "SELECT m.%s as identifier FROM candidates_spectra " \
+        query = "SELECT m.%s as identifier, inchikey, inchikey1 FROM candidates_spectra " \
                 "   INNER JOIN molecules m ON m.inchi = candidates_spectra.candidate" \
                 "   WHERE spectrum IS '%s'" % (self.molecule_identifier, spectrum.get("spectrum_id"))
 
@@ -894,7 +918,7 @@ class ABCCandSQLiteDB_Massbank(ABCCandSQLiteDB):
         """
         See base-class.
         """
-        query = "SELECT m.%s as identifier FROM candidates_spectra " \
+        query = "SELECT m.%s as identifier, inchikey, inchikey1 FROM candidates_spectra " \
                 "   INNER JOIN molecules m ON m.cid = candidates_spectra.candidate" \
                 "   WHERE spectrum IS '%s'" % (self.molecule_identifier, spectrum.get("spectrum_id"))
 
@@ -1111,7 +1135,7 @@ class FixedSubsetCandSQLiteDB_Bach2020(ABCCandSQLiteDB_Bach2020):
 
         return candidates_sub
 
-    def get_labelspace(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> List[str]:
+    def get_labelspace(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> List[Union[str, int]]:
         """
         Return the fixed label space (candidate subset)
         """
@@ -1199,7 +1223,7 @@ class ABCRandomSubsetCandSQLiteDB(ABCCandSQLiteDB):
         """
         return len(super().get_labelspace(spectrum))
 
-    def get_labelspace(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> List[str]:
+    def get_labelspace(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> List[Union[str, int]]:
         """
         Return the label space of the random subset.
         """
