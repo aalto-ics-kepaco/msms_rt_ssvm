@@ -1,5 +1,9 @@
 # Version History
 
+## v2.8.0 (New feature)
+
+- return inchikey information when loading the molecule labels of the label-space (if requested)
+
 ## v2.7.0 (New feature)
 
 - return MAP estimate together with the max-marginals
