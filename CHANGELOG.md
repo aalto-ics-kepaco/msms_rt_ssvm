@@ -1,5 +1,13 @@
 # Version History
 
+## v2.9.0 (New feature)
+
+### Parallelization of the Edge-potential Computation
+
+- list of molecular features associated with all candidate sets within a MS-tuple sequence are distributed across 
+  parallel workers
+- parallelization only used if requested
+
 ## v2.8.0 (New feature)
 
 - return inchikey information when loading the molecule labels of the label-space (if requested)

@@ -423,9 +423,10 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     # ==============
     # PREDICTION
     # ==============
-    def predict(self, sequence: Sequence, map: bool = False, Gs: Optional[SpanningTrees] = None,
-                n_jobs: Optional[int] = None) \
-            -> Union[Tuple[str, ...], Dict[int, Dict[str, Union[int, np.ndarray, List[str]]]]]:
+    def predict(
+            self, sequence: Sequence, map: bool = False, Gs: Optional[SpanningTrees] = None,
+            n_jobs: Optional[int] = None, n_jobs_edge_potentials: Optional[int] = None
+    ) -> Union[Tuple[str, ...], Dict[int, Dict[str, Union[int, np.ndarray, List[str]]]]]:
         """
         Function to predict the marginal distribution of the candidate sets along the given (MS, RT)-sequence.
 
@@ -443,6 +444,9 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         :param n_jobs: scalar or None, number of parallel jobs to process the random-spanning-trees associated
             with the sequence in parallel. If None, no parallelization is used.
 
+        :param n_jobs_edge_potentials: integer, number of parallel jobs used to parallelize the edge-potential
+            computation. If None, no parallelization is performed.
+
         :return:
             Either a dictionary of dictionaries containing the marginals for the candidate sets of each sequence
             (MS, RT)-tuple (map = False, see 'max_marginals')
@@ -452,13 +456,15 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             A tuple of strings containing the most likely label sequence for the given input (map = True, see 'inference')
         """
         if map:
-            return self.inference(sequence, Gs=Gs, loss_augmented=False)
+            return self.inference(sequence, Gs=Gs, loss_augmented=False, n_jobs_edge_potentials=n_jobs_edge_potentials)
         else:
-            return self.max_marginals(sequence, Gs=Gs, n_jobs=n_jobs)
+            return self.max_marginals(sequence, Gs=Gs, n_jobs=n_jobs, n_jobs_edge_potentials=n_jobs_edge_potentials)
 
-    def inference(self, sequence: Union[Sequence, LabeledSequence], Gs: Optional[SpanningTrees] = None,
-                  loss_augmented: bool = False, return_graphical_model: bool = False, update_direction: str = "map") \
-            -> Union[Tuple[str, ...], Tuple[Tuple[str, ...], TreeFactorGraph]]:
+    def inference(
+            self, sequence: Union[Sequence, LabeledSequence], Gs: Optional[SpanningTrees] = None,
+            loss_augmented: bool = False, return_graphical_model: bool = False, update_direction: str = "map",
+            n_jobs_edge_potentials: Optional[int] = None
+    ) -> Union[Tuple[str, ...], Tuple[Tuple[str, ...], TreeFactorGraph]]:
         """
         Infer the most likely label sequence for the given (MS, RT)-sequence.
 
@@ -476,6 +482,11 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         :param update_direction: string, specifying which update direction should be returned:
             "map" (default): solves the (loss-augmented) decoding problem ~ most violating example
             "random": returns a random label sequence as update direction (intended for debugging purposes)
+            "max_node_score": returns a the label sequence associated with the maximum node score for each sequence
+                              element
+
+        :param n_jobs_edge_potentials: integer, number of parallel jobs used to parallelize the edge-potential
+            computation. If None, no parallelization is performed.
 
         :return: tuple, length = L, most likely label sequence
         """
@@ -483,13 +494,15 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             Gs = SpanningTrees(sequence, self.n_trees_per_sequence)
 
         # Calculate the node- and edge-potentials
-        with sequence.candidates, self.training_data_.candidates:
-            node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, Gs[0], loss_augmented)
+        node_potentials, edge_potentials = self._get_node_and_edge_potentials(
+            sequence, Gs[0], loss_augmented, n_jobs_edge_potentials=n_jobs_edge_potentials
+        )
 
-            # Find the MAP estimate
-            TFG, Z_max = self._inference(node_potentials, edge_potentials, Gs[0], update_direction)
+        # Find the MAP estimate
+        TFG, Z_max = self._inference(node_potentials, edge_potentials, Gs[0], update_direction)
 
-            # MAP returns a list of candidate indices, we need to convert them back to actual molecules identifier
+        # MAP returns a list of candidate indices, we need to convert them back to actual molecules identifier
+        with sequence.candidates:
             y_hat = tuple(sequence.get_labelspace(s)[Z_max[s]] for s in Gs[0].nodes)
 
         if return_graphical_model:
@@ -497,15 +510,25 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         else:
             return y_hat
 
-    def max_marginals(self, sequence: Union[Sequence, LabeledSequence], Gs: Optional[SpanningTrees] = None,
-                      n_jobs: Optional[int] = None) -> Dict[int, Dict]:
+    def max_marginals(
+            self, sequence: Union[Sequence, LabeledSequence], Gs: Optional[SpanningTrees] = None,
+            n_jobs: Optional[int] = None, n_jobs_edge_potentials: Optional[int] = None
+    ) -> Dict[int, Dict]:
         """
         Calculate the max-marginals for all possible label assignments of the given (MS, RT)-sequence.
+
+        Note: Only either "n_jobs" or "n_jobs_edge_potentials" can be not None.
 
         :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
 
         :param Gs: SpanningTrees or None, spanning trees (nx.Graphs) used to approximate the MRT associated with
             the (MS, RT)-sequence. If None, a set of spanning trees is generated (see also 'self.n_trees_per_sequence')
+
+        :param n_jobs: integer, number of parallel jobs used to parallelize the max-margin computation over different
+            spanning trees. If None, no parallelization is performed.
+
+        :param n_jobs_edge_potentials: integer, number of parallel jobs used to parallelize the edge-potential
+            computation. If None, no parallelization is performed.
 
         :return: dictionary = {
             sequence_index: dictionary = {
@@ -518,10 +541,22 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         if Gs is None:
             Gs = SpanningTrees(sequence, self.n_trees_per_sequence)
 
+        if (n_jobs is not None) and (n_jobs_edge_potentials is not None):
+            raise ValueError("Either 'n_jobs' or 'n_jobs_edge_potentials' must be None.")
+
         if n_jobs is None:
             n_jobs = 1
 
-        mms = Parallel(n_jobs=n_jobs)(delayed(self._max_marginals_joblib_wrapper)(sequence, G) for G in Gs)
+        if n_jobs_edge_potentials is None:
+            n_jobs_edge_potentials = 1
+
+        # To avoid nested parallel-environments we explicitly catch the case when no parallelization over the spanning-
+        # trees was requested.
+        if n_jobs > 1:
+            mms = Parallel(n_jobs=n_jobs)(delayed(self._max_marginals_joblib_wrapper)(sequence, G) for G in Gs)
+        else:
+            mms = [self._max_marginals_joblib_wrapper(sequence, G, n_jobs_edge_potentials) for G in Gs]
+
         mm_agg = mms[0]
 
         # Aggregate max-marginals by simply averaging them. For the MAP estimate we use the majority vote
@@ -545,12 +580,16 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         return mm_agg
 
-    def _max_marginals_joblib_wrapper(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph):
+    def _max_marginals_joblib_wrapper(
+            self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph, n_jobs_edge_potentials: Optional[int] = None
+    ):
         """
         Wrapper needed to calculate the max-marginals in parallel using joblib.
         """
-        with sequence.candidates, self.training_data_.candidates:
-            node_potentials, edge_potentials = self._get_node_and_edge_potentials(sequence, G)
+        with sequence.candidates:
+            node_potentials, edge_potentials = self._get_node_and_edge_potentials(
+                sequence, G, n_jobs_edge_potentials=n_jobs_edge_potentials
+            )
 
             # Calculate the max-marginals
             return self._max_marginals(sequence, node_potentials, edge_potentials, G, normalize=True)
@@ -562,13 +601,14 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         :return: array-like, shape = (n_molecules, ), preference values for all molecules.
         """
-        try:
-            I = self._I_jfeat_rsvm(Y)
-        except MemoryError:
-            SSVM_LOGGER.info("Use large memory implementation of '_I_jfeat_rsvm'.")
-            I = self._I_jfeat_rsvm__FOR_LARGE_MEMORY(Y)
+        with self.training_data_.candidates:
+            try:
+                I = self._I_jfeat_rsvm(Y)
+            except MemoryError:
+                SSVM_LOGGER.info("Use large memory implementation of '_I_jfeat_rsvm'.")
+                I = self._I_jfeat_rsvm__FOR_LARGE_MEMORY(Y)
 
-        II = self._II_jfeat_rsvm(Y)
+            II = self._II_jfeat_rsvm(Y)
 
         return I - II
 
@@ -689,8 +729,10 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         return II
 
-    def _get_node_and_edge_potentials(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph,
-                                      loss_augmented: bool = False) -> Tuple[OrderedDict, OrderedDict]:
+    def _get_node_and_edge_potentials(
+            self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph, loss_augmented: bool = False,
+            n_jobs_edge_potentials: Optional[int] = None
+    ) -> Tuple[OrderedDict, OrderedDict]:
         """
 
         :param sequence: Sequence or LabeledSequence, (MS, RT)-sequence and associated data, e.g. candidate sets.
@@ -700,13 +742,16 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         :param loss_augmented: boolean, indicating whether the node potentials should be augmented with the label loss.
             Set this option to True during model parameter estimation.
 
+        :param n_jobs_edge_potentials: integer, number of parallel jobs used for the edge-potential computation.
+
         :return: tuple (
             OrderedDict: key = nodes of G, values {"log_score": node scores, "n_cand": size of the label space},
             nested dictionary: key = nodes of G, (nested) key = nodes of G (<- edges): (nested) values: transition
                 matrices
         )
         """
-        return self._get_node_potentials(sequence, G, loss_augmented), self._get_edge_potentials(sequence, G)
+        return self._get_node_potentials(sequence, G, loss_augmented), \
+               self._get_edge_potentials(sequence, G, n_jobs=n_jobs_edge_potentials)
 
     def _get_node_potentials(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph,
                              loss_augmented: bool = False) -> OrderedDict:
@@ -717,33 +762,50 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         node_potentials = OrderedDict()
 
         # Load the MS2 scores associated with the nodes
-        for s in G.nodes:  # V
-            # Raw scores normalized to (0, 1]
-            _raw_scores = sequence.get_ms_scores(s, scale_scores_to_range=True, return_as_ndarray=True)
-            assert (0 <= min(_raw_scores)) and (max(_raw_scores) == 1.0)
+        with sequence.candidates:
+            for s in G.nodes:  # V
+                # Raw scores normalized to (0, 1]
+                _raw_scores = sequence.get_ms_scores(s, scale_scores_to_range=True, return_as_ndarray=True)
+                assert (0 <= min(_raw_scores)) and (max(_raw_scores) == 1.0)
 
-            # Add label loss if loss-augmented scores are requested
-            if loss_augmented:
-                _raw_scores += sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s)  # l_i(y)
+                # Add label loss if loss-augmented scores are requested
+                if loss_augmented:
+                    _raw_scores += sequence.get_label_loss(self.label_loss_fun, self.mol_feat_label_loss, s)  # l_i(y)
 
-            # Normalize scores by the sequence length
-            _raw_scores /= len(G.nodes)  # |V_i|
+                # Normalize scores by the sequence length
+                _raw_scores /= len(G.nodes)  # |V_i|
 
-            # Add information to node-potentials
-            node_potentials[s] = {
-                "n_cand": len(_raw_scores),
-                "log_score": _raw_scores
-            }
+                # Add information to node-potentials
+                node_potentials[s] = {
+                    "n_cand": len(_raw_scores),
+                    "log_score": _raw_scores
+                }
 
         return node_potentials
 
-    def _get_edge_potentials(self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph) -> OrderedDict:
+    def _get_edge_potentials(
+            self, sequence: Union[Sequence, LabeledSequence], G: nx.Graph, n_jobs: Optional[int] = None
+    ) -> OrderedDict:
         """
-
+        Compute the edge-potentials for a given graph G and a MS-tuple sequence.
         """
         # Load the candidate features for all nodes
-        l_Y = [sequence.get_molecule_features_for_candidates(self.mol_feat_retention_order, s) for s in G.nodes]
-        pref_scores = self.predict_molecule_preference_values(np.vstack(l_Y))
+        with sequence.candidates:
+            l_Y = [sequence.get_molecule_features_for_candidates(self.mol_feat_retention_order, s) for s in G.nodes]
+
+        # Compute the preference score values for each candidate
+        if n_jobs is None:
+            pref_scores = self.predict_molecule_preference_values(np.vstack(l_Y))
+        else:
+            print("====================")
+            for l_y_i in mit.divide(n_jobs, l_Y):
+                print(np.vstack(list(l_y_i)).shape)
+            print("====================")
+
+            pref_scores = np.concatenate(Parallel(n_jobs=n_jobs)(
+                delayed(self.predict_molecule_preference_values)(np.vstack(list(l_y_i)))
+                for l_y_i in mit.divide(n_jobs, l_Y)
+            ))
 
         # Get a map from the node to the corresponding candidate feature vector indices
         node_2_idc = item_2_idc(l_Y)
@@ -1356,8 +1418,9 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         }
 
     @staticmethod
-    def _inference(node_potentials: OrderedDict, edge_potentials: OrderedDict, G: nx.Graph,
-                   update_direction: str = "map") -> Tuple[TreeFactorGraph, List[int]]:
+    def _inference(
+            node_potentials: OrderedDict, edge_potentials: OrderedDict, G: nx.Graph, update_direction: str = "map"
+    ) -> Tuple[TreeFactorGraph, List[int]]:
         """
         MAP inference
 
@@ -1370,8 +1433,9 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             "max_node_score": returns the label sequence where the node scores are maximized    (intended for debugging)
         """
         # MAP inference (find most likely label sequence) for the given node- and edge-potentials
-        TFG = TreeFactorGraph(candidates=node_potentials, var_conn_graph=G, make_order_probs=None,
-                              order_probs=edge_potentials, D=None)
+        TFG = TreeFactorGraph(
+            candidates=node_potentials, var_conn_graph=G, make_order_probs=None, order_probs=edge_potentials, D=None
+        )
 
         if update_direction == "random":
             z_max = [np.random.choice(range(node_potentials[s]["n_cand"])) for s in node_potentials]

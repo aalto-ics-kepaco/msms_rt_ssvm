@@ -375,7 +375,9 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
                     sign_delta = self.ssvm._get_sign_delta(0, j)
 
                     for (_, sj), aj in zip(*self.ssvm.alphas_.get_blocks(j)):  # SUM {y in Sigma}
-                        Y_sequence = self.ssvm.training_data_.candidates.get_molecule_features_by_molecule_id(sj, "substructure_count")
+                        Y_sequence = self.ssvm.training_data_.candidates.get_molecule_features_by_molecule_id(
+                            sj, "substructure_count"
+                        )
 
                         lambda_delta = self.ssvm._get_lambda_delta(
                             Y_sequence, Y_candidates, self.ssvm.training_graphs_[j][0], self.ssvm.mol_kernel
@@ -392,35 +394,51 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
         print("Vec: %.3fs" % (t_vec / self.N))
 
     def test_predict_molecule_preference_values(self):
-        with self.ssvm.training_data_.candidates:
-            for i in range(5):  # inspect only the first 5 label sequences
+        for i in range(5):  # inspect only the first 5 label sequences
+            with self.ssvm.training_data_.candidates:
                 Y_candidates = self.ssvm.training_data_[i].get_molecule_features_for_candidates("substructure_count", 2)
-                pref = self.ssvm.predict_molecule_preference_values(Y_candidates)
-                self.assertEqual((len(Y_candidates), ), pref.shape)
+
+            pref = self.ssvm.predict_molecule_preference_values(Y_candidates)
+            self.assertEqual((len(Y_candidates), ), pref.shape)
 
     def test_get_node_and_edge_potentials(self):
-        with self.ssvm.training_data_.candidates:
-            for i in [0, 8, 5]:
-                npot, epot = self.ssvm._get_node_and_edge_potentials(self.ssvm.training_data_[i],
-                                                                     self.ssvm.training_graphs_[i][0])
+        for i in [0, 8, 5]:
+            npot, epot = self.ssvm._get_node_and_edge_potentials(
+                self.ssvm.training_data_[i], self.ssvm.training_graphs_[i][0]
+            )
 
-                self.assertEqual(len(self.ssvm.training_graphs_[i][0]), len(npot))
+            self.assertEqual(len(self.ssvm.training_graphs_[i][0]), len(npot))
 
-                for s, t in self.ssvm.training_graphs_[i][0].edges:
-                    self.assertIn(s, epot)
-                    self.assertIn(t, epot[s])
+            for s, t in self.ssvm.training_graphs_[i][0].edges:
+                self.assertIn(s, epot)
+                self.assertIn(t, epot[s])
 
-                    # Reverse direction
-                    self.assertIn(t, epot)
-                    self.assertIn(s, epot[t])
+                # Reverse direction
+                self.assertIn(t, epot)
+                self.assertIn(s, epot[t])
 
-                    # Check shape of transition matrices
+                # Check shape of transition matrices
+                with self.ssvm.training_data_.candidates:
                     n_cand_s = len(self.ssvm.training_data_[i].get_molecule_features_for_candidates(
-                        self.ssvm.mol_feat_retention_order, s))
+                        self.ssvm.mol_feat_retention_order, s)
+                    )
                     n_cand_t = len(self.ssvm.training_data_[i].get_molecule_features_for_candidates(
-                        self.ssvm.mol_feat_retention_order, t))
-                    self.assertEqual((n_cand_s, n_cand_t), epot[s][t]["log_score"].shape)
-                    self.assertEqual((n_cand_t, n_cand_s), epot[t][s]["log_score"].shape)
+                        self.ssvm.mol_feat_retention_order, t)
+                    )
+                self.assertEqual((n_cand_s, n_cand_t), epot[s][t]["log_score"].shape)
+                self.assertEqual((n_cand_t, n_cand_s), epot[t][s]["log_score"].shape)
+
+    def test_get_edge_potentials_with_parallel_computation(self):
+        for i in [0, 8, 5]:
+            epot_single = self.ssvm._get_edge_potentials(
+                self.ssvm.training_data_[i], self.ssvm.training_graphs_[i][0], n_jobs=None
+            )
+            epot_parallel = self.ssvm._get_edge_potentials(
+                self.ssvm.training_data_[i], self.ssvm.training_graphs_[i][0], n_jobs=4
+            )
+
+            for s, t in self.ssvm.training_graphs_[i][0].edges:
+                np.testing.assert_allclose(epot_single[s][t]["log_score"], epot_parallel[s][t]["log_score"])
 
     def test_inference(self):
         for i in [0, 8, 3]:
@@ -428,8 +446,8 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
             # With loss augmentation
             # =========================
             y_i_hat__la = self.ssvm.inference(
-                self.ssvm.training_data_[i], self.ssvm.training_graphs_[i],
-                loss_augmented=True)
+                self.ssvm.training_data_[i], self.ssvm.training_graphs_[i], loss_augmented=True
+            )
 
             # =========================
             # Without loss augmentation
@@ -441,9 +459,10 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
             self.assertEqual(len(self.ssvm.training_data_[i]), len(y_i_hat__la))
             self.assertEqual(len(self.ssvm.training_data_[i]), len(y_i_hat__wola))
 
-            for s in range(len(self.ssvm.training_data_[i])):
-                self.assertIn(y_i_hat__la[s], self.ssvm.training_data_[i].get_labelspace(s))
-                self.assertIn(y_i_hat__wola[s], self.ssvm.training_data_[i].get_labelspace(s))
+            with self.ssvm.training_data_.candidates:
+                for s in range(len(self.ssvm.training_data_[i])):
+                    self.assertIn(y_i_hat__la[s], self.ssvm.training_data_[i].get_labelspace(s))
+                    self.assertIn(y_i_hat__wola[s], self.ssvm.training_data_[i].get_labelspace(s))
 
     def test_inference_without_tree_given(self):
         for i in [0, 8, 3]:
@@ -460,9 +479,10 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
             self.assertEqual(len(self.ssvm.training_data_[i]), len(y_i_hat__la))
             self.assertEqual(len(self.ssvm.training_data_[i]), len(y_i_hat__wola))
 
-            for s in range(len(self.ssvm.training_data_[i])):
-                self.assertIn(y_i_hat__la[s], self.ssvm.training_data_[i].get_labelspace(s))
-                self.assertIn(y_i_hat__wola[s], self.ssvm.training_data_[i].get_labelspace(s))
+            with self.ssvm.training_data_.candidates:
+                for s in range(len(self.ssvm.training_data_[i])):
+                    self.assertIn(y_i_hat__la[s], self.ssvm.training_data_[i].get_labelspace(s))
+                    self.assertIn(y_i_hat__wola[s], self.ssvm.training_data_[i].get_labelspace(s))
 
     def test_max_marginals(self):
         for i in [0, 8, 3]:
