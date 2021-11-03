@@ -1496,6 +1496,22 @@ class TestSequence(unittest.TestCase):
             label_key="molecule_identifier"
         )
 
+    def test_iterator(self):
+        # normal sequence
+        c = 0
+        for spec in self.sequence:
+            self.assertIsInstance(spec, Spectrum)
+            c += 1
+        self.assertEqual(c, len(self.sequence))
+
+        # labeled sequence
+        c = 0
+        for spec, label in self.lsequence:
+            self.assertIsInstance(spec, Spectrum)
+            self.assertIsInstance(label, (int, str))
+            c += 1
+        self.assertEqual(c, len(self.lsequence))
+
     def test_inchikeys_added_to_label_space(self):
         self.assertIsInstance(self.sequence.get_labelspace(0, return_inchikeys=True), dict)
         self.assertIn("inchikey", self.sequence.get_labelspace(0, return_inchikeys=True))

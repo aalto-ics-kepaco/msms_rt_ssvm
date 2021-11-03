@@ -1291,6 +1291,9 @@ class Sequence(object):
         """
         return self.L
 
+    def __iter__(self):
+        return self.spectra.__iter__()
+
     def get_dataset(self) -> str:
         return self.spectra[0].get("dataset")
 
@@ -1456,6 +1459,9 @@ class LabeledSequence(Sequence):
                 ))
 
             self.labels = labels
+
+    def __iter__(self):
+        return zip(self.spectra.__iter__(), self.labels.__iter__())
 
     def get_labels(self, s: Optional[int] = None) -> Union[str, List[str]]:
         """
