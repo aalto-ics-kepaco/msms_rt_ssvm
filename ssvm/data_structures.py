@@ -1135,14 +1135,16 @@ class FixedSubsetCandSQLiteDB_Bach2020(ABCCandSQLiteDB_Bach2020):
 
         return candidates_sub
 
-    def get_labelspace(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> List[Union[str, int]]:
+    def get_labelspace(
+            self, spectrum: Spectrum, candidate_subset: Optional[List] = None, return_inchikeys: bool = False
+    ) -> List[Union[str, int]]:
         """
         Return the fixed label space (candidate subset)
         """
         if candidate_subset is not None:
             raise RuntimeError("Candidate subset cannot be requested in any sub-class of 'CandidateSQLiteDB'.")
 
-        return super().get_labelspace(spectrum, self._get_candidate_subset(spectrum))
+        return super().get_labelspace(spectrum, self._get_candidate_subset(spectrum), return_inchikeys=return_inchikeys)
 
 
 class ABCRandomSubsetCandSQLiteDB(ABCCandSQLiteDB):
@@ -1223,14 +1225,16 @@ class ABCRandomSubsetCandSQLiteDB(ABCCandSQLiteDB):
         """
         return len(super().get_labelspace(spectrum))
 
-    def get_labelspace(self, spectrum: Spectrum, candidate_subset: Optional[List] = None) -> List[Union[str, int]]:
+    def get_labelspace(
+            self, spectrum: Spectrum, candidate_subset: Optional[List] = None, return_inchikeys: bool = False
+    ) -> List[Union[str, int]]:
         """
         Return the label space of the random subset.
         """
         if candidate_subset is not None:
             raise RuntimeError("Candidate subset cannot be requested in any sub-class of 'CandidateSQLiteDB'.")
 
-        return super().get_labelspace(spectrum, self._get_candidate_subset(spectrum))
+        return super().get_labelspace(spectrum, self._get_candidate_subset(spectrum), return_inchikeys=return_inchikeys)
 
 
 class RandomSubsetCandSQLiteDB_Bach2020(ABCRandomSubsetCandSQLiteDB, ABCCandSQLiteDB_Bach2020):
@@ -1262,13 +1266,17 @@ class RandomSubsetCandSQLiteDB_Massbank(ABCRandomSubsetCandSQLiteDB, ABCCandSQLi
 class Sequence(object):
     def __init__(
             self, spectra: List[Spectrum], candidates: ABCCandSQLiteDB,
-            ms_scorer: Optional[Union[str, List[str]]] = None
+            ms_scorer: Optional[Union[str, List[str]]] = None, sort_sequence_by_rt: bool = False
     ):
         self.spectra = spectra
         self.candidates = candidates
         self.ms_scorer = ms_scorer
 
         self.L = len(self.spectra)
+
+        # Sort the spectra list by retention time (RT) if requested (from low to high RT)
+        if sort_sequence_by_rt:
+            self.spectra = sorted(self.spectra, key=lambda s: s.get("retention_time"))
 
         # Extract retention time (RT) information from spectra and pre-calculate RT differences and signs
         self._rts = np.array([spectrum.get("retention_time") for spectrum in self.spectra])
@@ -1338,17 +1346,21 @@ class Sequence(object):
 
         return n_cand
 
-    def get_labelspace(self, s: Optional[int] = None) -> Union[List[List[str]], List[str]]:
+    def get_labelspace(self, s: Optional[int] = None, return_inchikeys: bool = False) \
+            -> Union[List[List[Union[str, int]]], List[Union[str, int]], List[Dict[str, List]], Dict[str, List]]:
         """
         Get the label space, i.e. candidate molecule identifiers, for each spectrum as nested list.
 
         :param s: scalar, sequence index for which the MS2 scores should be returned. If None, scores are returned for
             all spectra in the sequence.
+
+        :param return_inchikeys: boolean, indicating whether the "inchikey" and "inchikey1" should be returned for each
+            candidate.,
         """
         if s is None:
-            labelspace = [self.get_labelspace(s) for s in range(self.__len__())]
+            labelspace = [self.get_labelspace(s, return_inchikeys=return_inchikeys) for s in range(self.__len__())]
         else:
-            labelspace = self.candidates.get_labelspace(self.spectra[s])
+            labelspace = self.candidates.get_labelspace(self.spectra[s], return_inchikeys=return_inchikeys)
 
         return labelspace
 
@@ -1400,7 +1412,7 @@ class LabeledSequence(Sequence):
     Class representing the a _labeled_ (MS, RT)-sequence (x, t, y) with associated molecular candidate set C.
     """
     def __init__(self, spectra: List[Spectrum], candidates: ABCCandSQLiteDB, ms_scorer: Optional[str] = None,
-                 labels: Optional[List[str]] = None, label_key: str = "molecule_id"):
+                 labels: Optional[List[str]] = None, label_key: str = "molecule_id", sort_sequence_by_rt: bool = False):
         """
         :param spectra: list of strings, spectrum-ids belonging sequence
 
@@ -1412,10 +1424,17 @@ class LabeledSequence(Sequence):
         :param labels: list of strings, ground truth molecule identifiers belonging to the spectra of the sequence
 
         :param label_key: string, dictionary key used to load the label information from the spectra.
+
+        :param sort_sequence_by_rt: boolean, indicating (MS, RT)-sequence should be sorted by retention time (RT). From
+            low to high RT.
         """
+        super(LabeledSequence, self).__init__(
+            spectra=spectra, candidates=candidates, ms_scorer=ms_scorer, sort_sequence_by_rt=sort_sequence_by_rt
+        )
+
         if labels is None:
             self.labels = []
-            for spectrum in spectra:
+            for spectrum in self.spectra:
                 label = spectrum.get(label_key)
                 if label is None:
                     raise ValueError(
@@ -1425,14 +1444,18 @@ class LabeledSequence(Sequence):
                     )
                 self.labels.append(label)
         else:
-            if len(labels) != len(spectra):
+            if sort_sequence_by_rt:
+                raise ValueError(
+                    "You cannot provide a label list if you request to sort the spectra sequence by RT. Add the "
+                    "molecule ID to the spectrum objects."
+                )
+
+            if len(labels) != len(self.spectra):
                 raise ValueError("Number of labels does not match the number of spectra: %d != %d" % (
-                    len(labels), len(spectra)
+                    len(labels), len(self.spectra)
                 ))
 
             self.labels = labels
-
-        super(LabeledSequence, self).__init__(spectra=spectra, candidates=candidates, ms_scorer=ms_scorer)
 
     def get_labels(self, s: Optional[int] = None) -> Union[str, List[str]]:
         """

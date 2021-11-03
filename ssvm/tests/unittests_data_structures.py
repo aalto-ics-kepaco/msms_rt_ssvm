@@ -1487,6 +1487,42 @@ class TestSequence(unittest.TestCase):
             spectra=self.spectra, candidates=CandSQLiteDB_Bach2020(BACH2020_DB_FN), labels=self.gt_labels
         )
 
+        self.sorted_sequence = Sequence(
+            spectra=self.spectra, candidates=CandSQLiteDB_Bach2020(BACH2020_DB_FN), sort_sequence_by_rt=True
+        )
+
+        self.sorted_lsequence = LabeledSequence(
+            spectra=self.spectra, candidates=CandSQLiteDB_Bach2020(BACH2020_DB_FN), sort_sequence_by_rt=True,
+            label_key="molecule_identifier"
+        )
+
+    def test_inchikeys_added_to_label_space(self):
+        self.assertIsInstance(self.sequence.get_labelspace(0, return_inchikeys=True), dict)
+        self.assertIn("inchikey", self.sequence.get_labelspace(0, return_inchikeys=True))
+        self.assertIn("inchikey1", self.sequence.get_labelspace(0, return_inchikeys=True))
+        self.assertIn("molecule_identifier", self.sequence.get_labelspace(0, return_inchikeys=True))
+        self.assertEqual(2233, len(self.sequence.get_labelspace(0, return_inchikeys=True)["inchikey"]))
+
+    def test_sorted_sequences(self):
+        rt_before = - np.inf
+        for s in range(len(self.sorted_sequence)):
+            self.assertTrue(rt_before < self.sorted_sequence.get_retention_time(s))
+            rt_before = self.sorted_sequence.get_retention_time(s)
+
+    def test_sorted_labeled_sequences(self):
+        # check RTs
+        rt_before = - np.inf
+        for s in range(len(self.sorted_lsequence)):
+            self.assertTrue(rt_before < self.sorted_lsequence.get_retention_time(s))
+            rt_before = self.sorted_lsequence.get_retention_time(s)
+
+        # Check that the labels are correctly ordered
+        for s in range(len(self.sorted_lsequence)):
+            self.assertEqual(
+                self.gt_labels[self.spectra_ids.index(self.sorted_lsequence.spectra[s].get("spectrum_id"))],
+                self.sorted_lsequence.labels[s]
+            )
+
     def test_get_label_loss(self):
         # Zero-One loss based on the molecule labels (e.g. InChIKey)
         for s in range(5):
