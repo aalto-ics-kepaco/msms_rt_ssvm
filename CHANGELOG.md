@@ -1,5 +1,11 @@
 # Version History
 
+## v2.9.0 (New feature)
+
+- (labeled) sequences can now request the label space with "return_inchikeys"
+- (labeled) sequences can now be sorted by the retention time of the spectra upon object construction
+- make (labeled) sequences iterable
+
 ## v2.8.0 (New feature)
 
 - return inchikey information when loading the molecule labels of the label-space (if requested)
