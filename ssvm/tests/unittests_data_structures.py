@@ -346,6 +346,79 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
             mol_ids_from_query
         )
 
+    def test_get_xlogp3_by_molecule_id(self):
+        # -------------------------------
+        # InChIKeys with repeated entries
+        molecule_ids = [
+            "UKQKUSAOCWFKSE-UHFFFAOYSA-N",
+            "MIGUTQZXWCSJGD-UHFFFAOYSA-N",
+            "TVKGYMYAOVADOP-SOFGYWHQSA-N",
+            "HZINSBNIWQLTKI-UHFFFAOYSA-N",
+            "UKQKUSAOCWFKSE-UHFFFAOYSA-N",
+            "LQMQZNHDYCBFJK-UHFFFAOYSA-N",
+            "MIGUTQZXWCSJGD-UHFFFAOYSA-N",
+            "TVKGYMYAOVADOP-SOFGYWHQSA-N",
+            "MIGUTQZXWCSJGD-UHFFFAOYSA-N",
+            "CQYXNTFQGSZODY-UHFFFAOYSA-N",
+            "MIGUTQZXWCSJGD-UHFFFAOYSA-N"
+        ]
+        xlogp3_ref = [3, 3.4, 3.5, 1.8, 3, 5.1, 3.4, 3.5, 3.4, 3.8, 3.4]
+
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey", init_with_open_db_conn=True)
+
+        # As vector
+        res = candidates.get_xlogp3_by_molecule_id(molecule_ids, return_dataframe=False)
+        self.assertEqual((len(molecule_ids), ), res.shape)
+        np.testing.assert_array_equal(xlogp3_ref, res)
+
+        # As dataframe
+        res = candidates.get_xlogp3_by_molecule_id(molecule_ids, return_dataframe=True)
+        self.assertEqual((len(molecule_ids), 2), res.shape)
+        self.assertListEqual(["identifier", "xlogp3"], res.columns.tolist())
+        self.assertTrue(pd.DataFrame(zip(molecule_ids, xlogp3_ref), columns=["identifier", "xlogp3"]).equals(res))
+        self.assertFalse(pd.DataFrame(zip(molecule_ids[::-1], xlogp3_ref), columns=["identifier", "xlogp3"]).equals(res))
+        # -------------------------------
+
+        # ------------------------
+        # CIDs with missing xlogp3
+        molecule_ids = [7389, 66, 77, 5104, 66]
+        xlogp3_ref = [np.nan, 3.1, -0.2, np.nan, 3.1]
+        xlogp3_ref_imputed = [2.0, 3.1, -0.2, 2.0, 3.1]
+
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="cid", init_with_open_db_conn=True)
+
+        # As vector (raise)
+        with self.assertRaises(ValueError):
+            candidates.get_xlogp3_by_molecule_id(molecule_ids, return_dataframe=False, missing_value="raise")
+
+        # As vector (no imputation)
+        res = candidates.get_xlogp3_by_molecule_id(molecule_ids, return_dataframe=False, missing_value="ignore")
+        self.assertEqual((len(molecule_ids), ), res.shape)
+        np.testing.assert_array_equal(xlogp3_ref, res)
+
+        # As vector (mean imputation)
+        res = candidates.get_xlogp3_by_molecule_id(molecule_ids, return_dataframe=False, missing_value="impute_mean")
+        self.assertEqual((len(molecule_ids),), res.shape)
+        np.testing.assert_array_equal(xlogp3_ref_imputed, res)
+
+        # As dataframe (no imputation)
+        res = candidates.get_xlogp3_by_molecule_id(molecule_ids, return_dataframe=True, missing_value="ignore")
+        self.assertEqual((len(molecule_ids), 2), res.shape)
+        self.assertListEqual(["identifier", "xlogp3"], res.columns.tolist())
+        self.assertTrue(pd.DataFrame(zip(molecule_ids, xlogp3_ref), columns=["identifier", "xlogp3"]).equals(res))
+        self.assertFalse(
+            pd.DataFrame(zip(molecule_ids[::-1], xlogp3_ref), columns=["identifier", "xlogp3"]).equals(res)
+        )
+
+        # As dataframe (mean imputation)
+        res = candidates.get_xlogp3_by_molecule_id(molecule_ids, return_dataframe=True, missing_value="impute_mean")
+        self.assertEqual((len(molecule_ids), 2), res.shape)
+        self.assertListEqual(["identifier", "xlogp3"], res.columns.tolist())
+        self.assertTrue(
+            pd.DataFrame(zip(molecule_ids, xlogp3_ref_imputed), columns=["identifier", "xlogp3"]).equals(res)
+        )
+        # ------------------------
+
     def test_get_molecule_feature_by_molecule_id__repeated_ids(self):
         # ----------
         # InChIKey
