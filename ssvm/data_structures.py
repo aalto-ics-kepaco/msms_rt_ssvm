@@ -55,44 +55,6 @@ LOGGER.addHandler(CH)
 SEQUENCE_SAMPLE_T = TypeVar('SEQUENCE_SAMPLE_T', bound='SequenceSample')
 
 
-class Molecule(object):
-    def __init__(self, inchi: str, inchikey: str, smiles_iso: str, smiles_can: str,
-                 metadata: Optional[dict] = None, features: Optional[dict] = None, identifier="inchikey"):
-        """
-
-        :param inchi: string, InChI identifier of the molecule.
-
-        :param inchikey: string, InChIKey identifier
-
-        :param smiles_iso: string, Isomeric SMILES representation
-
-        :param smiles_can: string, Canonical SMILES
-
-        :param metadata: dictionary, any meta data provided with the molecule, e.g. PubChem ID etc.
-
-        :param features: dictionary, feature calculated from the molecular representation. The keys should indicate the
-            feature name and the values should be np.ndarray.
-        """
-        self.inchi = inchi
-        self.inchikey = inchikey
-        self.smiles_iso = smiles_iso
-        self.smiles_can = smiles_can
-        self.metadata = metadata
-        self.features = features
-        self.identifier = identifier
-
-        self.inchikey1, self.inchikey2, self.inchikey3 = inchikey.split("-")
-
-        if self.identifier not in ['inchi', 'inchikey', 'inchikey1']:
-            raise ValueError("Invalid molecule identifier: '%s'. Choices are 'inchi', 'inchikey' and 'inchikey1'.")
-
-    def get_identifier(self):
-        """
-        Return identifier string of the molecule.
-        """
-        return self.__getattribute__(self.identifier)
-
-
 class ABCCandSQLiteDB(ABC):
     """
     Wrapper class around the candidate SQLite database (DB).
@@ -907,6 +869,58 @@ class ABCCandSQLiteDB_Massbank(ABCCandSQLiteDB):
         No additional parameters.
         """
         super().__init__(*args, **kwargs)
+
+    def get_xlogp3_by_molecule_id(
+            self, molecule_ids: Union[List[str], List[int], Tuple[str, ...], Tuple[int, ...]],
+            return_dataframe: bool = False, missing_value: str = "ignore"
+    ) -> Union[pd.DataFrame, np.ndarray]:
+        """
+        Function to load PubChem's XLogP3 for the specified molecules.
+
+        :param molecule_ids: List | Tuple, molecule identifiers for which the XLogP3 values should be loaded
+        :param return_dataframe: boolean, indicating whether the score should be returned in a pandas.DataFrame storing
+            the molecule ids and XLogP3 values (shape = (n_samples, 2)).
+        :param missing_value: string, what to do when a missing
+        """
+        # Load the XLogP3 values (average values within identifier group)
+        res = pd.DataFrame(
+            self.db.execute(
+                "SELECT %s AS identifier, AVG(xlogp3) FROM molecules "
+                "   WHERE identifier IN %s"
+                "   GROUP BY identifier"
+                % (self.molecule_identifier, self._in_sql(molecule_ids))
+            ).fetchall(),
+            columns=["identifier", "xlogp3"]
+        ) \
+            .set_index("identifier")
+
+        # Handle repeated molecule IDs
+        try:
+            res = res.loc[list(molecule_ids)]
+        except KeyError:
+            raise KeyError("The feature for some molecule ids could not be loaded.")
+
+        # Handle missing XLogP3 values
+        if res["xlogp3"].hasnans:
+            if missing_value == "ignore":
+                pass
+            elif missing_value == "raise":
+                raise ValueError("There are missing XLogP3 values.")
+            elif missing_value == "impute_mean":
+                # Compute the mean value over the non-missing data
+                impute_value = np.nanmean(res["xlogp3"])
+                if np.isnan(impute_value):
+                    raise ValueError("Cannot impute value as all XLogP3 values are missing.")
+
+                # Replace missings with mean-value
+                res[res["xlogp3"].isna()] = impute_value
+            else:
+                raise ValueError("Invalid missing handling strategy: '%s'." % missing_value)
+
+        if return_dataframe:
+            return res.reset_index()
+        else:
+            return res.values.flatten()
 
     def _get_available_ms2scorer(self) -> set:
         """

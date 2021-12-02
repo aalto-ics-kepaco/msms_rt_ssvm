@@ -1,5 +1,10 @@
 # Version History
 
+## v2.10.0 (New Feature)
+
+- allow loading of XLogP3 values for the MassBank DB
+- remove some old source code
+
 ## v2.9.0 (New feature)
 
 - (labeled) sequences can now request the label space with "return_inchikeys"
