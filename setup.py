@@ -19,9 +19,12 @@ setup(
         "pandas",
         "scipy",
         "joblib",
-        "tensorflow",
-        "tqdm",
+        "pip",
+        "matchms",
         "more-itertools",
+        "tqdm",
+        "tbb",
+        "numba",
         "networkx"
     ],
 

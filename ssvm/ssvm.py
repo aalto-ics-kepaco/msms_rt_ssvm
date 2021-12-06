@@ -26,7 +26,6 @@
 import numpy as np
 import itertools as it
 import more_itertools as mit
-import tensorflow as tf
 import networkx as nx
 import logging
 import time
@@ -133,9 +132,9 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
     # ==============
     # MODEL FITTING
     # ==============
-    def fit(self, data: SequenceSample, n_init_per_example: int = 1,
-            summary_writer: Optional[tf.summary.SummaryWriter] = None,
-            validation_data: Optional[Union[SequenceSample, LabeledSequence]] = None):
+    def fit(
+        self, data: SequenceSample, n_init_per_example: int = 1
+    ):
         """
         Train the SSVM given a dataset.
 
@@ -145,14 +144,9 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
         :param n_init_per_example: scalar, number of initially active dual variables per example. That is, the number of
             active (potential) label sequences.
 
-        :param summary_writer: Tensorflow SummaryWriter
-
-        :param validation_data: validation sequence sample or a single labeled sequence
-
         :return: reference to it self.
         """
         self.training_data_ = data
-        self.validation_data_ = validation_data
 
         # Open the connection to the candidate DB
         with self.training_data_.candidates:
@@ -171,14 +165,6 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             for i, sequence in enumerate(self.training_data_)
         ]
 
-        if self.validation_data_ is not None:
-            self.validation_graphs_ = [
-                SpanningTrees(sequence, self.n_trees_per_sequence, i)
-                for i, sequence in enumerate(self.validation_data_)
-            ]
-        else:
-            self.validation_graphs_ = None
-
         # Run over the data
         # - each epoch is a cycle through the full data
         # - each batch contains a subset of the full data
@@ -188,28 +174,6 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
 
         random_state = check_random_state(self.random_state)
         n_iterations_total = 0
-
-        if summary_writer is not None:
-            _data_to_log = {}
-
-            # Ranking performance scores and duality gap
-            _start_time = time.time()
-            _data_to_log["duality_gap"], _data_to_log["training__ndcg_ohc"] = self._get_ndcg_score_and_duality_gap()
-            SSVM_LOGGER.info("Train data NDCG score = %.3f; Duality gap = %f (time = %.3fs)" %
-                             (_data_to_log["training__ndcg_ohc"], _data_to_log["duality_gap"], time.time() - _start_time))
-            self.duality_gap_0_ = _data_to_log["duality_gap"]
-            _data_to_log["rel_duality_gap_decay"] = _data_to_log["duality_gap"] / self.duality_gap_0_
-
-            if validation_data is not None:
-                # Ranking performance on validation set
-                _start_time = time.time()
-                _data_to_log["validation__ndcg_ohc"] = \
-                    self.score(self.validation_data_, self.validation_graphs_, stype="ndcg_ohc",
-                               spanning_tree_random_state=len(self.validation_data_))
-                SSVM_LOGGER.info("Validation data NDCG score = %.3f (time = %.3fs)" %
-                                 (_data_to_log["validation__ndcg_ohc"], time.time() - _start_time))
-
-            self.write_log(n_iterations_total, _data_to_log, summary_writer)
 
         SSVM_LOGGER.info("=== Start training ===")
         SSVM_LOGGER.info("batch_size = {}".format(self.batch_size))
@@ -268,20 +232,6 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
                 assert self._is_feasible_matrix(self.alphas_, self.C), \
                     "Dual variables after update are not feasible anymore."
 
-                if summary_writer is not None:
-                    _data_to_log = {
-                        "step_size": step_size,
-                        "active_variables": self.alphas_.n_active(),
-                        "training__avg_label_loss_batch": self._get_batch_label_loss(I_batch, y_I_hat),
-                        "training__cindex_pref_values": self.score(self.training_data_, stype="cindex"),
-                    }
-
-                    if self.validation_data_ is not None:
-                        _data_to_log["validation__cindex_pref_values"] = self.score(
-                            self.validation_data_, stype="cindex")
-
-                    self.write_log(n_iterations_total, _data_to_log, summary_writer)
-
                 n_batches_ran += 1
                 t_batch += (time.time() - _start_time_batch)
                 SSVM_LOGGER.info("Batch run-time (avg): %.3fs" % (t_batch / n_batches_ran))
@@ -291,28 +241,6 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             t_epoch += (time.time() - _start_time_epoch)
             SSVM_LOGGER.info("Epoch run-time (avg): %.3fs" % (t_epoch / n_epochs_ran))
             SSVM_LOGGER.handlers[0].flush()
-
-            if summary_writer is not None:
-                _data_to_log = {}
-
-                # Ranking performance scores and duality gap
-                _start_time = time.time()
-                _data_to_log["duality_gap"], _data_to_log["training__ndcg_ohc"] = self._get_ndcg_score_and_duality_gap()
-                SSVM_LOGGER.info("Train data NDCG score = %.3f; Duality gap = %f (time = %.3fs)" %
-                                 (_data_to_log["training__ndcg_ohc"], _data_to_log["duality_gap"],
-                                  time.time() - _start_time))
-                _data_to_log["rel_duality_gap_decay"] = _data_to_log["duality_gap"] / self.duality_gap_0_
-
-                if validation_data is not None:
-                    # Ranking performance on validation set
-                    _start_time = time.time()
-                    _data_to_log["validation__ndcg_ohc"] = \
-                        self.score(self.validation_data_, self.validation_graphs_, stype="ndcg_ohc",
-                                   spanning_tree_random_state=len(self.validation_data_))
-                    SSVM_LOGGER.info("Validation data NDCG score = %.3f (time = %.3fs)" %
-                                     (_data_to_log["validation__ndcg_ohc"], time.time() - _start_time))
-
-                self.write_log(n_iterations_total, _data_to_log, summary_writer)
 
         return self
 
@@ -1222,30 +1150,6 @@ class StructuredSVMSequencesFixedMS2(_StructuredSVM):
             topk = topk[0].item()
 
         return topk
-
-    @staticmethod
-    def write_log(n_iter: int, data_to_log: dict, summary_writer: tf.summary.SummaryWriter):
-        """
-        :param n_iter:
-        :param data_to_log:
-        :param summary_writer:
-        :return:
-        """
-        for k, v in data_to_log.items():
-            with summary_writer.as_default():
-                if k in ["active_variables", "duality_gap", "rel_duality_gap_decay"]:
-                    scope = "Model"
-                elif k in ["step_size"]:
-                    scope = "Optimizer"
-                elif k.startswith("training__"):
-                    scope = "Metric (Training)"
-                elif k.startswith("validation__"):
-                    scope = "Metric (Validation)"
-                else:
-                    raise ValueError("Invalid score: %s" % k)
-
-                with tf.name_scope(scope):
-                    tf.summary.scalar(k, data=v, step=n_iter)
 
     @staticmethod
     def get_mol_kernel(

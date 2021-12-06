@@ -1,5 +1,11 @@
 # Version History
 
+## v2.11.0 (clean up)
+
+- code cleanup only
+- remove dependency on tensorflow
+- update environment.yml and setup.py
+
 ## v2.10.0 (New Feature)
 
 - allow loading of XLogP3 values for the MassBank DB
