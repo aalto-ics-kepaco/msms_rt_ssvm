@@ -1,6 +1,7 @@
 name: ssvm_environment
 channels:
   - conda-forge
+  - default
 dependencies:
   - conda-forge::python>=3.8
   - conda-forge::pandas==1.2.4
@@ -11,6 +12,6 @@ dependencies:
   - bioconda::matchms==0.9.2
   - conda-forge::more-itertools
   - conda-forge::tqdm
-  - conda-forge::tbb==2020.3
+  - tbb==2020.3
   - conda-forge::numba==0.53.1
   - conda-forge::networkx>=2.4|<3
