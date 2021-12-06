@@ -12,6 +12,6 @@ dependencies:
   - bioconda::matchms==0.9.2
   - conda-forge::more-itertools
   - conda-forge::tqdm
-  - tbb==2020.3
+  - conda-forge::tbb
   - conda-forge::numba==0.53.1
   - conda-forge::networkx>=2.4|<3
