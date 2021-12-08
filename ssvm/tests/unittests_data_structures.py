@@ -42,6 +42,7 @@ from sklearn.preprocessing import StandardScaler
 from ssvm.data_structures import ABCCandSQLiteDB
 from ssvm.data_structures import CandSQLiteDB_Bach2020, RandomSubsetCandSQLiteDB_Bach2020
 from ssvm.data_structures import CandSQLiteDB_Massbank, RandomSubsetCandSQLiteDB_Massbank
+from ssvm.data_structures import ImputationError
 from ssvm.data_structures import SequenceSample, Sequence, SpanningTrees, LabeledSequence
 from ssvm.loss_functions import zeroone_loss
 
@@ -418,6 +419,78 @@ class TestMassbankCandidateSQLiteDB(unittest.TestCase):
             pd.DataFrame(zip(molecule_ids, xlogp3_ref_imputed), columns=["identifier", "xlogp3"]).equals(res)
         )
         # ------------------------
+
+    def test_get_xlogp3_by_molecule_id__singleton_candidate_set(self):
+        # -------------------------------
+        # InChIKeys with repeated entries
+        molecule_ids = [
+            "MIGUTQZXWCSJGD-UHFFFAOYSA-N"
+        ]
+        xlogp3_ref = [3.4]
+
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey", init_with_open_db_conn=True)
+
+        # As vector
+        res = candidates.get_xlogp3_by_molecule_id(molecule_ids, return_dataframe=False)
+        self.assertEqual((len(molecule_ids), ), res.shape)
+        np.testing.assert_array_equal(xlogp3_ref, res)
+
+        # As dataframe
+        res = candidates.get_xlogp3_by_molecule_id(molecule_ids, return_dataframe=True)
+        self.assertEqual((len(molecule_ids), 2), res.shape)
+        self.assertListEqual(["identifier", "xlogp3"], res.columns.tolist())
+        self.assertTrue(pd.DataFrame(zip(molecule_ids, xlogp3_ref), columns=["identifier", "xlogp3"]).equals(res))
+        # -------------------------------
+
+        # ------------------------
+        # CIDs with missing xlogp3
+        molecule_ids = [77]
+        xlogp3_ref = [-0.2]
+        xlogp3_ref_imputed = [-0.2]
+
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="cid", init_with_open_db_conn=True)
+
+        # As vector (no imputation)
+        res = candidates.get_xlogp3_by_molecule_id(molecule_ids, return_dataframe=False, missing_value="ignore")
+        self.assertEqual((len(molecule_ids), ), res.shape)
+        np.testing.assert_array_equal(xlogp3_ref, res)
+
+        # As vector (mean imputation)
+        res = candidates.get_xlogp3_by_molecule_id(molecule_ids, return_dataframe=False, missing_value="impute_mean")
+        self.assertEqual((len(molecule_ids),), res.shape)
+        np.testing.assert_array_equal(xlogp3_ref_imputed, res)
+
+        # As dataframe (no imputation)
+        res = candidates.get_xlogp3_by_molecule_id(molecule_ids, return_dataframe=True, missing_value="ignore")
+        self.assertEqual((len(molecule_ids), 2), res.shape)
+        self.assertListEqual(["identifier", "xlogp3"], res.columns.tolist())
+        self.assertTrue(pd.DataFrame(zip(molecule_ids, xlogp3_ref), columns=["identifier", "xlogp3"]).equals(res))
+
+        # As dataframe (mean imputation)
+        res = candidates.get_xlogp3_by_molecule_id(molecule_ids, return_dataframe=True, missing_value="impute_mean")
+        self.assertEqual((len(molecule_ids), 2), res.shape)
+        self.assertListEqual(["identifier", "xlogp3"], res.columns.tolist())
+        # ------------------------
+
+    def test_get_xlogp3_by_molecule_id__all_values_missing(self):
+        # Molecule identifiers for which the xlopg3 value is missing
+        molecule_ids = [
+            "XMVJITFPVVRMHC-UHFFFAOYSA-N",
+            "XKNKHVGWJDPIRJ-UHFFFAOYSA-N",
+            "FUUFQLXAIUOWML-UHFFFAOYSA-N",
+            "FQKUGOMFVDPBIZ-UHFFFAOYSA-N"
+        ]
+        xlogp3_ref = [np.nan] * len(molecule_ids)
+
+        candidates = CandSQLiteDB_Massbank(MASSBANK_DB_FN, molecule_identifier="inchikey", init_with_open_db_conn=True)
+
+        # Ignore the missing values and simply return them
+        res = candidates.get_xlogp3_by_molecule_id(molecule_ids, return_dataframe=False, missing_value="ignore")
+        np.testing.assert_array_equal(xlogp3_ref, res)
+
+        # Try to impute the values. Should fail, as all values are missing
+        with self.assertRaises(ImputationError):
+            candidates.get_xlogp3_by_molecule_id(molecule_ids, return_dataframe=False, missing_value="impute_mean")
 
     def test_get_molecule_feature_by_molecule_id__repeated_ids(self):
         # ----------
