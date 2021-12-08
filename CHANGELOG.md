@@ -1,5 +1,15 @@
 # Version History
 
+## v2.11.2 (Patch)
+
+- fix in the XLogP3 loader 
+- raise an "Imputation error" if all XLogP3 values are NaN (missing)
+- new tests added
+
+## v2.11.1 (Patch)
+
+- fix in conda environment
+
 ## v2.11.0 (clean up)
 
 - code cleanup only

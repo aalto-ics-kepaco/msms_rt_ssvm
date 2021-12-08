@@ -55,6 +55,10 @@ LOGGER.addHandler(CH)
 SEQUENCE_SAMPLE_T = TypeVar('SEQUENCE_SAMPLE_T', bound='SequenceSample')
 
 
+class ImputationError(ValueError):
+    pass
+
+
 class ABCCandSQLiteDB(ABC):
     """
     Wrapper class around the candidate SQLite database (DB).
@@ -903,10 +907,14 @@ class ABCCandSQLiteDB_Massbank(ABCCandSQLiteDB):
         # Handle missing XLogP3 values
         if res["xlogp3"].hasnans:
             if missing_value == "ignore":
-                pass
+                # Returned values should be NaN not None as returned by sqlite3
+                res[res["xlogp3"].isna()] = np.nan
             elif missing_value == "raise":
                 raise ValueError("There are missing XLogP3 values.")
             elif missing_value == "impute_mean":
+                if all(res["xlogp3"].isna()):
+                    raise ImputationError("Cannot impute XLogP3 values, if all values are missing.")
+
                 # Compute the mean value over the non-missing data
                 impute_value = np.nanmean(res["xlogp3"])
                 if np.isnan(impute_value):
@@ -920,7 +928,7 @@ class ABCCandSQLiteDB_Massbank(ABCCandSQLiteDB):
         if return_dataframe:
             return res.reset_index()
         else:
-            return res.values.flatten()
+            return res.values.flatten().astype(float)
 
     def _get_available_ms2scorer(self) -> set:
         """
