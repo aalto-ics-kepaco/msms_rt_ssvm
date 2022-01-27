@@ -156,7 +156,7 @@ class TestDualVariables(unittest.TestCase):
         gamma = 0.46
 
         alphas = DualVariables(C=C, label_space=cand_ids, num_init_active_vars=2, random_state=10910)
-        print(alphas._iy)
+        # print(alphas._iy)
         # Active variables
         # [(0, ('M19',)), (0, ('M10',)),
         #  (1, ('M8',)), (1, ('M7',)),
@@ -218,7 +218,7 @@ class TestDualVariables(unittest.TestCase):
         gamma = 0.46
 
         alphas = DualVariables(C=C, label_space=cand_ids, num_init_active_vars=2, random_state=10910)
-        print(alphas._iy)
+        # print(alphas._iy)
         # Active variables
         # [(0, ('M19',)), (0, ('M10',)),
         #  (1, ('M8',)), (1, ('M7',)),
@@ -292,7 +292,7 @@ class TestDualVariables(unittest.TestCase):
         gamma = 1.0
 
         alphas = DualVariables(C=C, label_space=cand_ids, num_init_active_vars=2, random_state=10910)
-        print(alphas._iy)
+        # print(alphas._iy)
         # Active variables
         # [(0, ('M19',)), (0, ('M10',)),
         #  (1, ('M8',)), (1, ('M7',)),

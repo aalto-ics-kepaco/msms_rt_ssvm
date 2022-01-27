@@ -31,6 +31,6 @@ setup(
     # Metadata
     author="Eric Bach",
     author_email="eric.bach@aalto.fi",
-    description="Structure SVM implementation for (MS, RT)-sequence identification.",
+    description="Structure Support Vector Machine (SSVM) implementation for (MS, RT)-sequence identification.",
     url="https://github.com/aalto-ics-kepaco/msms_rt_ssvm",
 )

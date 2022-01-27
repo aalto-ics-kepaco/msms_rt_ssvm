@@ -30,6 +30,7 @@ import numpy as np
 import itertools as it
 import networkx as nx
 import time
+import os
 
 from matchms.Spectrum import Spectrum
 from joblib import Parallel, delayed
@@ -46,8 +47,8 @@ from ssvm.data_structures import ImputationError
 from ssvm.data_structures import SequenceSample, Sequence, SpanningTrees, LabeledSequence
 from ssvm.loss_functions import zeroone_loss
 
-BACH2020_DB_FN = "Bach2020_test_db.sqlite"
-MASSBANK_DB_FN = "Massbank_test_db.sqlite"
+BACH2020_DB_FN = os.path.join(os.path.dirname(__file__), "Bach2020_test_db.sqlite")
+MASSBANK_DB_FN = os.path.join(os.path.dirname(__file__), "Massbank_test_db.sqlite")
 
 
 class TestMassbankCandidateSQLiteDB(unittest.TestCase):
@@ -1830,6 +1831,8 @@ class TestSequenceSample(unittest.TestCase):
 
 class TestPerformanceDifferenceBetweenBach2020AndMassBank(unittest.TestCase):
     def test_loading_molecule_features_by_id(self):
+        self.skipTest("Only needed for run-time performance evaluation.")
+
         n_rep = 25
 
         # --------
@@ -1850,7 +1853,7 @@ class TestPerformanceDifferenceBetweenBach2020AndMassBank(unittest.TestCase):
             )
 
             start = time.time()
-            fps = candidates_mb.get_molecule_features_by_molecule_id([row[0] for row in res], "sirius_fps")
+            candidates_mb.get_molecule_features_by_molecule_id([row[0] for row in res], "sirius_fps")
             t_mb_binary += (time.time() - start)
 
         print("MassBank (binary): %.3fs" % (t_mb_binary / n_rep))

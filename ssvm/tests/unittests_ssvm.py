@@ -29,6 +29,7 @@ import unittest
 import time
 import networkx as nx
 import pandas as pd
+import os
 
 from matchms.Spectrum import Spectrum
 from scipy.sparse import csr_matrix
@@ -38,7 +39,7 @@ from ssvm.data_structures import SequenceSample, RandomSubsetCandSQLiteDB_Bach20
 from ssvm.kernel_utils import generalized_tanimoto_kernel_FAST
 from ssvm.dual_variables import DualVariables
 
-DB_FN = "Bach2020_test_db.sqlite"
+DB_FN = os.path.join(os.path.dirname(__file__), "Bach2020_test_db.sqlite")
 
 
 class TestStructuredSVM(unittest.TestCase):
@@ -245,9 +246,9 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
             self.assertEqual(lambda_delta_ref.shape, lambda_delta.shape)
             np.testing.assert_almost_equal(lambda_delta_ref, lambda_delta)
 
-        print("== get_lambda_delta ==")
-        print("Loop: %.3fs" % (rt_loop / n_rep))
-        print("Vec: %.3fs" % (rt_vec / n_rep))
+        # print("== get_lambda_delta ==")
+        # print("Loop: %.3fs" % (rt_loop / n_rep))
+        # print("Vec: %.3fs" % (rt_vec / n_rep))
 
     def test_get_lambda_delta__multiple_sequences(self):
         # Dimensions of the sequence and candidate feature matrices
@@ -330,9 +331,9 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
                 self.assertTrue(np.all((I / self.ssvm.C * self.N) >= -N_E))
                 self.assertTrue(np.all((I / self.ssvm.C * self.N) <= N_E))
 
-        print("== I_rsvm_jfeat ==")
-        print("Loop: %.3fs" % (rt_loop / self.N))
-        print("Vec: %.3fs" % (rt_vec / self.N))
+        # print("== I_rsvm_jfeat ==")
+        # print("Loop: %.3fs" % (rt_loop / self.N))
+        # print("Vec: %.3fs" % (rt_vec / self.N))
 
     def test_I_rsvm_jfeat__FOR_LARGE_MEMORY(self):
         N_E = np.sum([len(self.ssvm.training_graphs_[j][0].edges) for j in range(self.N)])  # total number of edges
@@ -387,9 +388,9 @@ class TestStructuredSVMSequencesFixedMS2(unittest.TestCase):
 
                 np.testing.assert_almost_equal(II, II_ref)
 
-        print("== II_rsvm_jfeat ==")
-        print("Loop: %.3fs" % (t_loop / self.N))
-        print("Vec: %.3fs" % (t_vec / self.N))
+        # print("== II_rsvm_jfeat ==")
+        # print("Loop: %.3fs" % (t_loop / self.N))
+        # print("Vec: %.3fs" % (t_vec / self.N))
 
     def test_predict_molecule_preference_values(self):
         with self.ssvm.training_data_.candidates:
