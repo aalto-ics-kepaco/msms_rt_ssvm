@@ -75,10 +75,12 @@ python -m unittest discover -s ssvm/tests -p 'unittests*.py'
 # OK (skipped=6)
 ```
 
-
-
-
 All code was developed and tested in a Linux environment. 
+
+## Usage
+
+Example usages of the package can be found the [repository of the experiments](https://github.com/aalto-ics-kepaco/lcms2struct_experiments)
+done for the manuscript.
 
 ## Cite the package
 
