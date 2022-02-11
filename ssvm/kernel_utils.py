@@ -2,7 +2,7 @@
 #
 # The MIT License (MIT)
 #
-# Copyright 2019, 2020 Eric Bach <eric.bach@aalto.fi>
+# Copyright 2019-2022 Eric Bach <eric.bach@aalto.fi>
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -32,10 +32,6 @@ from numba import jit, prange, guvectorize, float64, int64
 from sklearn.metrics.pairwise import manhattan_distances, pairwise_distances, euclidean_distances
 from joblib import delayed, Parallel
 from scipy.spatial._distance_wrap import cdist_cityblock_double_wrap
-
-"""
-Kernel functions here are optimized to work on matrix inputs. 
-"""
 
 
 def check_input(X, Y, datatype=None, shallow=False):
@@ -342,7 +338,7 @@ def _min_max_dense_ufunc(X: np.ndarray, Y: np.ndarray):
     """
     Min-Max Kernel using reduction
     """
-    return _minmax__ufunc_int(X.astype(np.int)[:, np.newaxis, :], Y.astype(np.int)[np.newaxis, :, :])
+    return _minmax__ufunc_int(X.astype(int)[:, np.newaxis, :], Y.astype(int)[np.newaxis, :, :])
 
 
 def _min_max_dense_ufunc_float(X, Y):
@@ -567,6 +563,41 @@ def profiling(fun, n_A=100, n_B=5000, d=307):
 
     for _ in range(50):
         fun(X_A, X_B)
+
+
+def _use_binary_encoding(n_A, n_B, d, n_rep, dtype):
+    X_A = (np.random.RandomState(93).rand(n_A, d) > 0.5).astype(dtype)
+    X_B = (np.random.RandomState(92).rand(n_B, d) > 0.5).astype(dtype)
+
+    # Define functions to test
+    fun_list = [
+        ("minmax_gentan_fast", generalized_tanimoto_kernel_FAST),
+        ("tanimoto", tanimoto_kernel_FAST),
+    ]
+
+    # Compile using numba
+    K_ref = generalized_tanimoto_kernel_FAST(X_A, X_B)
+    print("Compile ... ", end="")
+    for fun_name, fun in fun_list:
+        print(fun_name, end="; ", flush=True)
+        np.testing.assert_allclose(K_ref, fun(X_A, X_B))
+    print()
+
+    # Run timing
+    df = []
+    for fun_name, fun in fun_list:
+        print("RUN - %s" % fun_name)
+        for _ in range(n_rep):
+            start = time.time()
+            fun(X_A, X_B)
+            df.append([fun_name, n_A, n_B, d, (time.time() - start), dtype])
+
+    df = pd.DataFrame(df, columns=["function", "n_A", "n_B", "d", "time", "dtype"]) \
+        .groupby(["function", "n_A", "n_B", "d", "dtype"]) \
+        .aggregate(np.mean) \
+        .reset_index()
+
+    return df
 
 
 if __name__ == "__main__":

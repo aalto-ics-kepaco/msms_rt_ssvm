@@ -1,9 +1,9 @@
-name: ssvm_environment
+name: lcms2struct
 channels:
   - conda-forge
   - default
 dependencies:
-  - conda-forge::python>=3.8
+  - conda-forge::python>=3.8|<3.10
   - conda-forge::pandas==1.2.4
   - conda-forge::numpy==1.20.2
   - conda-forge::scikit-learn<1

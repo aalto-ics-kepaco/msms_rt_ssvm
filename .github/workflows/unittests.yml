@@ -35,6 +35,8 @@ jobs:
           activate-environment: ssvm_environment
           environment-file: environment.yml
           channel-priority: strict
+          python-version: ${{ matrix.python-version }}
+          auto-update-conda: true
       # --------------------------------------------------
 
       # ------------------------
