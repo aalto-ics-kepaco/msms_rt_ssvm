@@ -4,8 +4,7 @@ This package implements a [Structured Support Vector Machine (SSVM)](https://en.
 model for the molecule structure prediction of liquid chromatography (LC) tandem mass spectrometry data (MS²). This 
 work is part of the publication:
 
-**"Machine learning for joint structural annotation of metabolites using LC retention time order and tandem mass 
-spectrometry data"**,
+**"Joint structural annotation of small molecules using liquid chromatography retention order and tandem mass spectrometry data"**,
 
 *Eric Bach, Emma L. Schymanski and Juho Rousu*, 2022
 
