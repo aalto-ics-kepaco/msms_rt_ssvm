@@ -1379,29 +1379,47 @@ class TestRandomSubsetCandidateSQLiteDB_Massbank(unittest.TestCase):
         # ----------
         # SPECTRUM 1
         # ----------
-        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "LU53695978"})
 
         # Molecule identifier: inchikey
+        spectrum = Spectrum(
+            np.array([]), np.array([]), {"spectrum_id": "LU53695978", "molecule_id": "ZESRJSPZRDMNHY-YFWFAHHUSA-N"}
+        )
         candidates = RandomSubsetCandSQLiteDB_Massbank(
             number_of_candidates=102, db_fn=MASSBANK_DB_FN, molecule_identifier="inchikey")
         self.assertEqual(102, candidates.get_n_cand(spectrum))
 
         # Molecule identifier: inchikey1
+        spectrum = Spectrum(
+            np.array([]), np.array([]), {"spectrum_id": "LU53695978", "molecule_id": "ZESRJSPZRDMNHY"}
+        )
         candidates = RandomSubsetCandSQLiteDB_Massbank(
             number_of_candidates=102, db_fn=MASSBANK_DB_FN, molecule_identifier="inchikey1")
+        self.assertEqual(102, candidates.get_n_cand(spectrum))
+
+        # Molecule identifier: inchikey1
+        spectrum = Spectrum(
+            np.array([]), np.array([]), {"spectrum_id": "LU53695978", "molecule_id": 6166}
+        )
+        candidates = RandomSubsetCandSQLiteDB_Massbank(
+            number_of_candidates=102, db_fn=MASSBANK_DB_FN, molecule_identifier="cid")
         self.assertEqual(102, candidates.get_n_cand(spectrum))
 
         # ----------
         # SPECTRUM 2
         # ----------
-        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "SM51162731"})
 
         # Molecule identifier: inchikey
+        spectrum = Spectrum(
+            np.array([]), np.array([]), {"spectrum_id": "SM51162731", "molecule_id": "MXDRPNGTQDRKQM-UHFFFAOYSA-N"}
+        )
         candidates = RandomSubsetCandSQLiteDB_Massbank(
             number_of_candidates=250, db_fn=MASSBANK_DB_FN, molecule_identifier="inchikey")
         self.assertEqual(176, candidates.get_n_cand(spectrum))
 
         # Molecule identifier: inchikey1
+        spectrum = Spectrum(
+            np.array([]), np.array([]), {"spectrum_id": "SM51162731", "molecule_id": "MXDRPNGTQDRKQM"}
+        )
         candidates = RandomSubsetCandSQLiteDB_Massbank(
             number_of_candidates=250, db_fn=MASSBANK_DB_FN, molecule_identifier="inchikey1")
         self.assertEqual(165, candidates.get_n_cand(spectrum))
@@ -1501,14 +1519,18 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
         # ----------
         # SPECTRUM 1
         # ----------
-        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "Challenge-016"})
-
         # Molecule identifier: inchikey
+        spectrum = Spectrum(
+            np.array([]), np.array([]), {"spectrum_id": "Challenge-016", "molecule_id": "FGXWKSZFVQUSTL-UHFFFAOYSA-N"}
+        )
         candidates = RandomSubsetCandSQLiteDB_Bach2020(
             number_of_candidates=102, db_fn=BACH2020_DB_FN, molecule_identifier="inchikey")
         self.assertEqual(102, candidates.get_n_cand(spectrum))
 
         # Molecule identifier: inchikey1
+        spectrum = Spectrum(
+            np.array([]), np.array([]), {"spectrum_id": "Challenge-016", "molecule_id": "FGXWKSZFVQUSTL"}
+        )
         candidates = RandomSubsetCandSQLiteDB_Bach2020(
             number_of_candidates=102, db_fn=BACH2020_DB_FN, molecule_identifier="inchikey1")
         self.assertEqual(102, candidates.get_n_cand(spectrum))
@@ -1516,14 +1538,18 @@ class TestRandomSubsetCandidateSQLiteDB(unittest.TestCase):
         # ----------
         # SPECTRUM 2
         # ----------
-        spectrum = Spectrum(np.array([]), np.array([]), {"spectrum_id": "EAX030601"})
-
         # Molecule identifier: inchikey
+        spectrum = Spectrum(
+            np.array([]), np.array([]), {"spectrum_id": "EAX030601", "molecule_id": "IROINLKCQGIITA-UHFFFAOYSA-N"}
+        )
         candidates = RandomSubsetCandSQLiteDB_Bach2020(
             number_of_candidates=102, db_fn=BACH2020_DB_FN, molecule_identifier="inchikey")
         self.assertEqual(16, candidates.get_n_cand(spectrum))
 
         # Molecule identifier: inchikey1
+        spectrum = Spectrum(
+            np.array([]), np.array([]), {"spectrum_id": "EAX030601", "molecule_id": "IROINLKCQGIITA"}
+        )
         candidates = RandomSubsetCandSQLiteDB_Bach2020(
             number_of_candidates=102, db_fn=BACH2020_DB_FN, molecule_identifier="inchikey1")
         self.assertEqual(16, candidates.get_n_cand(spectrum))

@@ -1175,7 +1175,7 @@ class ABCRandomSubsetCandSQLiteDB(ABCCandSQLiteDB):
     subset is requested for a spectrum (identified by its id) is sampled. The subset size can be specified in as
     absolute size or fraction of the available candidates.
     """
-    def __init__(self, number_of_candidates: Union[int, float], include_correct_candidate: bool = False,
+    def __init__(self, number_of_candidates: Union[int, float], include_correct_candidate: bool = True,
                  random_state: Optional[Union[int, np.random.RandomState]] = None, *args, **kwargs):
         """
         :param number_of_candidates: scalar, If integer: minimum number of candidates per spectrum. If float, the

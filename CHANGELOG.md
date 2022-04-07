@@ -1,5 +1,9 @@
 # Version History
 
+## v2.12.0 (New behavior)
+
+- When selecting a random subset of candidates, the correct candidate is required to be included by default now.
+
 ## v2.11.2 (Patch)
 
 - fix in the XLogP3 loader 
