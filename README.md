@@ -74,7 +74,7 @@ python -m unittest discover -s ssvm/tests -p 'unittests*.py'
 # OK (skipped=6)
 ```
 
-All code was developed and tested in a Linux environment. 
+All code was developed and tested in a Linux environment. Other operating systems are not supported. 
 
 ## Usage
 
