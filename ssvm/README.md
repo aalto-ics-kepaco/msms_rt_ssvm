@@ -17,6 +17,8 @@ The main idea of having a wrapper around the DB is to allow:
 
 To see, what functionality is available, the reader is asked to read the source-code and its inline documentation. 
 
+### Own candidate DB wrappers
+
 In order to apply the SSVM to new data, which was not used in our experiments, or support a different input 
 data structure, such as CSV-files, one can use the abstract functions in the DB wrapper as starting point for the 
 development of wrappers for other file formats. 
