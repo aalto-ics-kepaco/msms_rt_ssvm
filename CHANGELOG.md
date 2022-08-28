@@ -1,5 +1,9 @@
 # Version History
 
+## v2.13.0
+
+- Added citation information and the Zenode badge. 
+
 ## v2.12.0 (New behavior)
 
 - When selecting a random subset of candidates, the correct candidate is required to be included by default now.
