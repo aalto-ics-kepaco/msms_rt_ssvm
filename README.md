@@ -98,4 +98,4 @@ If you use this package, please cite our original publication:
   journal = {bioRxiv}
 }
 ```
-Software citation:
+Software citation: [![DOI](https://zenodo.org/badge/357853378.svg)](https://zenodo.org/badge/latestdoi/357853378)
