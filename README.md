@@ -83,8 +83,19 @@ done for the manuscript.
 
 ## Cite the package
 
-If you use this package, please cite:
+If you use this package, please cite our original publication:
 
 ```bibtex
-TODO 
+@article {Bach2022,
+  author = {Bach, Eric and Schymanski, Emma L. and Rousu, Juho},
+  title = {Joint structural annotation of small molecules using liquid chromatography retention order and tandem mass spectrometry data},
+  elocation-id = {2022.02.11.480137},
+  year = {2022},
+  doi = {10.1101/2022.02.11.480137}, 
+  publisher = {Cold Spring Harbor Laboratory},
+  URL = {https://www.biorxiv.org/content/early/2022/04/27/2022.02.11.480137},
+  eprint = {https://www.biorxiv.org/content/early/2022/04/27/2022.02.11.480137.full.pdf},
+  journal = {bioRxiv}
+}
 ```
+Software citation:
